@@ -147,6 +147,60 @@ updateWaveState({
 });
 ```
 
+### ⚠️ CRITICAL: Wave State Subscription System ⚠️
+
+**IMPORTANT:** The wave state system supports multiple subscribers. **DO NOT revert to single callback system!**
+
+#### The Problem We Fixed
+Previously, multiple components tried to listen to wave state changes using a single `onStateChange` callback:
+- `WaveDisplay.tsx` (permanent "ROUND X" counter) set up a callback
+- `BasicScene.tsx` (for wave transition popup) **overwrote** that callback
+- Result: Only popup worked, permanent counter stayed at "ROUND 1"
+
+#### ✅ Current Solution - Multi-Subscriber System
+```tsx
+// WaveState.ts - Support multiple subscribers
+export const waveState = {
+  isTransition: false,
+  currentWave: 1,
+  nextWaveEnemies: 0,
+  subscribers: [] as Function[],
+  onStateChange: null // Kept for backward compatibility
+};
+
+// ✅ CORRECT - Use subscription system in components
+import { subscribeToWaveState } from '../game/WaveState';
+
+useEffect(() => {
+  const updateDisplay = (state) => {
+    setCurrentWave(state.currentWave);
+    setIsWaveTransition(state.isTransition);
+  };
+  
+  const unsubscribe = subscribeToWaveState(updateDisplay);
+  return unsubscribe; // Clean up on unmount
+}, []);
+```
+
+#### ❌ DO NOT DO THIS - Single Callback (Broken)
+```tsx
+// ❌ WRONG - This overwrites other components' callbacks!
+waveState.onStateChange = myCallback; // Breaks other components!
+```
+
+#### Current Implementation Status
+- **WaveDisplay.tsx**: Uses new subscription system ✅
+- **BasicScene.tsx**: Uses legacy callback (compatibility) ✅  
+- **Both components**: Receive wave updates simultaneously ✅
+
+#### Testing Wave Display Fix
+1. Start game → Permanent counter shows "ROUND 1"
+2. Complete wave 1 → Wave transition popup appears
+3. After popup → Permanent counter updates to "ROUND 2" ✅
+4. Console shows: `🌊 Notifying X subscribers` ✅
+
+**Never revert the subscription system - it's critical for proper wave display updates!**
+
 ### File Structure
 ```
 src/
