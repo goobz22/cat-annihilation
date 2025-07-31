@@ -1,0 +1,704 @@
+/* Health Bar and Stats Styles */
+.cat-stats-container {
+  position: fixed;
+  bottom: 6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(6px);
+  border-radius: 12px;
+  z-index: 10;
+  height: 64px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.cat-stats-section {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  height: 100%;
+}
+
+.cat-stats-section:last-child {
+  border-right: none;
+}
+
+.cat-level-display {
+  color: #ff6b35;
+  font-size: clamp(12px, 3vw, 14px);
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+}
+
+/* XP Bar Styles */
+.cat-xp-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 120px;
+}
+
+.cat-xp-bar {
+  width: 100%;
+  height: 6px;
+  background: #374151;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid #4b5563;
+}
+
+.cat-xp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+  transition: width 0.3s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.cat-xp-text {
+  font-size: clamp(10px, 2.5vw, 12px);
+  color: #d1d5db;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* Health Display Styles */
+.cat-health-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cat-health-icon {
+  font-size: clamp(14px, 3.5vw, 16px);
+  filter: drop-shadow(1px 1px 2px rgba(0, 0, 0, 0.8));
+}
+
+.cat-health-text {
+  color: #ef4444;
+  font-size: clamp(12px, 3vw, 14px);
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.cat-health-bonus {
+  color: #10b981;
+  font-size: clamp(10px, 2.5vw, 12px);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+/* Abilities Display Styles */
+.cat-abilities-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cat-ability-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cat-ability-icon:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(1.1);
+}
+
+.cat-ability-emoji {
+  font-size: 12px;
+  filter: drop-shadow(1px 1px 1px rgba(0, 0, 0, 0.8));
+}
+
+.cat-abilities-overflow {
+  color: #9ca3af;
+  font-size: clamp(10px, 2.5vw, 12px);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+/* Next Ability Preview Styles */
+.cat-next-ability {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9ca3af;
+  font-size: clamp(10px, 2.5vw, 12px);
+  max-width: 150px;
+}
+
+.cat-next-ability-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(156, 163, 175, 0.1);
+  border-radius: 3px;
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+.cat-next-ability-emoji {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.cat-next-ability-name {
+  font-weight: 500;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Weapon Skills Display */
+.weapon-skills-container {
+  position: fixed;
+  bottom: 6rem;
+  right: 1rem;
+  background: linear-gradient(145deg, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.8));
+  backdrop-filter: blur(8px);
+  padding: 16px 20px;
+  border-radius: 12px;
+  z-index: 10;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 
+              0 0 20px rgba(var(--skill-glow-rgb, 74, 144, 226), 0.2);
+  min-width: 240px;
+  max-width: min(300px, 25vw);
+  transition: all 0.3s ease;
+}
+
+.weapon-skills-container:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 
+              0 0 30px rgba(var(--skill-glow-rgb, 74, 144, 226), 0.3);
+}
+
+/* Dynamic theming for different weapon types */
+.weapon-skills-container[data-weapon="water"] {
+  --skill-color: #3b82f6;
+  --skill-glow-rgb: 59, 130, 246;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.weapon-skills-container[data-weapon="fire"] {
+  --skill-color: #ef4444;
+  --skill-glow-rgb: 239, 68, 68;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.weapon-skills-container[data-weapon="earth"] {
+  --skill-color: #10b981;
+  --skill-glow-rgb: 16, 185, 129;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.weapon-skills-container[data-weapon="air"] {
+  --skill-color: #8b5cf6;
+  --skill-glow-rgb: 139, 92, 246;
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.weapon-skills-container[data-weapon="sword"] {
+  --skill-color: #f59e0b;
+  --skill-glow-rgb: 245, 158, 11;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.weapon-skills-container[data-weapon="bow"] {
+  --skill-color: #06d6a0;
+  --skill-glow-rgb: 6, 214, 160;
+  border-color: rgba(6, 214, 160, 0.3);
+}
+
+.weapon-skills-title {
+  color: var(--skill-color, #fff);
+  font-size: clamp(13px, 3.5vw, 16px);
+  font-weight: bold;
+  margin-bottom: 12px;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+
+.weapon-skills-progress-container {
+  width: 100%;
+  height: 10px;
+  background: rgba(55, 65, 81, 0.8);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(75, 85, 99, 0.6);
+  margin-bottom: 8px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.weapon-skills-progress-bar {
+  height: 100%;
+  background: var(--skill-color, #4a90e2);
+  background-image: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(255, 255, 255, 0.3) 50%, 
+    transparent 100%
+  );
+  transition: all 0.5s ease;
+  border-radius: 5px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4),
+              0 0 8px rgba(var(--skill-glow-rgb, 74, 144, 226), 0.6);
+  position: relative;
+}
+
+.weapon-skills-progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: linear-gradient(to bottom, 
+    rgba(255, 255, 255, 0.2), 
+    transparent
+  );
+  border-radius: 5px 5px 0 0;
+}
+
+.weapon-skills-xp {
+  color: #d1d5db;
+  font-size: clamp(11px, 2.8vw, 13px);
+  font-weight: 500;
+  text-align: center;
+  margin-bottom: 4px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.weapon-skills-next-level {
+  color: #9ca3af;
+  font-size: clamp(10px, 2.5vw, 12px);
+  font-style: italic;
+  text-align: center;
+  background: rgba(var(--skill-glow-rgb, 74, 144, 226), 0.1);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--skill-glow-rgb, 74, 144, 226), 0.2);
+  margin-top: 4px;
+}
+
+.weapon-skills-max-level {
+  color: #fbbf24;
+  font-size: clamp(11px, 3vw, 14px);
+  font-weight: bold;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  background: linear-gradient(45deg, #fbbf24, #f59e0b);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 10px rgba(251, 191, 36, 0.5);
+  animation: maxLevelGlow 2s ease-in-out infinite alternate;
+  margin-top: 4px;
+  padding: 4px;
+}
+
+@keyframes maxLevelGlow {
+  0% { 
+    filter: drop-shadow(0 0 5px rgba(251, 191, 36, 0.5));
+  }
+  100% { 
+    filter: drop-shadow(0 0 15px rgba(251, 191, 36, 0.8));
+  }
+}
+
+/* Wave Display Styles */
+.wave-display-counter {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+}
+
+.wave-counter-content {
+  text-align: center;
+  transition: all 0.5s ease;
+}
+
+.wave-counter-content.animate {
+  transform: scale(1.25);
+}
+
+.wave-counter-title {
+  font-size: clamp(2rem, 8vw, 4rem);
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.8);
+  letter-spacing: 0.1em;
+  line-height: 1;
+}
+
+.wave-counter-subtitle {
+  font-size: clamp(0.875rem, 3vw, 1.25rem);
+  color: #d1d5db;
+  font-weight: bold;
+  margin-top: 4px;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.wave-transition-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+.wave-transition-content {
+  text-align: center;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.wave-transition-title {
+  font-size: clamp(3rem, 12vw, 5rem);
+  font-weight: 900;
+  color: #dc2626;
+  margin-bottom: 16px;
+  letter-spacing: 0.1em;
+  text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.9);
+  line-height: 1;
+}
+
+/* Game Over Screen */
+.game-over-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.95);
+  backdrop-filter: blur(8px);
+}
+
+.game-over-modal {
+  background: linear-gradient(145deg, #1a1a1a, #0f0f0f);
+  border: 2px solid #dc2626;
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+  max-width: min(448px, 90vw);
+  max-height: min(80vh, 600px);
+  overflow-y: auto;
+  box-shadow: 0 20px 40px rgba(220, 38, 38, 0.3), 
+              0 0 20px rgba(220, 38, 38, 0.2);
+  animation: deathPulse 2s ease-in-out infinite;
+}
+
+.game-over-title {
+  font-size: clamp(1.75rem, 8vw, 2.5rem);
+  font-weight: bold;
+  color: #dc2626;
+  margin-bottom: 16px;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  letter-spacing: 2px;
+  line-height: 1.2;
+}
+
+.game-over-content {
+  margin: 20px 0;
+}
+
+.game-over-message {
+  font-size: clamp(1rem, 4vw, 1.125rem);
+  color: #d1d5db;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.game-over-stats {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+}
+
+.game-over-stats p {
+  margin: 8px 0;
+  font-size: clamp(0.875rem, 3vw, 1rem);
+  color: #f3f4f6;
+  font-weight: 500;
+}
+
+.game-over-actions {
+  margin-top: 20px;
+}
+
+.game-over-hint {
+  margin-top: 12px;
+  font-size: clamp(0.75rem, 3vw, 0.875rem);
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.game-over-restart-btn {
+  width: 100%;
+  padding: 12px 24px;
+  background: linear-gradient(145deg, #dc2626, #b91c1c);
+  color: #fff;
+  font-weight: bold;
+  border-radius: 8px;
+  border: none;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 16px;
+}
+
+.game-over-restart-btn:hover {
+  background: linear-gradient(145deg, #b91c1c, #991b1b);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(220, 38, 38, 0.4);
+}
+
+/* Loading and Error States */
+.fullscreen-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #000;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #333;
+  border-top: 4px solid #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes deathPulse {
+  0%, 100% { 
+    box-shadow: 0 20px 40px rgba(220, 38, 38, 0.3), 
+                0 0 20px rgba(220, 38, 38, 0.2);
+  }
+  50% { 
+    box-shadow: 0 20px 40px rgba(220, 38, 38, 0.5), 
+                0 0 30px rgba(220, 38, 38, 0.4);
+  }
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .cat-stats-container {
+    /* Note: bottom position is handled by mobile.css (250px for mobile controls) */
+    height: 56px;
+    padding: 0;
+    max-width: 95vw;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  
+  .cat-stats-section {
+    padding: 0 8px;
+    min-width: fit-content;
+    flex-shrink: 0;
+  }
+
+  .cat-xp-container {
+    min-width: 100px;
+  }
+
+  .cat-xp-text {
+    font-size: 10px;
+  }
+
+  .cat-level-display {
+    font-size: 12px;
+  }
+
+  .cat-health-text {
+    font-size: 12px;
+  }
+
+  .cat-next-ability {
+    max-width: 120px;
+    font-size: 10px;
+  }
+
+  .game-over-modal {
+    padding: 20px;
+    max-width: 95vw;
+    max-height: 90vh;
+    margin: 0 10px;
+  }
+
+  .game-over-title {
+    font-size: clamp(1.5rem, 10vw, 2rem);
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+  }
+
+  .game-over-stats {
+    padding: 12px;
+    margin: 12px 0;
+  }
+
+  .game-over-restart-btn {
+    padding: 14px 20px;
+    font-size: 14px;
+  }
+}
+
+/* Extra small screens and landscape mobile */
+@media (max-width: 480px), (max-height: 600px) {
+  .cat-stats-container {
+    height: 48px;
+    /* Note: bottom position inherited from mobile.css */
+    font-size: 11px;
+  }
+
+  .cat-stats-section {
+    padding: 0 6px;
+  }
+
+  .cat-xp-container {
+    min-width: 80px;
+  }
+
+  .cat-xp-bar {
+    height: 4px;
+  }
+
+  .cat-ability-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .cat-ability-emoji {
+    font-size: 10px;
+  }
+
+  .cat-next-ability-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .weapon-skills-container {
+    min-width: 160px;
+    padding: 10px 12px;
+  }
+
+  .weapon-skills-progress-container {
+    height: 6px;
+  }
+
+  .weapon-skills-title {
+    font-size: clamp(11px, 3.5vw, 13px);
+    margin-bottom: 6px;
+  }
+
+  .weapon-skills-xp {
+    font-size: clamp(9px, 2.3vw, 11px);
+  }
+
+  .weapon-skills-next-level {
+    font-size: clamp(8px, 2vw, 10px);
+    padding: 2px 4px;
+  }
+
+  .weapon-skills-max-level {
+    font-size: clamp(9px, 2.5vw, 12px);
+  }
+
+  .game-over-modal {
+    padding: 16px;
+    max-height: 95vh;
+  }
+
+  .game-over-title {
+    font-size: clamp(1.25rem, 12vw, 1.75rem);
+    margin-bottom: 8px;
+  }
+
+  .game-over-content {
+    margin: 12px 0;
+  }
+
+  .game-over-stats {
+    padding: 8px;
+    margin: 8px 0;
+  }
+
+  .game-over-actions {
+    margin-top: 12px;
+  }
+
+  .weapon-skills-container {
+    /* Note: right and bottom positions handled by mobile.css */
+    min-width: 180px;
+    max-width: 90vw;
+    padding: 12px 16px;
+  }
+  
+  .weapon-skills-progress-container {
+    width: 100%;
+    height: 8px;
+  }
+
+  .weapon-skills-title {
+    font-size: clamp(12px, 3.2vw, 14px);
+    margin-bottom: 8px;
+  }
+
+  .weapon-skills-xp {
+    font-size: clamp(10px, 2.5vw, 12px);
+  }
+
+  .weapon-skills-next-level {
+    font-size: clamp(9px, 2.2vw, 11px);
+    padding: 3px 6px;
+  }
+
+  .weapon-skills-max-level {
+    font-size: clamp(10px, 2.8vw, 13px);
+  }
+  
+  .wave-display-counter {
+    top: 10px;
+  }
+}

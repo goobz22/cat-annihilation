@@ -1,0 +1,160 @@
+/* Mobile Controls */
+.mobile-controls {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: none;
+  pointer-events: auto;
+}
+
+@media (max-width: 768px) {
+  .mobile-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 20px;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+    height: 180px;
+  }
+}
+
+.mobile-movement-controls {
+  display: flex;
+  align-items: center;
+}
+
+.mobile-dpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.mobile-dpad-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.mobile-control-btn {
+  width: 50px;
+  height: 50px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  user-select: none;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.mobile-control-btn:active {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: scale(0.95);
+}
+
+.mobile-control-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.mobile-action-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.mobile-btn-run {
+  width: 60px;
+  height: 45px;
+  font-size: 20px;
+}
+
+.mobile-btn-attack {
+  width: 70px;
+  height: 70px;
+  font-size: 24px;
+  border-radius: 50%;
+  background: rgba(220, 38, 38, 0.8);
+  border-color: rgba(220, 38, 38, 0.6);
+}
+
+.mobile-btn-attack:active {
+  background: rgba(220, 38, 38, 1);
+  transform: scale(0.9);
+}
+
+.mobile-controls-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 101;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mobile-controls-toggle:hover {
+  background: rgba(0, 0, 0, 0.9);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.05);
+}
+
+/* Touch feedback */
+@media (max-width: 768px) {
+  .mobile-control-btn {
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  .mobile-control-btn:active {
+    background: rgba(74, 144, 226, 0.3);
+    border-color: #4a90e2;
+  }
+}
+
+/* Prevent text selection on mobile controls */
+.mobile-controls * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Adjust UI elements for mobile */
+@media (max-width: 768px) {
+  .inventory-hotbar-container {
+    bottom: 200px; /* Above mobile controls */
+  }
+  
+  .cat-stats-container {
+    bottom: 250px; /* Above mobile controls */
+    left: 50%;
+    transform: translateX(-50%);
+    scale: 0.9;
+  }
+  
+  .weapon-skills-container {
+    right: 10px;
+    bottom: 250px; /* Above mobile controls */
+    scale: 0.9;
+  }
+}

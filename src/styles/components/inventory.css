@@ -1,0 +1,303 @@
+/* Inventory Hotbar Styles */
+.inventory-hotbar-container {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.hotbar-slot {
+  width: 64px;
+  height: 64px;
+  border: 2px solid;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  position: relative;
+  background: #111827;
+}
+
+.hotbar-slot.active {
+  border-color: #fbbf24;
+  background: #1f2937;
+  transform: scale(1.1);
+  box-shadow: 0 8px 20px rgba(251, 191, 36, 0.3);
+}
+
+.hotbar-slot.active[style*="--item-color"] {
+  background: linear-gradient(145deg, var(--item-color, #1f2937), #1f2937);
+  opacity: 0.8;
+}
+
+.hotbar-slot.inactive {
+  border-color: #4b5563;
+  background: #111827;
+}
+
+.hotbar-slot.inactive:hover {
+  border-color: #9ca3af;
+}
+
+.hotbar-slot-content {
+  position: relative;
+}
+
+.hotbar-slot-icon {
+  font-size: 1.5rem;
+  user-select: none;
+}
+
+.hotbar-slot-number {
+  color: #4b5563;
+  font-size: 14px;
+}
+
+.hotbar-slot-key {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: #fff;
+  font-weight: bold;
+}
+
+.hotbar-active-item {
+  margin-left: 16px;
+  display: flex;
+  align-items: center;
+  color: #fff;
+}
+
+.hotbar-active-item-name {
+  font-weight: bold;
+}
+
+/* Inventory Popup Styles */
+.inventory-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  background-color: rgba(0, 0, 0, 0.85);
+}
+
+.inventory-modal {
+  position: relative;
+  width: min(480px, 90vw);
+  height: min(500px, 80vh);
+  background: linear-gradient(145deg, #2d2d2d, #1a1a1a);
+  border: 3px solid #444;
+  border-radius: 12px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.inventory-title-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 35px;
+  background: linear-gradient(180deg, #555, #333);
+  border-bottom: 2px solid #666;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+.inventory-title {
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  letter-spacing: 1px;
+}
+
+.inventory-close-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.inventory-close-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.inventory-content {
+  margin-top: 40px;
+  padding: 20px;
+  height: calc(100% - 40px);
+  display: flex;
+  flex-direction: column;
+}
+
+.inventory-section {
+  margin-bottom: 20px;
+}
+
+.inventory-section-title {
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+  margin-bottom: 12px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.equipment-slots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(40px, 1fr));
+  gap: 6px;
+  padding: 12px;
+  background: linear-gradient(145deg, #333, #222);
+  border: 1px solid #555;
+  border-radius: 8px;
+  justify-items: center;
+}
+
+.inventory-bag-container {
+  flex: 1;
+}
+
+.inventory-bag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  gap: 4px;
+  padding: 12px;
+  background: linear-gradient(145deg, #333, #222);
+  border: 1px solid #555;
+  border-radius: 8px;
+  justify-items: center;
+  align-items: center;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.inventory-slot {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(145deg, #444, #2a2a2a);
+  border: 1px solid #555;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.inventory-slot:hover {
+  background: linear-gradient(145deg, #5a5a5a, #3a3a3a);
+  border-color: #777;
+  transform: translateY(-1px);
+}
+
+.inventory-slot.selected {
+  background: linear-gradient(145deg, #4a90e2, #357abd);
+  border: 1px solid #5aa3f0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 8px rgba(74, 144, 226, 0.4);
+}
+
+.inventory-slot.selected:hover {
+  background: linear-gradient(145deg, #5aa3f0, #4a90e2);
+}
+
+.inventory-slot-icon {
+  font-size: 18px;
+  filter: drop-shadow(1px 1px 2px rgba(0, 0, 0, 0.8));
+  cursor: grab;
+}
+
+.inventory-slot-number {
+  color: #888;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.inventory-slot-empty {
+  color: #555;
+  font-size: 12px;
+}
+
+.inventory-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-bottom: 8px;
+}
+
+.inventory-action-btn {
+  background: linear-gradient(145deg, #4a90e2, #357abd);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  padding: 8px 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: all 0.2s;
+}
+
+.inventory-action-btn:hover {
+  background: linear-gradient(145deg, #5aa3f0, #4a90e2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.inventory-action-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .inventory-hotbar-container {
+    bottom: 10px;
+    gap: 4px;
+  }
+  
+  .hotbar-slot {
+    width: 48px;
+    height: 48px;
+  }
+  
+  .hotbar-slot-icon {
+    font-size: 1.2rem;
+  }
+  
+  .inventory-modal {
+    width: 95vw;
+    height: 85vh;
+  }
+  
+  .equipment-slots-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  
+  .inventory-bag-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}

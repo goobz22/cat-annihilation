@@ -1,0 +1,81 @@
+/* Main CSS entry point - imports all stylesheets */
+@import './base.css';
+@import './components/inventory.css';
+@import './components/ui.css';
+@import './components/menus.css';
+@import './components/mobile.css';
+
+/* Game-specific styles */
+.app-container {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+.game-canvas {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.game-scene-container {
+  width: 100%;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Error boundary styles */
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #000;
+  color: #fff;
+  text-align: center;
+  padding: 20px;
+}
+
+.error-boundary h1 {
+  color: #ef4444;
+  margin-bottom: 16px;
+}
+
+.error-boundary button {
+  background: #4a90e2;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 16px;
+}
+
+.error-boundary button:hover {
+  background: #357abd;
+}
+
+/* Touch/mobile specific styles */
+@media (max-width: 768px) {
+  body {
+    touch-action: manipulation; /* Prevent zoom on double tap */
+  }
+  
+  /* Mobile virtual controls could go here in the future */
+  .mobile-controls-placeholder {
+    position: fixed;
+    bottom: 80px;
+    left: 10px;
+    right: 10px;
+    height: 60px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 8px;
+    display: none; /* Hidden for now, could be enabled later */
+  }
+}

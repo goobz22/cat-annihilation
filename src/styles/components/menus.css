@@ -1,0 +1,359 @@
+/* Pause Menu Styles */
+.pause-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pause-modal {
+  width: min(500px, 90vw);
+  background: linear-gradient(145deg, #2d2d2d, #1a1a1a);
+  border: 3px solid #444;
+  border-radius: 12px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.pause-title-bar {
+  background: linear-gradient(180deg, #555, #333);
+  border-bottom: 2px solid #666;
+  padding: 12px 16px;
+  position: relative;
+}
+
+.pause-title {
+  color: #fff;
+  font-size: clamp(18px, 4vw, 24px);
+  font-weight: 900;
+  text-align: center;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  letter-spacing: 2px;
+}
+
+.pause-content {
+  padding: 20px;
+}
+
+.pause-section {
+  margin-bottom: 20px;
+}
+
+.pause-section-title {
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 12px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.pause-control-panel {
+  background: linear-gradient(145deg, #333, #222);
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.sensitivity-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sensitivity-label {
+  color: #bbb;
+  font-family: monospace;
+  font-size: 12px;
+  min-width: 40px;
+}
+
+.sensitivity-slider {
+  flex: 1;
+  height: 8px;
+  appearance: none;
+  background: #555;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+
+.sensitivity-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  background: #4a90e2;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.sensitivity-value {
+  background: #444;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: bold;
+  min-width: 50px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: linear-gradient(145deg, #333, #222);
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.control-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.control-action {
+  color: #ddd;
+  font-size: 14px;
+}
+
+.control-key {
+  background: #444;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.pause-buttons {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pause-button {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.pause-button-resume {
+  background: linear-gradient(145deg, #22c55e, #16a34a);
+  color: white;
+  box-shadow: 0 4px 0 #047857, 0 6px 10px rgba(0, 0, 0, 0.3);
+}
+
+.pause-button-resume:hover {
+  background: linear-gradient(145deg, #34d399, #22c55e);
+  transform: translateY(1px);
+  box-shadow: 0 3px 0 #047857, 0 5px 8px rgba(0, 0, 0, 0.3);
+}
+
+.pause-button-quit {
+  background: linear-gradient(145deg, #ef4444, #dc2626);
+  color: white;
+  box-shadow: 0 4px 0 #991b1b, 0 6px 10px rgba(0, 0, 0, 0.3);
+}
+
+.pause-button-quit:hover {
+  background: linear-gradient(145deg, #f87171, #ef4444);
+  transform: translateY(1px);
+  box-shadow: 0 3px 0 #991b1b, 0 5px 8px rgba(0, 0, 0, 0.3);
+}
+
+.pause-instructions {
+  border-top: 1px solid #444;
+  padding-top: 12px;
+  text-align: center;
+  color: #aaa;
+  font-size: 14px;
+}
+
+.pause-key-hint {
+  background: #333;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  margin: 0 2px;
+}
+
+/* SpellBook Popup Styles */
+.spellbook-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  background-color: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+}
+
+.spellbook-modal {
+  position: relative;
+  width: min(500px, 95vw);
+  max-height: 85vh;
+  background: linear-gradient(145deg, #2d2d2d, #1a1a1a);
+  border: 3px solid #444;
+  border-radius: 16px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 16px;
+  overflow: hidden;
+}
+
+.spellbook-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 20;
+  padding: 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.spellbook-close-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  transform: scale(1.1);
+}
+
+.spellbook-content {
+  position: relative;
+  z-index: 10;
+  overflow-y: auto;
+  max-height: 100%;
+  padding: 8px 16px 16px;
+}
+
+.spellbook-title {
+  color: #fff;
+  font-size: clamp(20px, 6vw, 28px);
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 16px;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  letter-spacing: 1px;
+}
+
+.spellbook-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+  justify-items: center;
+}
+
+.spell-slot {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: linear-gradient(145deg, #444, #2a2a2a);
+  border: 2px solid #555;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spell-slot:hover {
+  transform: scale(1.05);
+  border-color: #777;
+}
+
+.spell-slot.selected {
+  transform: scale(1.1);
+  border: 3px solid #4a90e2;
+  box-shadow: 0 0 20px rgba(74, 144, 226, 0.6);
+  background: linear-gradient(145deg, #4a90e2, #357abd);
+}
+
+.spell-icon {
+  font-size: 30px;
+  filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.8));
+  user-select: none;
+}
+
+.spellbook-select-btn {
+  background: linear-gradient(145deg, #4a90e2, #357abd);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  padding: 12px 24px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  transition: all 0.2s;
+  display: block;
+  margin: 0 auto;
+}
+
+.spellbook-select-btn:hover {
+  background: linear-gradient(145deg, #5aa3f0, #4a90e2);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.spellbook-select-btn:disabled {
+  background: linear-gradient(145deg, #555, #444);
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .pause-buttons {
+    flex-direction: column;
+  }
+  
+  .controls-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  
+  .spellbook-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  
+  .spell-slot {
+    width: 60px;
+    height: 60px;
+  }
+  
+  .spell-icon {
+    font-size: 24px;
+  }
+}
