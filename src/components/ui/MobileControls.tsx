@@ -146,7 +146,7 @@ const MobileControls: React.FC = () => {
             onMove={handleJoystickMove}
             onStop={handleJoystickStop}
             size={100}
-            knobSize={36}
+            knobSize={54}
           />
         </div>
       </div>
