@@ -186,8 +186,8 @@ const Controls = () => {
       speed *= runMultiplier;
     }
     
-    // Reduce rotation speed by 65% for mobile controls to prevent overly sensitive turning
-    const mobileRotationMultiplier = mobileSpeedMultiplier > 0.1 ? 0.35 : 1.0; // 65% reduction for mobile
+    // Reduce rotation speed by 80% for mobile controls to prevent overly sensitive turning
+    const mobileRotationMultiplier = mobileSpeedMultiplier > 0.1 ? 0.2 : 1.0; // 80% reduction for mobile
     const rotationSpeed = GAME_CONFIG.PLAYER.TURN_SPEED * delta * spinSensitivity * mobileRotationMultiplier;
     let x = position.x;
     const y = 0; // Keep cat on ground
