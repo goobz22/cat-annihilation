@@ -1,0 +1,49 @@
+# Cursor AI Rules for Cat Annihilation Game
+
+## CRITICAL: Read ARCHITECTURE.md First
+This project has specific state management rules that prevent game-breaking bugs.
+
+## Core Rules
+
+### ⚠️ State Management (CRITICAL)
+- **NEVER use Zustand store.set() in useFrame() loops** - Causes cat to fly through terrain
+- **Dynamic entities must use local React state**: enemies, projectiles, waves, animations
+- **Zustand only for static/UI state**: health display, inventory, settings, pause menus
+- **Look for "CRITICAL WARNING" comments** in files - these systems must never touch Zustand during gameplay
+
+### Code Patterns
+```tsx
+// ❌ WRONG - Will break 3D positioning
+useFrame(() => {
+  setPosition({ x, y, z }); // If this is Zustand - BUG!
+});
+
+// ✅ CORRECT - Local state for dynamic updates
+const [entities, setEntities] = useState([]);
+useFrame(() => {
+  setEntities(prev => prev.map(/*update logic*/));
+});
+```
+
+### File Naming
+- `Local*System.tsx` - Uses local state, safe for real-time updates
+- Files with warning comments - Never modify to use Zustand during gameplay
+
+### Architecture
+- **Hybrid approach**: Zustand + Local React state + Global objects
+- **Performance**: Global objects for cross-system communication without React re-renders
+- **UI**: Zustand for display-only state (health bars, inventory popups)
+- **Game Logic**: Local state for entities that move/update every frame
+
+## Testing Checklist
+When making changes:
+1. Does cat movement work correctly?
+2. Do dynamic entities use local state?
+3. Are there any new Zustand calls in useFrame loops?
+4. Check ARCHITECTURE.md if adding new dynamic features
+
+## Key Files
+- `ARCHITECTURE.md` - Full guidelines AND current implementation guide
+- `README.md` - Setup and tech stack info
+- `src/components/game/Local*` - Examples of correct patterns
+- `src/components/game/WaveState.ts` - Global state without Zustand
