@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useGameStore } from '../../../lib/store/gameStore';
 import { GAME_CONFIG } from '../../../config/gameConfig';
@@ -27,6 +27,8 @@ const Controls = () => {
     return saved ? parseFloat(saved) : 1.0;
   });
   
+  const [mobileSpeedMultiplier, setMobileSpeedMultiplier] = useState(1.0);
+  
   // Reference to controls active state
   const controlsActive = useRef({
     forward: false,
@@ -52,16 +54,22 @@ const Controls = () => {
       setMoveSpeedMultiplier(e.detail);
     };
 
+    const handleMobileSpeedChange = (e: CustomEvent<number>) => {
+      setMobileSpeedMultiplier(e.detail);
+    };
+
     window.addEventListener('spinSensitivityChanged', handleSensitivityChange as EventListener);
     window.addEventListener('moveSpeedChanged', handleMoveSpeedChange as EventListener);
+    window.addEventListener('mobileSpeedChange', handleMobileSpeedChange as EventListener);
     return () => {
       window.removeEventListener('spinSensitivityChanged', handleSensitivityChange as EventListener);
       window.removeEventListener('moveSpeedChanged', handleMoveSpeedChange as EventListener);
+      window.removeEventListener('mobileSpeedChange', handleMobileSpeedChange as EventListener);
     };
   }, []);
   
   // Attack function - just set attacking state for sword attacks
-  const performAttack = () => {
+  const performAttack = useCallback(() => {
     const inventory = useGameStore.getState().player.inventory;
     const activeSlot = useGameStore.getState().player.activeSlot;
     const activeItem = inventory[activeSlot];
@@ -76,7 +84,7 @@ const Controls = () => {
         setPlayerAttacking(false);
       }, 300);
     }
-  };
+  }, [setPlayerAttacking]);
 
   // Handle keyboard input
   useEffect(() => {
@@ -156,7 +164,7 @@ const Controls = () => {
       canvas.removeEventListener('mouseup', handleMouseUp);
       canvas.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [gl, setPlayerAttacking, setPlayerDefending, setPlayerMoving, setPlayerRunning]);
+  }, [gl, setPlayerAttacking, setPlayerDefending, setPlayerMoving, setPlayerRunning, performAttack]);
   
   // Movement and rotation update
   useFrame((_, delta) => {
@@ -166,13 +174,21 @@ const Controls = () => {
     const baseSpeed = GAME_CONFIG.PLAYER.MOVEMENT_SPEED;
     const runMultiplier = GAME_CONFIG.PLAYER.RUN_SPEED / GAME_CONFIG.PLAYER.MOVEMENT_SPEED;
     let speed = baseSpeed * delta * moveSpeedMultiplier;
+    
+    // Apply mobile speed multiplier (from joystick distance)
+    // This creates variable speed: closer to center = slower, further = faster
+    // At full joystick extension (1.0), we get sprint speed
+    const mobileRunMultiplier = 1.0 + (runMultiplier - 1.0) * mobileSpeedMultiplier;
+    speed *= mobileRunMultiplier;
+    
+    // Traditional keyboard sprint still works
     if (controlsActive.current.run) {
       speed *= runMultiplier;
     }
     
     const rotationSpeed = GAME_CONFIG.PLAYER.TURN_SPEED * delta * spinSensitivity;
     let x = position.x;
-    let y = 0; // Keep cat on ground
+    const y = 0; // Keep cat on ground
     let z = position.z;
     let rotation = position.rotation || 0;
     let isMoving = false;
@@ -199,7 +215,6 @@ const Controls = () => {
     
     // Apply movement and rotation
     const hasRotated = controlsActive.current.left || controlsActive.current.right;
-    const hasMoved = controlsActive.current.forward || controlsActive.current.backward;
     
     if (isMoving || hasRotated) {
       // Prevent NaN values
@@ -214,6 +229,15 @@ const Controls = () => {
       setPlayerMoving(true);
     } else if (!isMoving && player.isMoving) {
       setPlayerMoving(false);
+    }
+    
+    // Update running state based on mobile speed multiplier or keyboard sprint
+    const isRunningFromMobile = mobileSpeedMultiplier > 0.7; // Consider running if joystick > 70% extended
+    const shouldBeRunning = controlsActive.current.run || isRunningFromMobile;
+    if (shouldBeRunning && !player.isRunning) {
+      setPlayerRunning(true);
+    } else if (!shouldBeRunning && player.isRunning) {
+      setPlayerRunning(false);
     }
   });
   

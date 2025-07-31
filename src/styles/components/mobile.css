@@ -25,6 +25,69 @@
   align-items: center;
 }
 
+/* Virtual Joystick Styles */
+.virtual-joystick {
+  position: relative;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.6));
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  transition: all 0.2s ease;
+  box-shadow: 
+    0 8px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+}
+
+.virtual-joystick:active {
+  border-color: rgba(74, 144, 226, 0.4);
+  background: radial-gradient(circle at 30% 30%, rgba(74, 144, 226, 0.15), rgba(0, 0, 0, 0.7));
+  box-shadow: 
+    0 12px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(74, 144, 226, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.virtual-joystick-knob {
+  position: absolute;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  background: radial-gradient(circle at 25% 25%, 
+    rgba(255, 255, 255, 0.95), 
+    rgba(255, 255, 255, 0.8) 50%, 
+    rgba(220, 220, 220, 0.9));
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  box-shadow: 
+    0 6px 18px rgba(0, 0, 0, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.virtual-joystick:active .virtual-joystick-knob {
+  background: radial-gradient(circle at 25% 25%, 
+    rgba(74, 144, 226, 0.95), 
+    rgba(74, 144, 226, 0.85) 50%, 
+    rgba(60, 120, 190, 0.9));
+  border-color: rgba(74, 144, 226, 0.9);
+  transform: scale(1.05);
+  box-shadow: 
+    0 8px 24px rgba(74, 144, 226, 0.3),
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.15);
+}
+
 .mobile-dpad {
   display: flex;
   flex-direction: column;

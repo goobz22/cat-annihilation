@@ -1,10 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useGameStore } from '../../lib/store/gameStore';
+import VirtualJoystick from './VirtualJoystick';
 
 const MobileControls: React.FC = () => {
   const [isMobile, setIsMobile] = useState(false);
   const isPaused = useGameStore((state) => state.isPaused);
   const isGameOver = useGameStore((state) => state.isGameOver);
+  const movementRef = useRef({ x: 0, y: 0 });
+  const activeKeysRef = useRef(new Set<string>());
 
   useEffect(() => {
     const checkMobile = () => {
@@ -23,6 +26,79 @@ const MobileControls: React.FC = () => {
       bubbles: true,
     });
     window.dispatchEvent(event);
+  };
+
+  const handleJoystickMove = (position: { x: number; y: number }) => {
+    const deadzone = 0.1;
+    const threshold = 0.3;
+    
+    // Update movement reference
+    movementRef.current = position;
+    
+    // Calculate joystick distance/magnitude for variable speed
+    const distance = Math.sqrt(position.x * position.x + position.y * position.y);
+    const clampedDistance = Math.min(distance, 1.0); // Ensure max distance is 1.0
+    
+    // Dispatch mobile speed multiplier event based on joystick distance
+    // Map distance to speed: 0.0 = walking speed, 1.0 = full sprint speed
+    const speedMultiplier = Math.max(0.1, clampedDistance); // Minimum 10% speed
+    const mobileSpeedEvent = new CustomEvent('mobileSpeedChange', { 
+      detail: speedMultiplier 
+    });
+    window.dispatchEvent(mobileSpeedEvent);
+    
+    // Determine which keys should be active based on joystick position
+    const newActiveKeys = new Set<string>();
+    
+    if (Math.abs(position.x) > deadzone || Math.abs(position.y) > deadzone) {
+      // Forward/backward (Y axis)
+      if (position.y > threshold) {
+        newActiveKeys.add('w');
+      } else if (position.y < -threshold) {
+        newActiveKeys.add('s');
+      }
+      
+      // Left/right (X axis) 
+      if (position.x < -threshold) {
+        newActiveKeys.add('a');
+      } else if (position.x > threshold) {
+        newActiveKeys.add('d');
+      }
+    }
+    
+    // Handle key changes
+    const currentKeys = activeKeysRef.current;
+    
+    // Release keys that are no longer active
+    for (const key of currentKeys) {
+      if (!newActiveKeys.has(key)) {
+        handleMovement(key, false);
+      }
+    }
+    
+    // Press keys that are newly active
+    for (const key of newActiveKeys) {
+      if (!currentKeys.has(key)) {
+        handleMovement(key, true);
+      }
+    }
+    
+    activeKeysRef.current = newActiveKeys;
+  };
+
+  const handleJoystickStop = () => {
+    // Release all movement keys
+    for (const key of activeKeysRef.current) {
+      handleMovement(key, false);
+    }
+    activeKeysRef.current.clear();
+    movementRef.current = { x: 0, y: 0 };
+    
+    // Reset mobile speed when joystick is released
+    const mobileSpeedEvent = new CustomEvent('mobileSpeedChange', { 
+      detail: 1.0 
+    });
+    window.dispatchEvent(mobileSpeedEvent);
   };
 
   const handleAction = () => {
@@ -66,46 +142,12 @@ const MobileControls: React.FC = () => {
       {/* Movement Controls - Center Bottom */}
       <div className="mobile-controls">
         <div className="mobile-movement-controls">
-          <div className="mobile-dpad">
-            <button
-              className="mobile-control-btn mobile-btn-up"
-              onTouchStart={() => handleMovement('w', true)}
-              onTouchEnd={() => handleMovement('w', false)}
-              onMouseDown={() => handleMovement('w', true)}
-              onMouseUp={() => handleMovement('w', false)}
-            >
-              ↑
-            </button>
-            <div className="mobile-dpad-row">
-              <button
-                className="mobile-control-btn mobile-btn-left"
-                onTouchStart={() => handleMovement('a', true)}
-                onTouchEnd={() => handleMovement('a', false)}
-                onMouseDown={() => handleMovement('a', true)}
-                onMouseUp={() => handleMovement('a', false)}
-              >
-                ←
-              </button>
-              <button
-                className="mobile-control-btn mobile-btn-right"
-                onTouchStart={() => handleMovement('d', true)}
-                onTouchEnd={() => handleMovement('d', false)}
-                onMouseDown={() => handleMovement('d', true)}
-                onMouseUp={() => handleMovement('d', false)}
-              >
-                →
-              </button>
-            </div>
-            <button
-              className="mobile-control-btn mobile-btn-down"
-              onTouchStart={() => handleMovement('s', true)}
-              onTouchEnd={() => handleMovement('s', false)}
-              onMouseDown={() => handleMovement('s', true)}
-              onMouseUp={() => handleMovement('s', false)}
-            >
-              ↓
-            </button>
-          </div>
+          <VirtualJoystick
+            onMove={handleJoystickMove}
+            onStop={handleJoystickStop}
+            size={100}
+            knobSize={36}
+          />
         </div>
       </div>
 
