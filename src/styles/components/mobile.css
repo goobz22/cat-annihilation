@@ -12,7 +12,7 @@
 @media (max-width: 768px) {
   .mobile-controls {
     display: flex;
-    justify-content: space-between;
+    justify-content: center;
     align-items: flex-end;
     padding: 20px;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
@@ -39,13 +39,13 @@
 }
 
 .mobile-control-btn {
-  width: 50px;
-  height: 50px;
+  width: 60px;
+  height: 60px;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
+  border-radius: 12px;
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
-  font-size: 18px;
+  font-size: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -53,6 +53,7 @@
   user-select: none;
   transition: all 0.2s ease;
   cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .mobile-control-btn:active {
@@ -66,26 +67,60 @@
   border-color: rgba(255, 255, 255, 0.5);
 }
 
-.mobile-action-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
+/* Separate positioning for left and right side actions */
+@media (max-width: 768px) {
+  .mobile-left-actions {
+    position: fixed;
+    left: 20px;
+    bottom: 20px; /* Bottom of screen */
+    z-index: 101;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .mobile-right-actions {
+    position: fixed;
+    right: 20px;
+    bottom: 20px; /* Bottom of screen */
+    z-index: 101;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
 }
 
 .mobile-btn-run {
+  width: 70px;
+  height: 55px;
+  font-size: 24px;
+}
+
+.mobile-btn-menu {
   width: 60px;
-  height: 45px;
+  height: 60px;
   font-size: 20px;
+  border-radius: 12px;
+  background: rgba(74, 144, 226, 0.8);
+  border-color: rgba(74, 144, 226, 0.6);
+  box-shadow: 0 4px 12px rgba(74, 144, 226, 0.4);
+}
+
+.mobile-btn-menu:active {
+  background: rgba(74, 144, 226, 1);
+  transform: scale(0.9);
 }
 
 .mobile-btn-attack {
-  width: 70px;
-  height: 70px;
-  font-size: 24px;
+  width: 80px;
+  height: 80px;
+  font-size: 28px;
   border-radius: 50%;
   background: rgba(220, 38, 38, 0.8);
   border-color: rgba(220, 38, 38, 0.6);
+  box-shadow: 0 6px 16px rgba(220, 38, 38, 0.4);
 }
 
 .mobile-btn-attack:active {
@@ -93,30 +128,7 @@
   transform: scale(0.9);
 }
 
-.mobile-controls-toggle {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  width: 48px;
-  height: 48px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.8);
-  color: #fff;
-  font-size: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 101;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.mobile-controls-toggle:hover {
-  background: rgba(0, 0, 0, 0.9);
-  border-color: rgba(255, 255, 255, 0.5);
-  transform: scale(1.05);
-}
+/* Mobile controls toggle removed - no longer needed */
 
 /* Touch feedback */
 @media (max-width: 768px) {
@@ -125,8 +137,24 @@
   }
   
   .mobile-control-btn:active {
-    background: rgba(74, 144, 226, 0.3);
+    background: rgba(74, 144, 226, 0.4);
     border-color: #4a90e2;
+    box-shadow: 0 2px 8px rgba(74, 144, 226, 0.4);
+  }
+  
+  /* Better touch feedback for hotbar slots */
+  .hotbar-slot {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  
+  .hotbar-slot:active {
+    transform: scale(0.95);
+    transition: transform 0.1s ease;
+  }
+  
+  .hotbar-slot.active:active {
+    transform: scale(1.05);
   }
 }
 
@@ -139,22 +167,349 @@
   -webkit-touch-callout: none;
 }
 
-/* Adjust UI elements for mobile */
+/* Mobile Stats Sidebar */
 @media (max-width: 768px) {
+  /* Create vertical stats sidebar on left */
+  .cat-stats-container {
+    position: fixed !important;
+    left: 8px !important;
+    top: 60px !important;
+    bottom: 200px !important; /* Space from bottom controls */
+    transform: none !important;
+    
+    /* Vertical layout */
+    flex-direction: column !important;
+    width: 85px !important;
+    min-width: 85px !important;
+    max-width: 85px !important;
+    height: auto !important;
+    max-height: calc(100vh - 260px) !important;
+    
+    /* Styling */
+    background: rgba(0, 0, 0, 0.9) !important;
+    border: 2px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 12px !important;
+    padding: 8px !important;
+    gap: 8px !important;
+    
+    /* NO horizontal scrolling */
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    
+    /* Ensure it stays visible */
+    z-index: 15 !important;
+  }
+  
+  .cat-stats-section {
+    border-right: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    padding: 8px 4px !important;
+    height: auto !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center !important;
+    min-height: auto !important;
+    
+    /* Prevent horizontal overflow */
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+  }
+  
+  .cat-stats-section:last-child {
+    border-bottom: none !important;
+  }
+  
+  /* Compact mobile stat styles */
+  .cat-level-display {
+    font-size: 11px !important;
+    writing-mode: horizontal-tb !important;
+    white-space: nowrap !important;
+  }
+  
+  .cat-xp-container {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  
+  .cat-xp-bar {
+    height: 4px !important;
+    margin-bottom: 4px !important;
+    width: 100% !important;
+  }
+  
+  .cat-xp-text {
+    font-size: 8px !important;
+    line-height: 1.2 !important;
+    word-break: break-all !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  
+  .cat-health-container {
+    flex-direction: column !important;
+    gap: 2px !important;
+  }
+  
+  .cat-health-text {
+    font-size: 10px !important;
+  }
+  
+  .cat-abilities-container {
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    gap: 3px !important;
+  }
+  
+  .cat-ability-icon {
+    width: 18px !important;
+    height: 18px !important;
+  }
+  
+  .cat-ability-emoji {
+    font-size: 10px !important;
+  }
+  
+  .cat-next-ability {
+    flex-direction: column !important;
+    gap: 2px !important;
+    font-size: 8px !important;
+    max-width: none !important;
+  }
+  
+  .cat-next-ability-icon {
+    width: 16px !important;
+    height: 16px !important;
+  }
+  
+  .cat-next-ability-name {
+    font-size: 7px !important;
+    text-align: center !important;
+  }
+  
+  /* Mobile weapon skills integrated into sidebar */
+  .mobile-weapon-skills {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  }
+  
+  .mobile-weapon-title {
+    font-size: 10px !important;
+    font-weight: bold !important;
+    color: #fff !important;
+    margin-bottom: 3px !important;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8) !important;
+  }
+  
+  .mobile-weapon-level {
+    font-size: 9px !important;
+    color: #d1d5db !important;
+    margin-bottom: 4px !important;
+  }
+  
+  .mobile-weapon-xp-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  
+  .mobile-weapon-xp-bar {
+    width: 100% !important;
+    height: 3px !important;
+    background: rgba(55, 65, 81, 0.8) !important;
+    border-radius: 2px !important;
+    overflow: hidden !important;
+    margin-bottom: 3px !important;
+  }
+  
+  .mobile-weapon-xp-fill {
+    height: 100% !important;
+    transition: width 0.3s ease !important;
+    border-radius: 2px !important;
+  }
+  
+  .mobile-weapon-xp-text {
+    font-size: 7px !important;
+    color: #d1d5db !important;
+    text-align: center !important;
+    margin-bottom: 2px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  
+  .mobile-weapon-next {
+    font-size: 6px !important;
+    color: #9ca3af !important;
+    text-align: center !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  
+  .mobile-weapon-max {
+    font-size: 7px !important;
+    color: #fbbf24 !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    text-transform: uppercase !important;
+  }
+  
+  /* Hide separate weapon skills on mobile - will be integrated into sidebar */
+  .weapon-skills-container {
+    display: none !important;
+  }
+  
+  /* Vertical inventory hotbar on right side for mobile */
   .inventory-hotbar-container {
-    bottom: 200px; /* Above mobile controls */
+    position: fixed !important;
+    right: 8px !important;
+    top: 60px !important;
+    bottom: 200px !important; /* Space from bottom controls */
+    left: auto !important;
+    transform: none !important;
+    
+    /* Vertical layout */
+    flex-direction: column !important;
+    width: 70px !important;
+    height: auto !important;
+    max-height: calc(100vh - 260px) !important;
+    
+    /* Styling */
+    background: rgba(0, 0, 0, 0.85) !important;
+    border: 2px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 12px !important;
+    padding: 8px !important;
+    gap: 6px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    
+    /* Ensure it stays visible */
+    z-index: 15 !important;
+  }
+  
+  /* Hide active item display on mobile - not enough space */
+  .hotbar-active-item {
+    display: none !important;
+  }
+  
+  /* Wave display adjustments for mobile */
+  .wave-display-counter {
+    top: 20px !important;
+    z-index: 15 !important;
+  }
+  
+  /* Tooltip improvements for mobile */
+  .spell-tooltip, .item-tooltip {
+    max-width: 80vw !important;
+    font-size: 14px !important;
+    padding: 12px !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+  }
+}
+
+/* Extra small mobile devices */
+@media (max-width: 480px) {
+  .mobile-controls {
+    height: 160px;
+    padding: 15px;
+  }
+  
+  .mobile-control-btn {
+    width: 56px;
+    height: 56px;
+    font-size: 20px;
+  }
+  
+  .mobile-btn-run {
+    width: 65px;
+    height: 50px;
+    font-size: 22px;
+  }
+  
+  .mobile-btn-attack {
+    width: 75px;
+    height: 75px;
+    font-size: 26px;
+  }
+  
+  .mobile-left-actions {
+    bottom: 20px !important; /* Bottom of screen for small screens too */
+    left: 15px !important;
+    gap: 10px !important;
+  }
+
+  .mobile-right-actions {
+    bottom: 20px !important; /* Bottom of screen for small screens too */
+    right: 15px !important;
+    gap: 10px !important;
+  }
+  
+  .mobile-btn-menu {
+    width: 55px !important;
+    height: 55px !important;
+    font-size: 18px !important;
+  }
+  
+  .inventory-hotbar-container {
+    width: 65px !important;
+    right: 6px !important;
+    gap: 5px !important;
+    padding: 6px !important;
+    bottom: 180px !important; /* Space from bottom controls on small screens */
+    max-height: calc(100vh - 240px) !important;
   }
   
   .cat-stats-container {
-    bottom: 250px; /* Above mobile controls */
-    left: 50%;
-    transform: translateX(-50%);
-    scale: 0.9;
+    width: 75px !important;
+    min-width: 75px !important;
+    max-width: 75px !important;
+    left: 6px !important;
+    top: 50px !important;
+    bottom: 180px !important; /* Space from bottom controls on small screens */
+    max-height: calc(100vh - 240px) !important;
+    overflow-x: hidden !important;
   }
   
-  .weapon-skills-container {
-    right: 10px;
-    bottom: 250px; /* Above mobile controls */
-    scale: 0.9;
+  /* Smaller text for extra small screens */
+  .cat-level-display {
+    font-size: 10px !important;
+  }
+  
+  .cat-xp-text {
+    font-size: 7px !important;
+  }
+  
+  .cat-health-text {
+    font-size: 9px !important;
+  }
+  
+  .mobile-weapon-title {
+    font-size: 9px !important;
+  }
+  
+  .mobile-weapon-level {
+    font-size: 8px !important;
+  }
+  
+  .mobile-weapon-xp-text {
+    font-size: 6px !important;
+  }
+  
+  .mobile-weapon-next {
+    font-size: 5px !important;
+  }
+  
+  .mobile-weapon-max {
+    font-size: 6px !important;
   }
 }

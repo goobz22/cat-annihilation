@@ -1,9 +1,25 @@
-import { memo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { useGameStore } from '../../lib/store/gameStore';
 
 const CatStats = () => {
   const catStats = useGameStore(state => state.catStats);
   const player = useGameStore(state => state.player);
+  const weaponSkills = useGameStore(state => state.weaponSkills);
+  const inventory = useGameStore(state => state.player.inventory);
+  const activeSlot = useGameStore(state => state.player.activeSlot);
+  
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+  
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
   
   // Calculate cat XP progress percentage
   const calculateCatXPForLevel = (level: number): number => {
@@ -63,6 +79,44 @@ const CatStats = () => {
   };
 
   const nextAbility = getNextAbilityInfo();
+  
+  // Weapon Skills Logic for Mobile
+  const calculateXPForLevel = (level: number): number => {
+    let total = 0;
+    for (let i = 1; i < level; i++) {
+      total += Math.floor(i + 300 * Math.pow(2, i / 7));
+    }
+    return Math.floor(total / 2.5);
+  };
+  
+  const getActiveWeaponSkill = () => {
+    const activeItem = inventory[activeSlot];
+    
+    if (activeItem?.id === 'sword') {
+      return {
+        skill: weaponSkills.sword,
+        name: 'Sword',
+        type: 'sword'
+      };
+    } else if (activeItem?.id === 'bow') {
+      return {
+        skill: weaponSkills.bow,
+        name: 'Bow',
+        type: 'bow'
+      };
+    } else if (activeItem?.type === 'spell' && activeItem?.element) {
+      const element = activeItem.element as 'water' | 'air' | 'earth' | 'fire';
+      return {
+        skill: weaponSkills.magic[element],
+        name: `${element.charAt(0).toUpperCase() + element.slice(1)}`,
+        type: element
+      };
+    }
+    
+    return null;
+  };
+  
+  const activeWeaponSkill = getActiveWeaponSkill();
   
   return (
     <div className="cat-stats-container">
@@ -130,6 +184,47 @@ const CatStats = () => {
               <span className="cat-next-ability-emoji">{nextAbility.icon}</span>
             </div>
             <span className="cat-next-ability-name">{nextAbility.name}</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Weapon Skills - Mobile Only */}
+      {isMobile && activeWeaponSkill && (
+        <div className="cat-stats-section mobile-weapon-skills">
+          <div className="mobile-weapon-title">
+            {activeWeaponSkill.name}
+          </div>
+          <div className="mobile-weapon-level">
+            Lv.{activeWeaponSkill.skill.level}
+          </div>
+          <div className="mobile-weapon-xp-container">
+            <div className="mobile-weapon-xp-bar">
+              <div 
+                className="mobile-weapon-xp-fill"
+                style={{ 
+                  width: `${((activeWeaponSkill.skill.xp - (activeWeaponSkill.skill.level === 1 ? 0 : calculateXPForLevel(activeWeaponSkill.skill.level))) / (activeWeaponSkill.skill.xpToNextLevel - (activeWeaponSkill.skill.level === 1 ? 0 : calculateXPForLevel(activeWeaponSkill.skill.level)))) * 100}%`,
+                  backgroundColor: activeWeaponSkill.type === 'water' ? '#3b82f6' :
+                                  activeWeaponSkill.type === 'fire' ? '#ef4444' :
+                                  activeWeaponSkill.type === 'earth' ? '#10b981' :
+                                  activeWeaponSkill.type === 'air' ? '#8b5cf6' :
+                                  activeWeaponSkill.type === 'sword' ? '#f59e0b' :
+                                  activeWeaponSkill.type === 'bow' ? '#06d6a0' : '#4a90e2'
+                }}
+              />
+            </div>
+            <div className="mobile-weapon-xp-text">
+              {activeWeaponSkill.skill.xp.toLocaleString()}
+            </div>
+            {activeWeaponSkill.skill.level < 99 && (
+              <div className="mobile-weapon-next">
+                {(activeWeaponSkill.skill.xpToNextLevel - activeWeaponSkill.skill.xp).toLocaleString()} to {activeWeaponSkill.skill.level + 1}
+              </div>
+            )}
+            {activeWeaponSkill.skill.level === 99 && (
+              <div className="mobile-weapon-max">
+                MAX!
+              </div>
+            )}
           </div>
         </div>
       )}
