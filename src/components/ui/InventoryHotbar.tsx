@@ -8,7 +8,7 @@ const InventoryHotbar = () => {
 
   const handleKeyPress = useCallback((e: KeyboardEvent) => {
     const key = parseInt(e.key);
-    if (key >= 1 && key <= 7) {
+    if (key >= 1 && key <= 9) {
       setActiveSlot(key - 1);
     }
   }, [setActiveSlot]);

@@ -59,7 +59,7 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
     const dz = playerPosition.z - positionRef.current.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
     
-    // Check for sword damage if player is attacking and close enough
+    // Check for melee damage if player is attacking and close enough
     const player = useGameStore.getState().player;
     if (player.isAttacking && distance <= 2.0) {
       const inventory = useGameStore.getState().player.inventory;
@@ -78,8 +78,35 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
           
           onDamage(enemy.id, damage, { weapon: 'sword' }); // Sword damage
           
-                  // Award weapon XP for hit immediately using global system
-        globalWeaponXP.awardXP('sword', 10);
+          // Award weapon XP for hit immediately using global system
+          globalWeaponXP.awardXP('sword', 10);
+          
+          // Update last hit time for this enemy
+          enemy.lastSwordHitTime = currentTime;
+        }
+      } else if (activeItem && activeItem.id === 'shield') {
+        const currentTime = Date.now();
+        const shieldCooldown = 600; // Shield bash cooldown
+        
+        // Only hit if enough time has passed since last shield bash on this enemy
+        if (!enemy.lastSwordHitTime || currentTime - enemy.lastSwordHitTime >= shieldCooldown) {
+          // Shield bash damage
+          const damage = 35; // Strong damage but slower than sword
+          
+          onDamage(enemy.id, damage, { weapon: 'sword' }); // Use sword weapon type for XP
+          
+          // Award weapon XP for hit
+          globalWeaponXP.awardXP('sword', 8); // Less XP than sword
+          
+          // Push enemy back from shield bash
+          const pushDistance = 3.0;
+          const pushX = (positionRef.current.x - playerPosition.x) / distance * pushDistance;
+          const pushZ = (positionRef.current.z - playerPosition.z) / distance * pushDistance;
+          
+          positionRef.current.x += pushX;
+          positionRef.current.z += pushZ;
+          
+          console.log('🛡️ Shield bash! Enemy pushed back!');
           
           // Update last hit time for this enemy
           enemy.lastSwordHitTime = currentTime;
@@ -117,11 +144,132 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
         moveZ += separationZ * delta;
       }
       
+      // Check for shield collision
+      const gameState = useGameStore.getState();
+      const inventory = gameState.player.inventory;
+      const activeSlot = gameState.player.activeSlot;
+      const hasShieldEquipped = inventory[3]?.id === 'shield' && activeSlot === 3;
+      
+      // Debug shield status (only log occasionally)
+      if (enemy.id === 'enemy-0' && Math.random() < 0.01) {
+        console.log(`Shield Debug: slot4=${inventory[3]?.id}, activeSlot=${activeSlot}, equipped=${hasShieldEquipped}`);
+      }
+      
+      if (hasShieldEquipped) {
+        // Create a solid shield barrier
+        const playerRotation = gameState.player.position.rotation;
+        
+        // Define shield as a physical barrier in front of player
+        const shieldDistance = 1.2; // How far shield extends from player
+        const shieldWidth = 1.5; // Shield width (1.5x larger)
+        const shieldCenterX = playerPosition.x + Math.sin(playerRotation) * shieldDistance;
+        const shieldCenterZ = playerPosition.z + Math.cos(playerRotation) * shieldDistance;
+        
+        // Calculate enemy's new position if it moves
+        const newX = positionRef.current.x + moveX;
+        const newZ = positionRef.current.z + moveZ;
+        
+        // Check if enemy would intersect with shield barrier
+        // Create shield as a rectangle in front of player
+        const shieldLeftX = shieldCenterX + Math.cos(playerRotation) * shieldWidth/2;
+        const shieldLeftZ = shieldCenterZ - Math.sin(playerRotation) * shieldWidth/2;
+        const shieldRightX = shieldCenterX - Math.cos(playerRotation) * shieldWidth/2;
+        const shieldRightZ = shieldCenterZ + Math.sin(playerRotation) * shieldWidth/2;
+        
+        // Simple distance-based collision with shield center
+        const distanceToShieldCenter = Math.sqrt(
+          (newX - shieldCenterX) * (newX - shieldCenterX) + 
+          (newZ - shieldCenterZ) * (newZ - shieldCenterZ)
+        );
+        
+        // Also check if enemy is in front of shield
+        const enemyToShield = {
+          x: newX - playerPosition.x,
+          z: newZ - playerPosition.z
+        };
+        const shieldDirection = {
+          x: Math.sin(playerRotation),
+          z: Math.cos(playerRotation)
+        };
+        const dotProduct = enemyToShield.x * shieldDirection.x + enemyToShield.z * shieldDirection.z;
+        const isInFrontOfPlayer = dotProduct > 0 && dotProduct < shieldDistance + 0.5;
+        
+        // Shield collision radius (1.5x larger)
+        const shieldRadius = 0.9;
+        
+        if (distanceToShieldCenter < shieldRadius && isInFrontOfPlayer) {
+          console.log(`🛡️ SOLID SHIELD COLLISION! Enemy ${enemy.id} blocked at shield center`);
+          
+          // Completely prevent the movement - revert to old position
+          moveX = 0;
+          moveZ = 0;
+          
+          // Push enemy away from shield center
+          const pushDirection = {
+            x: positionRef.current.x - shieldCenterX,
+            z: positionRef.current.z - shieldCenterZ
+          };
+          const pushDistance = Math.sqrt(pushDirection.x * pushDirection.x + pushDirection.z * pushDirection.z);
+          
+          if (pushDistance > 0) {
+            // Normalize and apply push force
+            const pushForce = 0.5; // Strong push away from shield
+            moveX = (pushDirection.x / pushDistance) * pushForce * delta;
+            moveZ = (pushDirection.z / pushDistance) * pushForce * delta;
+          }
+        }
+      }
+      
       const rotation = Math.atan2(dx, dz);
       
+      // Apply movement
       positionRef.current.x += moveX;
       positionRef.current.z += moveZ;
       positionRef.current.rotation = rotation;
+      
+      // FINAL POSITION VALIDATION - ensure enemy hasn't penetrated shield
+      if (hasShieldEquipped) {
+        const playerRotation = gameState.player.position.rotation;
+        const shieldDistance = 1.2;
+        const shieldCenterX = playerPosition.x + Math.sin(playerRotation) * shieldDistance;
+        const shieldCenterZ = playerPosition.z + Math.cos(playerRotation) * shieldDistance;
+        const shieldRadius = 0.9; // 1.5x larger
+        
+        const finalDistanceToShield = Math.sqrt(
+          (positionRef.current.x - shieldCenterX) * (positionRef.current.x - shieldCenterX) + 
+          (positionRef.current.z - shieldCenterZ) * (positionRef.current.z - shieldCenterZ)
+        );
+        
+        // Check if enemy is in front of shield after movement
+        const finalEnemyToShield = {
+          x: positionRef.current.x - playerPosition.x,
+          z: positionRef.current.z - playerPosition.z
+        };
+        const shieldDirection = {
+          x: Math.sin(playerRotation),
+          z: Math.cos(playerRotation)
+        };
+        const finalDotProduct = finalEnemyToShield.x * shieldDirection.x + finalEnemyToShield.z * shieldDirection.z;
+        const finalIsInFrontOfPlayer = finalDotProduct > 0 && finalDotProduct < shieldDistance + 0.5;
+        
+        if (finalDistanceToShield < shieldRadius && finalIsInFrontOfPlayer) {
+          console.log(`🚫 POSITION VALIDATION: Enemy ${enemy.id} penetrated shield! Correcting position.`);
+          
+          // Force enemy outside shield radius
+          const correctionDirection = {
+            x: positionRef.current.x - shieldCenterX,
+            z: positionRef.current.z - shieldCenterZ
+          };
+          const correctionDistance = Math.sqrt(correctionDirection.x * correctionDirection.x + correctionDirection.z * correctionDirection.z);
+          
+          if (correctionDistance > 0) {
+            // Push enemy to just outside shield radius
+            const targetDistance = shieldRadius + 0.1;
+            positionRef.current.x = shieldCenterX + (correctionDirection.x / correctionDistance) * targetDistance;
+            positionRef.current.z = shieldCenterZ + (correctionDirection.z / correctionDistance) * targetDistance;
+          }
+        }
+      }
       
       if (groupRef.current) {
         groupRef.current.position.set(positionRef.current.x, positionRef.current.y, positionRef.current.z);
@@ -139,7 +287,27 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
     if (distance <= ATTACK_RANGE) {
       const currentTime = Date.now();
       if (currentTime - enemy.lastAttackTime >= ATTACK_COOLDOWN) {
-        damagePlayer(ATTACK_DAMAGE);
+        // Check if player has shield selected (always defends when selected)
+        const gameState = useGameStore.getState();
+        const inventory = gameState.player.inventory;
+        const activeSlot = gameState.player.activeSlot;
+        const hasShieldEquipped = inventory[3]?.id === 'shield' && activeSlot === 3;
+        
+        // Calculate angle between enemy and player to determine if shield blocks
+        const playerRotation = gameState.player.position.rotation;
+        const angleToEnemy = Math.atan2(dx, dz);
+        const angleDifference = Math.abs(angleToEnemy - playerRotation);
+        const normalizedAngle = Math.min(angleDifference, 2 * Math.PI - angleDifference);
+        
+        // Shield blocks attacks from front (within 90 degrees) when equipped
+        const shieldBlocks = hasShieldEquipped && normalizedAngle <= Math.PI / 2;
+        
+        if (!shieldBlocks) {
+          damagePlayer(ATTACK_DAMAGE);
+        } else {
+          console.log('🛡️ Shield blocked enemy attack!');
+        }
+        
         enemy.lastAttackTime = currentTime;
         
         if (meshRef.current) {

@@ -53,8 +53,8 @@ const InventoryPopup = () => {
   }, [selectedBagItem]);
 
   const handleQuickSlotClick = useCallback((slotIndex: number) => {
-    // Only allow slots 2-7 (indices 1-6)
-    if (slotIndex < 1 || slotIndex > 6) return;
+    // Allow all slots 1-9 (indices 0-8)
+    if (slotIndex < 0 || slotIndex > 8) return;
     
     setSelectedQuickSlot(selectedQuickSlot === slotIndex ? null : slotIndex);
     setSelectedBagItem(null);
@@ -121,7 +121,7 @@ const InventoryPopup = () => {
   const handleDropOnSlot = useCallback((e: React.DragEvent, targetSlot: number) => {
     e.preventDefault();
     
-    if (draggedItem && targetSlot >= 1 && targetSlot <= 6) {
+    if (draggedItem && targetSlot >= 0 && targetSlot <= 8) {
       // Find the item being dragged
       let item;
       const currentItemInSlot = inventory[targetSlot];
@@ -200,11 +200,11 @@ const InventoryPopup = () => {
           {/* Quick Slots Section */}
           <div className="inventory-section">
             <h3 className="inventory-section-title">
-              Equipment Slots (2-7)
+              Equipment Slots (1-9)
             </h3>
             <div className="equipment-slots-grid">
-              {inventory.slice(1, 7).map((item, index) => {
-                const actualIndex = index + 1;
+              {inventory.map((item, index) => {
+                const actualIndex = index;
                 const isSelected = selectedQuickSlot === actualIndex;
                 const isDraggingFromThisSlot = draggedFromSlot === actualIndex;
                 return (
@@ -239,15 +239,15 @@ const InventoryPopup = () => {
           {/* Inventory Bag Section */}
           <div className="inventory-bag-container">
             <h3 className="inventory-section-title">
-              Inventory (28 items)
+              Inventory (20 items)
             </h3>
             <div 
               className="inventory-bag-grid"
               onDragOver={handleDragOver}
               onDrop={handleDropOnInventory}
             >
-              {/* Create 28 slots like RuneScape */}
-              {Array.from({ length: 28 }, (_, slotIndex) => {
+              {/* Create 20 slots */}
+              {Array.from({ length: 20 }, (_, slotIndex) => {
                 const item = inventoryBag[slotIndex];
                 const isSelected = item && selectedBagItem === item.id;
                 return (

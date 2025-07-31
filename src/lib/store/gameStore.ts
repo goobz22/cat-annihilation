@@ -166,12 +166,14 @@ const availableSpells: IInventoryItem[] = [
 ];
 
 /**
- * Initial inventory items (quick slots)
+ * Initial inventory items (quick slots - 9 slots total)
  */
 const initialInventory: (IInventoryItem | null)[] = [
   { id: 'water-spell', name: 'Water Spell', type: 'spell', element: 'water', icon: '💧', color: '#00ffff' },
   { id: 'sword', name: 'Sword', type: 'weapon', icon: '⚔️', color: '#c0c0c0' },
   { id: 'bow', name: 'Bow', type: 'weapon', icon: '🏹', color: '#8b4513' },
+  { id: 'shield', name: 'Shield', type: 'weapon', icon: '🛡️', color: '#c0c0c0' },
+  null,
   null,
   null,
   null,
@@ -185,7 +187,6 @@ const initialInventoryBag: IInventoryItem[] = [
   { id: 'health-potion', name: 'Health Potion', type: 'consumable', icon: '🧪', color: '#ff0000' },
   { id: 'mana-potion', name: 'Mana Potion', type: 'consumable', icon: '🍶', color: '#0000ff' },
   { id: 'arrows', name: 'Arrows', type: 'weapon', icon: '🎯', color: '#654321' },
-  { id: 'shield', name: 'Shield', type: 'weapon', icon: '🛡️', color: '#c0c0c0' },
   { id: 'food', name: 'Food', type: 'consumable', icon: '🍖', color: '#8b4513' },
 ];
 

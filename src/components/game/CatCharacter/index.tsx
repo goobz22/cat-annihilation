@@ -98,7 +98,7 @@ const Controls = () => {
           controlsActive.current.run = true; 
           setPlayerRunning(true);
           break;
-        case ' ': // Spacebar for sword attacks only
+        case ' ': // Spacebar for attacks (sword or shield bash)
           e.preventDefault();
           performAttack();
           break;
@@ -123,18 +123,20 @@ const Controls = () => {
         case 0: // Left click for sword attacks only
           performAttack();
           break;
-        case 2: // Right click for defend
-          controlsActive.current.defend = true;
-          setPlayerDefending(true);
+        case 2: // Right click for shield bash - only if shield is in slot 4 and selected
+          const state = useGameStore.getState();
+          const inventory = state.player.inventory;
+          const activeSlot = state.player.activeSlot;
+          if (inventory[3]?.id === 'shield' && activeSlot === 3) {
+            performAttack(); // Use same attack system for shield bash
+          }
           break;
       }
     };
 
     const handleMouseUp = (e: MouseEvent) => {
       switch (e.button) {
-        case 2: // Right click for defend
-          controlsActive.current.defend = false;
-          setPlayerDefending(false);
+        case 2: // Right click shield bash - no action needed on mouse up
           break;
         // REMOVED LEFT CLICK - let ShootingSystem handle it
       }

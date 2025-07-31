@@ -27,8 +27,9 @@ const Equipment = memo(({ activeItem }: EquipmentProps) => {
   const player = useGameStore((state) => state.player);
   const inventory = useGameStore((state) => state.player.inventory);
   
-  // Check if shield is equipped in any slot
-  const equippedShield = inventory.find(item => item?.id === 'shield');
+  // Check if shield is in slot 4 (index 3) and currently selected
+  const activeSlot = useGameStore((state) => state.player.activeSlot);
+  const equippedShield = (inventory[3]?.id === 'shield' && activeSlot === 3) ? inventory[3] : null;
   const activeBow = activeItem?.id === 'bow';
   
   // Equipment animations
@@ -65,23 +66,19 @@ const Equipment = memo(({ activeItem }: EquipmentProps) => {
     // Shield animation
     if (equippedShield && shieldRef.current) {
       if (player.isAttacking) {
+        // Shield bash animation - push shield forward
         const bashTime = state.clock.getElapsedTime() * 10;
         const bashPhase = Math.sin(bashTime);
-        const bashDistance = Math.max(0, bashPhase) * 0.6;
-        shieldRef.current.position.z = 1.3 + bashDistance;
+        const bashDistance = Math.max(0, bashPhase) * 0.8;
+        shieldRef.current.position.z = 1.6 + bashDistance;
         shieldRef.current.rotation.x = bashPhase * 0.2;
-      } else if (player.isDefending) {
-        shieldRef.current.position.z = THREE.MathUtils.lerp(shieldRef.current.position.z, 1.6, 0.2);
-        shieldRef.current.position.y = THREE.MathUtils.lerp(shieldRef.current.position.y, 0.6, 0.2);
-        shieldRef.current.rotation.x = THREE.MathUtils.lerp(shieldRef.current.rotation.x, 0, 0.1);
       } else {
-        shieldRef.current.position.z = THREE.MathUtils.lerp(shieldRef.current.position.z, 1.3, 0.1);
-        shieldRef.current.position.y = THREE.MathUtils.lerp(shieldRef.current.position.y, 0.5, 0.1);
+        // Default defending position when shield is selected
+        shieldRef.current.position.z = THREE.MathUtils.lerp(shieldRef.current.position.z, 1.6, 0.1);
+        shieldRef.current.position.y = THREE.MathUtils.lerp(shieldRef.current.position.y, 0.6, 0.1);
         shieldRef.current.rotation.x = THREE.MathUtils.lerp(shieldRef.current.rotation.x, 0, 0.1);
-      }
-      
-      // Subtle breathing/idle movement
-      if (!player.isAttacking && !player.isDefending) {
+        
+        // Subtle breathing/idle movement
         const time = state.clock.getElapsedTime();
         const breathCycle = Math.sin(time * 0.5) * 0.02;
         shieldRef.current.position.y += breathCycle;
@@ -117,27 +114,27 @@ const Equipment = memo(({ activeItem }: EquipmentProps) => {
         </group>
       )}
       
-      {/* Shield */}
+      {/* Shield - 1.5x larger */}
       {equippedShield && (
         <group ref={shieldRef} position={[0, 0.5, 1.3]} rotation={[0, 0, 0]}>
           <mesh position={[0, 0, 0]} castShadow receiveShadow rotation={[Math.PI/2, 0, 0]}>
-            <cylinderGeometry args={[0.35, 0.35, 0.08, 16]} />
+            <cylinderGeometry args={[0.525, 0.525, 0.12, 16]} />
             <meshStandardMaterial color="#8B4513" metalness={0.3} roughness={0.7} />
           </mesh>
-          <mesh position={[0, 0, 0.05]} castShadow rotation={[Math.PI/2, 0, 0]}>
-            <sphereGeometry args={[0.08, 12, 12]} />
+          <mesh position={[0, 0, 0.075]} castShadow rotation={[Math.PI/2, 0, 0]}>
+            <sphereGeometry args={[0.12, 12, 12]} />
             <meshStandardMaterial color="#FFD700" metalness={0.9} roughness={0.1} />
           </mesh>
-          <mesh position={[0, 0, -0.06]} castShadow rotation={[Math.PI/2, 0, 0]}>
-            <cylinderGeometry args={[0.03, 0.03, 0.2, 8]} />
+          <mesh position={[0, 0, -0.09]} castShadow rotation={[Math.PI/2, 0, 0]}>
+            <cylinderGeometry args={[0.045, 0.045, 0.3, 8]} />
             <meshStandardMaterial color="#8B4513" />
           </mesh>
-          <mesh position={[0, 0.1, -0.04]} rotation={[0, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.015, 0.015, 0.15, 6]} />
+          <mesh position={[0, 0.15, -0.06]} rotation={[0, 0, 0]} castShadow>
+            <cylinderGeometry args={[0.0225, 0.0225, 0.225, 6]} />
             <meshStandardMaterial color="#654321" />
           </mesh>
-          <mesh position={[0, -0.1, -0.04]} rotation={[0, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.015, 0.015, 0.15, 6]} />
+          <mesh position={[0, -0.15, -0.06]} rotation={[0, 0, 0]} castShadow>
+            <cylinderGeometry args={[0.0225, 0.0225, 0.225, 6]} />
             <meshStandardMaterial color="#654321" />
           </mesh>
         </group>
