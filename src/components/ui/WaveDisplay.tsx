@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { waveState } from '../game/WaveState';
+import { waveState, subscribeToWaveState } from '../game/WaveState';
 
 const WaveDisplay = () => {
   const [currentWave, setCurrentWave] = useState(waveState.currentWave);
@@ -10,16 +10,19 @@ const WaveDisplay = () => {
   // Subscribe to wave state changes
   useEffect(() => {
     const updateWaveDisplay = (state: { isTransition: boolean; currentWave: number; nextWaveEnemies: number }) => {
+      console.log(`📺 WaveDisplay received state update:`, state);
       setCurrentWave(state.currentWave);
       setIsWaveTransition(state.isTransition);
     };
 
-    // Set up subscription
-    waveState.onStateChange = updateWaveDisplay;
+    // Set up subscription using new subscriber system
+    console.log(`📺 WaveDisplay setting up subscription, initial wave:`, waveState.currentWave);
+    const unsubscribe = subscribeToWaveState(updateWaveDisplay);
     
     // Clean up subscription
     return () => {
-      waveState.onStateChange = null;
+      console.log(`📺 WaveDisplay cleaning up subscription`);
+      unsubscribe();
     };
   }, []);
 
@@ -28,11 +31,17 @@ const WaveDisplay = () => {
       setShowTransition(true);
       setTimeout(() => {
         setShowTransition(false);
-        setAnimateWave(true);
-        setTimeout(() => setAnimateWave(false), 500);
       }, 3000);
     }
   }, [isWaveTransition]);
+
+  // Trigger wave counter animation when wave number changes and transition ends
+  useEffect(() => {
+    if (!isWaveTransition && currentWave > 1) {
+      setAnimateWave(true);
+      setTimeout(() => setAnimateWave(false), 500);
+    }
+  }, [currentWave, isWaveTransition]);
 
   return (
     <>

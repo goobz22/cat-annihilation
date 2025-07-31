@@ -328,7 +328,11 @@ const LocalEnemySystem = () => {
     // Stagger enemy spawning
     newEnemies.forEach((enemy, index) => {
       setTimeout(() => {
-        setLocalEnemies(prev => [...prev, enemy]);
+        setLocalEnemies(prev => {
+          const updated = [...prev, enemy];
+          console.log(`🐕 Enemy spawned! Total enemies now: ${updated.length}`);
+          return updated;
+        });
         
         // Register with global collision system
         globalCollisionData.enemies.push({
@@ -378,7 +382,11 @@ const LocalEnemySystem = () => {
     // Find the enemy to get damage source before removing it
     const killedEnemy = localEnemies.find(enemy => enemy.id === id);
     
-    setLocalEnemies(prev => prev.filter(enemy => enemy.id !== id));
+    setLocalEnemies(prev => {
+      const updated = prev.filter(enemy => enemy.id !== id);
+      console.log(`💀 Enemy killed! Remaining enemies: ${updated.length}`);
+      return updated;
+    });
     
     // Remove from global collision data
     const index = globalCollisionData.enemies.findIndex(e => e.id === id);
@@ -414,6 +422,11 @@ const LocalEnemySystem = () => {
     // Start wave if no enemies and wave hasn't started (only when allowed)
     if (localEnemies.length === 0 && !waveStarted.current && !isWaveTransition && allowNextWaveSpawn.current) {
       spawnWave();
+    }
+    
+    // Debug wave completion conditions
+    if (waveStarted.current && localEnemies.length === 0) {
+      console.log(`🎯 Wave completion check - wave: ${currentWave}, enemies: ${localEnemies.length}, started: ${waveStarted.current}`);
     }
     
     // Check if wave is complete - but only if wave has actually started and enemies are gone
