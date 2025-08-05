@@ -635,15 +635,281 @@
 
 /* Mobile responsive adjustments */
 @media (max-width: 768px) {
-  .pause-buttons {
-    flex-direction: column;
+  /* Pause Menu Mobile Styles */
+  .pause-modal {
+    width: min(420px, 95vw);
+    margin: 10px;
+    border-radius: 16px;
+    max-height: 90vh;
+    overflow-y: auto;
+    /* Custom scrollbar for mobile */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(78, 205, 196, 0.6) rgba(0, 0, 0, 0.2);
+    /* Smooth scrolling for mobile */
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
   }
   
+  /* Custom mobile scrollbar styling */
+  .pause-modal::-webkit-scrollbar {
+    width: 8px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  
+  .pause-modal:hover::-webkit-scrollbar,
+  .pause-modal:active::-webkit-scrollbar {
+    opacity: 1;
+  }
+  
+  .pause-modal::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    margin: 8px 0;
+  }
+  
+  .pause-modal::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #4ecdc4, #3ab5ae);
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+    opacity: 0.8;
+  }
+  
+  .pause-modal::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #5ed4cd, #4ecdc4);
+    border-color: rgba(255, 255, 255, 0.2);
+    opacity: 1;
+    box-shadow: 0 4px 8px rgba(78, 205, 196, 0.4);
+  }
+  
+  .pause-modal::-webkit-scrollbar-thumb:active {
+    background: linear-gradient(180deg, #3ab5ae, #2a9d93);
+    transform: scale(0.95);
+    opacity: 1;
+  }
+  
+  .pause-title-bar {
+    padding: 16px 20px;
+  }
+  
+  .pause-title {
+    font-size: clamp(20px, 5vw, 24px);
+    letter-spacing: 1.5px;
+  }
+  
+  .pause-content {
+    padding: 20px;
+    /* Ensure any internal scrollable content is styled */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(78, 205, 196, 0.6) rgba(0, 0, 0, 0.2);
+  }
+  
+  .pause-content::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .pause-content::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+  }
+  
+  .pause-content::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #4ecdc4, #3ab5ae);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .pause-content::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #5ed4cd, #4ecdc4);
+  }
+  
+  .pause-section {
+    margin-bottom: 24px;
+  }
+  
+  .pause-section-title {
+    font-size: 18px;
+    margin-bottom: 16px;
+    color: #4ecdc4;
+    text-align: center;
+  }
+  
+  /* Enhanced mobile control panels */
+  .pause-control-panel {
+    padding: 16px;
+    border-radius: 12px;
+    background: linear-gradient(145deg, #3a3a3a, #2d2d2d);
+    border: 2px solid #555;
+  }
+  
+  .sensitivity-control {
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .sensitivity-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ccc;
+    min-width: 50px;
+    text-align: center;
+  }
+  
+  /* Enhanced mobile sliders */
+  .sensitivity-slider {
+    height: 12px;
+    border-radius: 6px;
+    min-width: 200px;
+    flex: 1;
+    background: #555;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  
+  .sensitivity-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+    border: 3px solid #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(78, 205, 196, 0.5);
+    transition: all 0.2s ease;
+  }
+  
+  .sensitivity-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(78, 205, 196, 0.7);
+  }
+  
+  .sensitivity-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+    border: 3px solid #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  
+  .sensitivity-value {
+    background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 16px;
+    min-width: 60px;
+    text-align: center;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  }
+  
+  /* Mobile controls grid */
   .controls-grid {
     grid-template-columns: 1fr;
-    gap: 4px;
+    gap: 8px;
+    padding: 16px;
+    border-radius: 12px;
+    background: linear-gradient(145deg, #3a3a3a, #2d2d2d);
+    border: 2px solid #555;
   }
   
+  .control-row {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .control-row:last-child {
+    border-bottom: none;
+  }
+  
+  .control-action {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+  }
+  
+  .control-key {
+    background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  
+  /* Enhanced mobile buttons */
+  .pause-buttons {
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  
+  .pause-button {
+    padding: 16px 20px;
+    font-size: 18px;
+    font-weight: 800;
+    border-radius: 12px;
+    letter-spacing: 1.5px;
+    transition: all 0.3s ease;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  
+  .pause-button-resume {
+    background: linear-gradient(145deg, #22c55e, #16a34a);
+    box-shadow: 0 6px 0 #047857, 0 8px 16px rgba(0, 0, 0, 0.4);
+  }
+  
+  .pause-button-resume:active {
+    transform: translateY(3px);
+    box-shadow: 0 3px 0 #047857, 0 5px 10px rgba(0, 0, 0, 0.4);
+  }
+  
+  .pause-button-quit {
+    background: linear-gradient(145deg, #ef4444, #dc2626);
+    box-shadow: 0 6px 0 #991b1b, 0 8px 16px rgba(0, 0, 0, 0.4);
+  }
+  
+  .pause-button-quit:active {
+    transform: translateY(3px);
+    box-shadow: 0 3px 0 #991b1b, 0 5px 10px rgba(0, 0, 0, 0.4);
+  }
+  
+  /* Mobile instructions */
+  .pause-instructions {
+    font-size: 16px;
+    padding: 16px;
+    background: rgba(78, 205, 196, 0.1);
+    border-radius: 12px;
+    border: 2px solid rgba(78, 205, 196, 0.3);
+    text-align: center;
+    color: #ccc;
+  }
+  
+  .pause-key-hint {
+    background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0 4px;
+    font-weight: 700;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  
+  /* Spellbook mobile adjustments */
   .spellbook-modal {
     width: min(480px, 95vw);
     padding: 20px;
@@ -693,6 +959,157 @@
   }
 }
 
+/* Extra small mobile devices */
+@media (max-width: 480px) {
+  .pause-modal {
+    width: min(360px, 95vw);
+    margin: 5px;
+  }
+  
+  /* Thinner scrollbar for small screens */
+  .pause-modal::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .pause-modal::-webkit-scrollbar-track {
+    margin: 6px 0;
+  }
+  
+  .pause-modal::-webkit-scrollbar-thumb {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .pause-title {
+    font-size: 20px;
+    letter-spacing: 1px;
+  }
+  
+  .pause-content {
+    padding: 16px;
+  }
+  
+  .pause-section {
+    margin-bottom: 20px;
+  }
+  
+  .pause-section-title {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  
+  .pause-control-panel {
+    padding: 12px;
+  }
+  
+  .sensitivity-control {
+    gap: 12px;
+  }
+  
+  .sensitivity-slider {
+    min-width: 150px;
+    height: 10px;
+  }
+  
+  .sensitivity-slider::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+  }
+  
+  .sensitivity-value {
+    padding: 6px 10px;
+    font-size: 14px;
+    min-width: 50px;
+  }
+  
+  .controls-grid {
+    padding: 12px;
+  }
+  
+  .control-action {
+    font-size: 14px;
+  }
+  
+  .control-key {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  
+  .pause-button {
+    padding: 14px 16px;
+    font-size: 16px;
+  }
+  
+  .pause-instructions {
+    font-size: 14px;
+    padding: 12px;
+  }
+  
+  .pause-key-hint {
+    padding: 3px 6px;
+    font-size: 12px;
+  }
+}
+
+/* Touch-friendly interactions */
+@media (hover: none) and (pointer: coarse) {
+  .pause-button,
+  .sensitivity-slider {
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  .pause-button:active {
+    transform: translateY(3px) scale(0.98);
+  }
+  
+  .sensitivity-slider::-webkit-slider-thumb:active {
+    transform: scale(1.2);
+  }
+  
+  /* Always show scrollbar on touch devices for better UX */
+  .pause-modal::-webkit-scrollbar,
+  .clan-options::-webkit-scrollbar,
+  .game-mode-overlay::-webkit-scrollbar {
+    opacity: 0.6 !important;
+  }
+  
+  .pause-modal::-webkit-scrollbar-thumb,
+  .clan-options::-webkit-scrollbar-thumb,
+  .game-mode-overlay::-webkit-scrollbar-thumb {
+    opacity: 0.9 !important;
+  }
+  
+  /* Scroll indicator for touch devices */
+  .pause-modal::before,
+  .clan-options::before,
+  .game-mode-overlay::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 3px;
+    height: 100%;
+    background: linear-gradient(180deg, 
+      rgba(78, 205, 196, 0.3) 0%, 
+      rgba(78, 205, 196, 0.6) 50%, 
+      rgba(78, 205, 196, 0.3) 100%);
+    border-radius: 0 16px 16px 0;
+    opacity: 0;
+    animation: scrollHint 3s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 1;
+  }
+  
+  /* Clan options needs relative positioning for the scroll indicator */
+  .clan-options {
+    position: relative;
+  }
+  
+  @keyframes scrollHint {
+    0%, 100% { opacity: 0; }
+    50% { opacity: 0.8; }
+  }
+}
+
 /* Game Mode Selection Styles */
 .game-mode-overlay {
   position: fixed;
@@ -708,6 +1125,50 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 20px 0;
+  /* Custom scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(78, 205, 196, 0.6) rgba(0, 0, 0, 0.2);
+  scroll-behavior: smooth;
+}
+
+/* Main app scrollbar styling */
+.game-mode-overlay::-webkit-scrollbar {
+  width: 10px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.game-mode-overlay:hover::-webkit-scrollbar,
+.game-mode-overlay:active::-webkit-scrollbar {
+  opacity: 1;
+}
+
+.game-mode-overlay::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  margin: 10px 0;
+}
+
+.game-mode-overlay::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4ecdc4, #3ab5ae);
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s ease;
+  opacity: 0.8;
+}
+
+.game-mode-overlay::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #5ed4cd, #4ecdc4);
+  border-color: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+  box-shadow: 0 6px 12px rgba(78, 205, 196, 0.4);
+}
+
+.game-mode-overlay::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #3ab5ae, #2a9d93);
+  transform: scale(0.95);
+  opacity: 1;
 }
 
 .game-mode-container {
@@ -920,6 +1381,51 @@
   padding: 25px;
   max-height: 60vh;
   overflow-y: auto;
+  /* Custom scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(78, 205, 196, 0.6) rgba(0, 0, 0, 0.2);
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Clan selection scrollbar styling */
+.clan-options::-webkit-scrollbar {
+  width: 8px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.clan-options:hover::-webkit-scrollbar,
+.clan-options:active::-webkit-scrollbar {
+  opacity: 1;
+}
+
+.clan-options::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  margin: 8px 0;
+}
+
+.clan-options::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4ecdc4, #3ab5ae);
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+  opacity: 0.8;
+}
+
+.clan-options::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #5ed4cd, #4ecdc4);
+  border-color: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+  box-shadow: 0 4px 8px rgba(78, 205, 196, 0.4);
+}
+
+.clan-options::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #3ab5ae, #2a9d93);
+  transform: scale(0.95);
+  opacity: 1;
 }
 
 .clan-option {
@@ -1058,6 +1564,22 @@
     grid-template-columns: 1fr;
     gap: 12px;
     padding: 20px;
+  }
+  
+  /* Thinner scrollbar for mobile clan selection and app overlay */
+  .clan-options::-webkit-scrollbar,
+  .game-mode-overlay::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .clan-options::-webkit-scrollbar-track,
+  .game-mode-overlay::-webkit-scrollbar-track {
+    margin: 6px 0;
+  }
+  
+  .clan-options::-webkit-scrollbar-thumb,
+  .game-mode-overlay::-webkit-scrollbar-thumb {
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
   
   .clan-selection-actions {

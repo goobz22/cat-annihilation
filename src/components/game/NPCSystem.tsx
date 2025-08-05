@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Text } from '@react-three/drei';
@@ -6,6 +6,7 @@ import { useGameStore } from '../../lib/store/gameStore';
 import { recordNPCInteraction } from './NPCInteractionTracker';
 import CustomizableCatMesh, { CatCustomization } from './CatCharacter/CustomizableCatMesh';
 import { NPC_CUSTOMIZATIONS, generateRandomClanCat } from '../../config/clanCustomizations';
+import { useCatCustomization } from '../../contexts/CatCustomizationContext';
 
 /**
  * Error boundary for NPC components - prevents NPCs from unmounting on errors
@@ -217,19 +218,32 @@ const NPC = ({ id, name, position, role, color, questGiver, availableQuests = []
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [isNearby, handleInteraction]);
 
-  // Get customization for this NPC
-  const npcCustomization = customization || 
-    (clan && id ? NPC_CUSTOMIZATIONS[`${clan.toLowerCase()}-${role}`] : null) ||
-    (clan ? generateRandomClanCat(clan) : {
-      primaryColor: color,
-      eyeColor: '#4CAF50',
-      noseColor: '#FF69B4',
-      pattern: 'solid',
-      earSize: 'normal',
-      tailLength: 'normal',
-      furLength: 'medium',
-      bodyType: 'normal'
-    } as CatCustomization);
+  // Get or generate customization for this NPC (memoized to prevent regeneration)
+  const { npcCustomizations, setNpcCustomization } = useCatCustomization();
+  
+  const npcCustomization = useMemo(() => {
+    // Check if we already have a customization for this NPC
+    const existing = npcCustomizations.get(id);
+    if (existing) return existing;
+    
+    // Generate new customization
+    const newCustomization = customization || 
+      (clan && id ? NPC_CUSTOMIZATIONS[`${clan.toLowerCase()}-${role}`] : null) ||
+      (clan ? generateRandomClanCat(clan) : {
+        primaryColor: color,
+        eyeColor: '#4CAF50',
+        noseColor: '#FF69B4',
+        pattern: 'solid',
+        earSize: 'normal',
+        tailLength: 'normal',
+        furLength: 'medium',
+        bodyType: 'normal'
+      } as CatCustomization);
+    
+    // Store it for future use
+    setNpcCustomization(id, newCustomization);
+    return newCustomization;
+  }, [id, clan, role, color, customization, npcCustomizations, setNpcCustomization]);
 
   return (
     <group position={position}>

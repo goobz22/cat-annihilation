@@ -9,6 +9,51 @@
   pointer-events: auto;
 }
 
+/* Mobile Pause Button - Upper Left Corner */
+.mobile-pause-button {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(145deg, #4ecdc4, #3ab5ae);
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 
+    0 6px 16px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(78, 205, 196, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.mobile-pause-button:hover {
+  background: linear-gradient(145deg, #5ed4cd, #4ecdc4);
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    0 0 0 2px rgba(78, 205, 196, 0.5),
+    inset 0 2px 0 rgba(255, 255, 255, 0.3);
+}
+
+.mobile-pause-button:active {
+  background: linear-gradient(145deg, #3ab5ae, #2a9d93);
+  transform: translateY(0) scale(0.95);
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(78, 205, 196, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
 @media (max-width: 768px) {
   .mobile-controls {
     display: flex;
@@ -236,7 +281,7 @@
   .cat-stats-container {
     position: fixed !important;
     left: 8px !important;
-    top: 60px !important;
+    top: 80px !important; /* Space for pause button (8px + 56px + 16px spacing) */
     bottom: 200px !important; /* Space from bottom controls */
     transform: none !important;
     
@@ -436,15 +481,15 @@
     position: fixed !important;
     right: 8px !important;
     top: 60px !important;
-    bottom: 200px !important; /* Space from bottom controls */
+    bottom: auto !important; /* Remove bottom constraint to allow auto-sizing */
     left: auto !important;
     transform: none !important;
     
     /* Vertical layout */
     flex-direction: column !important;
     width: 70px !important;
-    height: auto !important;
-    max-height: calc(100vh - 260px) !important;
+    height: auto !important; /* Auto height to fit content */
+    max-height: calc(100vh - 180px) !important; /* Prevent overflow */
     
     /* Styling */
     background: rgba(0, 0, 0, 0.85) !important;
@@ -452,8 +497,7 @@
     border-radius: 12px !important;
     padding: 8px !important;
     gap: 6px !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
+    overflow: visible !important; /* No scrolling needed with 5 slots */
     
     /* Ensure it stays visible */
     z-index: 15 !important;
@@ -462,6 +506,26 @@
   /* Hide active item display on mobile - not enough space */
   .hotbar-active-item {
     display: none !important;
+  }
+  
+  /* Mobile hotbar slot sizing */
+  .hotbar-slot {
+    width: 54px !important;
+    height: 54px !important;
+    border-radius: 6px !important;
+    font-size: 14px !important;
+  }
+  
+  .hotbar-slot-icon {
+    font-size: 18px !important;
+  }
+  
+  .hotbar-slot-key {
+    font-size: 9px !important;
+  }
+  
+  .hotbar-slot-number {
+    font-size: 12px !important;
   }
   
   /* Wave display adjustments for mobile */
@@ -528,8 +592,10 @@
     right: 6px !important;
     gap: 5px !important;
     padding: 6px !important;
-    bottom: 180px !important; /* Space from bottom controls on small screens */
-    max-height: calc(100vh - 240px) !important;
+    /* Auto-size to fit 5 slots on small screens */
+    bottom: auto !important;
+    height: auto !important;
+    max-height: calc(100vh - 160px) !important;
   }
   
   .cat-stats-container {
@@ -537,9 +603,9 @@
     min-width: 75px !important;
     max-width: 75px !important;
     left: 6px !important;
-    top: 50px !important;
+    top: 70px !important; /* Space for smaller pause button (10px + 50px + 10px spacing) */
     bottom: 180px !important; /* Space from bottom controls on small screens */
-    max-height: calc(100vh - 240px) !important;
+    max-height: calc(100vh - 250px) !important;
     overflow-x: hidden !important;
   }
   
@@ -574,5 +640,32 @@
   
   .mobile-weapon-max {
     font-size: 6px !important;
+  }
+  
+  /* Smaller hotbar slots for extra small screens */
+  .hotbar-slot {
+    width: 50px !important;
+    height: 50px !important;
+  }
+  
+  .hotbar-slot-icon {
+    font-size: 16px !important;
+  }
+  
+  .hotbar-slot-key {
+    font-size: 8px !important;
+  }
+  
+  .hotbar-slot-number {
+    font-size: 11px !important;
+  }
+  
+  /* Smaller pause button for extra small screens */
+  .mobile-pause-button {
+    width: 50px !important;
+    height: 50px !important;
+    top: 10px !important;
+    left: 10px !important;
+    font-size: 20px !important;
   }
 }

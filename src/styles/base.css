@@ -11,6 +11,53 @@ html, body {
   overflow: hidden;
   background: #000;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  /* Global scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(78, 205, 196, 0.6) rgba(0, 0, 0, 0.2);
+}
+
+/* Global scrollbar styles for webkit browsers */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+*:hover::-webkit-scrollbar {
+  opacity: 1;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  margin: 10px 0;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4ecdc4, #3ab5ae);
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s ease;
+  opacity: 0.8;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #5ed4cd, #4ecdc4);
+  border-color: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+  box-shadow: 0 6px 12px rgba(78, 205, 196, 0.4);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #3ab5ae, #2a9d93);
+  transform: scale(0.95);
+  opacity: 1;
+}
+
+::-webkit-scrollbar-corner {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 #root {
@@ -147,6 +194,34 @@ html, body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* Touch device scrollbar enhancements */
+@media (hover: none) and (pointer: coarse) {
+  /* Always show scrollbar on touch devices for better UX */
+  ::-webkit-scrollbar {
+    opacity: 0.6 !important;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    opacity: 0.9 !important;
+  }
+}
+
+/* Mobile responsive scrollbar adjustments */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    margin: 8px 0;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
 }
 
 /* Responsive utilities */

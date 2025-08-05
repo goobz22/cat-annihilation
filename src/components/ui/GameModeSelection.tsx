@@ -5,10 +5,12 @@ import { getPlayerStarterCustomization } from '../../config/clanCustomizations';
 import { CatCustomization } from '../game/CatCharacter/CustomizableCatMesh';
 import CustomizableCatMesh from '../game/CatCharacter/CustomizableCatMesh';
 import { Canvas } from '@react-three/fiber';
+import { useCatCustomization } from '../../contexts/CatCustomizationContext';
 
 const GameModeSelection = () => {
   const setGameMode = useGameStore(state => state.setGameMode);
   const setPlayerClan = useGameStore(state => state.setPlayerClan);
+  const { setPlayerCustomization } = useCatCustomization();
   const [selectedClan, setSelectedClan] = useState<'MistClan' | 'StormClan' | 'EmberClan' | 'FrostClan' | null>(null);
   const [showClanSelection, setShowClanSelection] = useState(false);
   const [showCustomization, setShowCustomization] = useState(false);
@@ -61,10 +63,12 @@ const GameModeSelection = () => {
       player: {
         ...state.player,
         health: fullHealth,
-        maxHealth: fullHealth,
-        customization: catCustomization
+        maxHealth: fullHealth
       }
     }));
+    
+    // Set customization in context
+    setPlayerCustomization(catCustomization);
     
     gameStore.setCurrentWave(1);
     gameStore.setWaveTransition(false);
@@ -104,12 +108,11 @@ const GameModeSelection = () => {
           ...state.storyMode,
           isActive: true,
           playerClan: selectedClan
-        },
-        player: {
-          ...state.player,
-          customization: catCustomization
         }
       }));
+      
+      // Set customization in context
+      setPlayerCustomization(catCustomization);
       
       setGameModeSelected(true);
       console.log(`🏛️ Joined ${selectedClan}! Welcome to your new clan.`);

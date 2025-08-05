@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import GameProvider from './components/ui/GameProvider';
 import GameModeSelection from './components/ui/GameModeSelection';
 import { useGameStore } from './lib/store/gameStore';
+import { CatCustomizationProvider } from './contexts/CatCustomizationContext';
 
 // Lazy load ALL game components so they don't load until needed
 const BasicScene = lazy(() => import('./components/game/BasicScene'));
@@ -14,6 +15,7 @@ const WeaponSkills = lazy(() => import('./components/ui/WeaponSkills'));
 const CatStats = lazy(() => import('./components/ui/CatStats'));
 const PauseMenu = lazy(() => import('./components/ui/PauseMenu'));
 const MobileControls = lazy(() => import('./components/ui/MobileControls'));
+const MobilePauseButton = lazy(() => import('./components/ui/MobilePauseButton'));
 const QuestBook = lazy(() => import('./components/ui/QuestBook'));
 const QuestTracker = lazy(() => import('./components/ui/QuestTracker'));
 const QuestObjectiveOverlay = lazy(() => import('./components/ui/QuestObjectiveOverlay'));
@@ -21,9 +23,11 @@ const Dialog = lazy(() => import('./components/ui/Dialog'));
 
 function App() {
   return (
-    <GameProvider>
-      <AppContent />
-    </GameProvider>
+    <CatCustomizationProvider>
+      <GameProvider>
+        <AppContent />
+      </GameProvider>
+    </CatCustomizationProvider>
   );
 }
 
@@ -54,6 +58,7 @@ function AppContent() {
           <GameOverScreen />
           <PauseMenu />
           <MobileControls />
+          <MobilePauseButton />
           <Dialog />
           
           {/* Background Systems */}

@@ -15,6 +15,19 @@ const PauseMenu = () => {
     return saved ? parseFloat(saved) : 1.0;
   });
 
+  // Track if we're on mobile
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
@@ -130,22 +143,55 @@ const PauseMenu = () => {
           <div className="pause-section">
             <h2 className="pause-section-title">CONTROLS</h2>
             <div className="controls-grid">
-              <div className="control-row">
-                <span className="control-action">Move</span>
-                <span className="control-key">W A S D</span>
-              </div>
-              <div className="control-row">
-                <span className="control-action">Run</span>
-                <span className="control-key">SHIFT</span>
-              </div>
-              <div className="control-row">
-                <span className="control-action">Attack/Cast</span>
-                <span className="control-key">SPACE</span>
-              </div>
-              <div className="control-row">
-                <span className="control-action">Quick Slots</span>
-                <span className="control-key">1-7</span>
-              </div>
+              {isMobile ? (
+                // Mobile controls
+                <>
+                  <div className="control-row">
+                    <span className="control-action">Move</span>
+                    <span className="control-key">Virtual Stick</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Run</span>
+                    <span className="control-key">🏃 Button</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Attack/Cast</span>
+                    <span className="control-key">⚔️ Button</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Quick Slots</span>
+                    <span className="control-key">1-5</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Pause</span>
+                    <span className="control-key">⏸️ Button</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Menu</span>
+                    <span className="control-key">📖 Button</span>
+                  </div>
+                </>
+              ) : (
+                // Desktop controls
+                <>
+                  <div className="control-row">
+                    <span className="control-action">Move</span>
+                    <span className="control-key">W A S D</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Run</span>
+                    <span className="control-key">SHIFT</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Attack/Cast</span>
+                    <span className="control-key">SPACE</span>
+                  </div>
+                  <div className="control-row">
+                    <span className="control-action">Quick Slots</span>
+                    <span className="control-key">1-9</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -167,7 +213,11 @@ const PauseMenu = () => {
 
           {/* Instructions */}
           <div className="pause-instructions">
-            Press <span className="pause-key-hint">ESC</span> or <span className="pause-key-hint">P</span> to resume
+            {isMobile ? (
+              <>Tap <span className="pause-key-hint">⏸️ Pause</span> button (top-left) to pause</>
+            ) : (
+              <>Press <span className="pause-key-hint">ESC</span> or <span className="pause-key-hint">P</span> to resume</>
+            )}
           </div>
         </div>
       </div>

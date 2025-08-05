@@ -11,17 +11,20 @@ const Dialog = () => {
     setMenuPaused(dialog.isOpen);
   }, [dialog.isOpen, setMenuPaused]);
 
-  // Listen for escape key to close dialog
+  // Listen for Enter key to close dialog
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && dialog.isOpen) {
-        closeDialog();
+      if (e.key === 'Enter' && dialog.isOpen) {
+        // If there are no options, close dialog on Enter
+        if (!dialog.options || dialog.options.length === 0) {
+          closeDialog();
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [dialog.isOpen, closeDialog]);
+  }, [dialog.isOpen, dialog.options, closeDialog]);
 
   if (!dialog.isOpen) return null;
 
@@ -76,7 +79,7 @@ const Dialog = () => {
               className="dialog-continue-btn"
               onClick={closeDialog}
             >
-              Continue (Press ESC)
+              Continue (Press ENTER)
             </button>
           )}
         </div>

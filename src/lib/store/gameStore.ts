@@ -57,27 +57,6 @@ interface IPlayerState {
   maxHealth: number;
   inventory: (IInventoryItem | null)[];
   activeSlot: number;
-  customization?: {
-    primaryColor: string;
-    secondaryColor?: string;
-    eyeColor: string;
-    noseColor: string;
-    pawColor?: string;
-    pattern?: 'solid' | 'tabby' | 'calico' | 'tuxedo' | 'siamese' | 'spots';
-    patternColor?: string;
-    earSize?: 'small' | 'normal' | 'large';
-    tailLength?: 'short' | 'normal' | 'long';
-    furLength?: 'short' | 'medium' | 'long';
-    bodyType?: 'slim' | 'normal' | 'chubby';
-    collar?: {
-      color: string;
-      hasTag?: boolean;
-    };
-    scars?: Array<{
-      position: 'eye' | 'ear' | 'body';
-      side?: 'left' | 'right';
-    }>;
-  };
 }
 
 

@@ -4,6 +4,7 @@ import { useGameStore } from '../../../lib/store/gameStore';
 import { GAME_CONFIG } from '../../../config/gameConfig';
 import CatMesh from './CatMesh';
 import CustomizableCatMesh, { CatCustomization } from './CustomizableCatMesh';
+import { useCatCustomization } from '../../../contexts/CatCustomizationContext';
 import Equipment from './Equipment';
 
 /**
@@ -329,8 +330,8 @@ const Controls = () => {
  * Main cat character component - MOVEMENT ONLY
  */
 const CatCharacter = () => {
-  // Get player customization from store
-  const playerCustomization = useGameStore(state => state.player.customization) as CatCustomization | undefined;
+  // Get player customization from context instead of store
+  const { playerCustomization } = useCatCustomization();
   const player = useGameStore((state) => state.player);
   const position = player.position;
   const inventory = useGameStore((state) => state.player.inventory);
