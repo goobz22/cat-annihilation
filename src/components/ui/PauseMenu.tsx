@@ -44,7 +44,22 @@ const PauseMenu = () => {
   };
 
   const handleQuitGame = () => {
-    window.location.reload();
+    // Reset game mode to show the selection screen
+    useGameStore.setState({ 
+      gameMode: null,
+      storyMode: {
+        ...useGameStore.getState().storyMode,
+        isActive: false
+      }
+    });
+    
+    // Reset game state
+    const gameStore = useGameStore.getState();
+    gameStore.setGameOver(false);
+    gameStore.setPaused(false);
+    gameStore.setCurrentWave(1);
+    gameStore.setWaveTransition(false);
+    useGameStore.setState({ enemiesKilled: 0 });
   };
 
   if (!isPaused || isMenuPaused) return null;

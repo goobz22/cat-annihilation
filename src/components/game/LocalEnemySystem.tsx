@@ -1,9 +1,71 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../../lib/store/gameStore';
 import { globalCollisionData, globalWeaponXP } from './GlobalCollisionSystem';
 import { updateWaveState } from './WaveState';
+
+/**
+ * Error boundary for enemy components - prevents enemies from unmounting on errors
+ */
+class EnemyErrorBoundary extends React.Component<
+  { children: React.ReactNode; enemyId?: string },
+  { hasError: boolean; errorCount: number }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode; enemyId?: string }) {
+    super(props);
+    this.state = { hasError: false, errorCount: 0 };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    const enemyId = this.props.enemyId || 'Enemy';
+    console.error(`[ENEMY ERROR BOUNDARY] ${enemyId} error:`, error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Auto-retry after 2 seconds if error count is low
+    if (this.state.errorCount < 2) {
+      console.log(`[ENEMY ERROR BOUNDARY] Auto-retry attempt ${this.state.errorCount + 1} in 2 seconds...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log(`[ENEMY ERROR BOUNDARY] Attempting to recover ${enemyId}...`);
+        this.setState({ hasError: false });
+      }, 2000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const enemyId = this.props.enemyId || 'Enemy';
+      console.log(`[ENEMY ERROR BOUNDARY] Rendering fallback for ${enemyId}`);
+      
+      // Render a simple fallback enemy
+      return (
+        <group position={[0, 0, 0]}>
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[0.8, 0.8, 0.8]} />
+            <meshStandardMaterial color="#8B4513" />
+          </mesh>
+        </group>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 /**
  * !!!!!!! CRITICAL WARNING !!!!!!!
@@ -13,6 +75,8 @@ import { updateWaveState } from './WaveState';
  * 
  * Just like the projectile system, this uses ONLY local React state and NEVER 
  * touches the global game store except for reading initial values.
+ * 
+ * This system is ONLY for SURVIVAL MODE.
  * 
  * !!!!!!! CRITICAL WARNING !!!!!!!
  */
@@ -161,7 +225,6 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
         
         // Define shield as a physical barrier in front of player
         const shieldDistance = 1.2; // How far shield extends from player
-        const shieldWidth = 1.5; // Shield width (1.5x larger)
         const shieldCenterX = playerPosition.x + Math.sin(playerRotation) * shieldDistance;
         const shieldCenterZ = playerPosition.z + Math.cos(playerRotation) * shieldDistance;
         
@@ -170,12 +233,6 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
         const newZ = positionRef.current.z + moveZ;
         
         // Check if enemy would intersect with shield barrier
-        // Create shield as a rectangle in front of player
-        const shieldLeftX = shieldCenterX + Math.cos(playerRotation) * shieldWidth/2;
-        const shieldLeftZ = shieldCenterZ - Math.sin(playerRotation) * shieldWidth/2;
-        const shieldRightX = shieldCenterX - Math.cos(playerRotation) * shieldWidth/2;
-        const shieldRightZ = shieldCenterZ + Math.sin(playerRotation) * shieldWidth/2;
-        
         // Simple distance-based collision with shield center
         const distanceToShieldCenter = Math.sqrt(
           (newX - shieldCenterX) * (newX - shieldCenterX) + 
@@ -432,6 +489,11 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
 };
 
 const LocalEnemySystem = () => {
+  // Check if we should render - must be before any hooks
+  const gameMode = useGameStore(state => state.gameMode);
+  const storyModeActive = useGameStore(state => state.storyMode.isActive);
+  
+  // Initialize all hooks first (React rules)
   const [localEnemies, setLocalEnemies] = useState<LocalEnemy[]>([]);
   const [currentWave, setCurrentWave] = useState(1);
   const [isWaveTransition, setIsWaveTransition] = useState(false);
@@ -580,8 +642,12 @@ const LocalEnemySystem = () => {
     }
   };
 
-  // Wave progression logic
+  // Wave progression logic - MUST be called before early return (React Rules of Hooks)
   useFrame(() => {
+    // Only run wave logic in survival mode
+    if (gameMode !== 'survival' || storyModeActive) {
+      return;
+    }
     const currentTime = Date.now();
     
     // Don't do anything during wave transitions
@@ -694,17 +760,24 @@ const LocalEnemySystem = () => {
     }
   });
 
+  // Only render enemy system in survival mode
+  if (gameMode !== 'survival' || storyModeActive) {
+    return null;
+  }
+
   return (
     <>
-      {/* Render dog enemies */}
+      {/* Render dog enemies with error boundaries */}
       {localEnemies.map(enemy => (
-        <LocalDogEnemy
-          key={enemy.id}
-          enemy={enemy}
-          onDamage={damageEnemy}
-          onKill={killEnemy}
-          allEnemies={localEnemies}
-        />
+        <EnemyErrorBoundary key={`boundary-${enemy.id}`} enemyId={enemy.id}>
+          <LocalDogEnemy
+            key={enemy.id}
+            enemy={enemy}
+            onDamage={damageEnemy}
+            onKill={killEnemy}
+            allEnemies={localEnemies}
+          />
+        </EnemyErrorBoundary>
       ))}
     </>
   );

@@ -1,7 +1,67 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGameStore } from '../../lib/store/gameStore';
 import { globalCollisionData } from './GlobalCollisionSystem';
+
+/**
+ * Error boundary for LocalProjectileSystem - prevents projectile system crashes
+ */
+class ProjectileErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorCount: number }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorCount: 0 };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[PROJECTILE ERROR BOUNDARY] Projectile system error:', error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Auto-retry for projectile system
+    if (this.state.errorCount < 3) {
+      console.log(`[PROJECTILE ERROR BOUNDARY] Auto-retry attempt ${this.state.errorCount + 1} in 2 seconds...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log('[PROJECTILE ERROR BOUNDARY] Attempting to recover projectile system...');
+        this.setState({ hasError: false });
+      }, 2000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      console.log('[PROJECTILE ERROR BOUNDARY] Rendering fallback - projectiles disabled');
+      
+      // Return invisible placeholder - projectiles will be disabled but game continues
+      return (
+        <group>
+          <mesh position={[0, 0, 0]} visible={false}>
+            <boxGeometry args={[0.01, 0.01, 0.01]} />
+            <meshBasicMaterial />
+          </mesh>
+        </group>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 /**
  * !!!!!!! CRITICAL WARNING !!!!!!!
@@ -25,6 +85,7 @@ interface LocalProjectile {
   type: string;
   color: string;
   speed: number;
+  createdAt: number; // Track when projectile was created
 }
 
 const LocalProjectileRenderer = ({ projectile }: { projectile: LocalProjectile }) => {
@@ -83,6 +144,41 @@ const LocalProjectileSystem = () => {
   const activeSlot = useGameStore((state) => state.player.activeSlot);
   const player = useGameStore((state) => state.player);
 
+  // Cleanup projectiles that are too far from player (performance optimization)
+  useFrame(() => {
+    const playerPos = useGameStore.getState().player.position;
+    setLocalProjectiles(prev => prev.filter(projectile => {
+      const dx = projectile.position.x - playerPos.x;
+      const dz = projectile.position.z - playerPos.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      
+      // Remove projectiles that are too far away (15 units - more aggressive cleanup)
+      if (distance > 15) {
+        console.log(`🗑️ Removing distant projectile ${projectile.id} at distance ${distance.toFixed(1)}`);
+        // Remove from global collision data too
+        const index = globalCollisionData.projectiles.findIndex(p => p.id === projectile.id);
+        if (index !== -1) {
+          globalCollisionData.projectiles.splice(index, 1);
+        }
+        return false;
+      }
+      
+      // Remove projectiles that are too old (emergency cleanup - 6 seconds max)
+      const age = Date.now() - projectile.createdAt;
+      if (age > 6000) {
+        console.log(`🗑️ Removing old projectile ${projectile.id} (age: ${(age/1000).toFixed(1)}s)`);
+        // Remove from global collision data too
+        const index = globalCollisionData.projectiles.findIndex(p => p.id === projectile.id);
+        if (index !== -1) {
+          globalCollisionData.projectiles.splice(index, 1);
+        }
+        return false;
+      }
+      
+      return true;
+    }));
+  });
+
   const shootProjectile = () => {
     const activeItem = inventory[activeSlot];
     if (!activeItem) return;
@@ -104,7 +200,8 @@ const LocalProjectileSystem = () => {
         rotation: rotation,
         type: 'spell',
         color: activeItem.color || '#00ffff',
-        speed: 15
+        speed: 15,
+        createdAt: Date.now()
       };
 
       setLocalProjectiles(prev => [...prev, newProjectile]);
@@ -126,7 +223,7 @@ const LocalProjectileSystem = () => {
         }
       });
 
-      // Remove projectile after 10 seconds
+      // Remove projectile after 5 seconds (reduced from 10 for better performance)
       setTimeout(() => {
         setLocalProjectiles(prev => prev.filter(p => p.id !== newProjectile.id));
         // Remove from global collision data
@@ -134,7 +231,7 @@ const LocalProjectileSystem = () => {
         if (index !== -1) {
           globalCollisionData.projectiles.splice(index, 1);
         }
-      }, 10000);
+      }, 5000);
     } else if (activeItem.id === 'bow') {
       const newProjectile: LocalProjectile = {
         id: `local-${Date.now()}-${Math.random()}`,
@@ -146,7 +243,8 @@ const LocalProjectileSystem = () => {
         rotation: rotation,
         type: 'arrow',
         color: '#8B4513',
-        speed: 25
+        speed: 25,
+        createdAt: Date.now()
       };
 
       setLocalProjectiles(prev => [...prev, newProjectile]);
@@ -168,7 +266,7 @@ const LocalProjectileSystem = () => {
         }
       });
 
-      // Remove projectile after 10 seconds
+      // Remove projectile after 5 seconds (reduced from 10 for better performance)
       setTimeout(() => {
         setLocalProjectiles(prev => prev.filter(p => p.id !== newProjectile.id));
         // Remove from global collision data
@@ -176,7 +274,7 @@ const LocalProjectileSystem = () => {
         if (index !== -1) {
           globalCollisionData.projectiles.splice(index, 1);
         }
-      }, 10000);
+      }, 5000);
     } else if (activeItem.id === 'sword') {
       // Sword doesn't shoot projectiles - just play attack animation
       console.log('Sword attack - no projectile');
@@ -228,4 +326,13 @@ const LocalProjectileSystem = () => {
   );
 };
 
-export default LocalProjectileSystem;
+// Wrapped LocalProjectileSystem with error boundary
+const SafeLocalProjectileSystem = () => {
+  return (
+    <ProjectileErrorBoundary>
+      <LocalProjectileSystem />
+    </ProjectileErrorBoundary>
+  );
+};
+
+export default SafeLocalProjectileSystem;

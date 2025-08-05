@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useGameStore } from '../../lib/store/gameStore';
+import Dialog from './Dialog';
 
 /**
  * Day/night cycle display
@@ -186,6 +187,7 @@ const GameInterface = ({ children }: { children: React.ReactNode }) => {
           <CurrencyDisplay />
         </div>
       </div>
+      <Dialog />
     </>
   );
 };

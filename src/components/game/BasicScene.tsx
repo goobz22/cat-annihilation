@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Box, PerspectiveCamera } from '@react-three/drei';
 import ForestEnvironment from './ForestEnvironment';
@@ -7,8 +7,84 @@ import LocalProjectileSystem from './LocalProjectileSystem';
 import LocalEnemySystem from './LocalEnemySystem';
 import GlobalCollisionSystem from './GlobalCollisionSystem';
 import WaveTransition from '../ui/WaveTransition';
+import NPCSystem from './NPCSystem';
+import StoryEncounterSystem from './StoryEncounterSystem';
 import { waveState } from './WaveState';
 import { useGameStore } from '../../lib/store/gameStore';
+
+/**
+ * Scene-level error boundary to prevent complete scene crashes
+ */
+class SceneErrorBoundary extends React.Component<
+  { children: React.ReactNode; sceneName: string },
+  { hasError: boolean; errorCount: number }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode; sceneName: string }) {
+    super(props);
+    this.state = { hasError: false, errorCount: 0 };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(`[SCENE ERROR BOUNDARY] ${this.props.sceneName} scene error:`, error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Auto-retry after 5 seconds if error count is low
+    if (this.state.errorCount < 2) {
+      console.log(`[SCENE ERROR BOUNDARY] Auto-retry attempt ${this.state.errorCount + 1} in 5 seconds...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log(`[SCENE ERROR BOUNDARY] Attempting to recover ${this.props.sceneName} scene...`);
+        this.setState({ hasError: false });
+      }, 5000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      console.log(`[SCENE ERROR BOUNDARY] Rendering fallback for ${this.props.sceneName} scene`);
+      
+      // Render minimal fallback scene
+      return (
+        <Canvas shadows>
+          <color attach="background" args={['#87CEEB']} />
+          <PerspectiveCamera makeDefault position={[0, 12, 15]} fov={75} />
+          <ambientLight intensity={0.5} />
+          <directionalLight position={[10, 10, 5]} intensity={1} />
+          
+          {/* Minimal ground */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]} receiveShadow>
+            <planeGeometry args={[200, 200]} />
+            <meshStandardMaterial color="#7fb069" />
+          </mesh>
+          
+          {/* Basic character placeholder */}
+          <mesh position={[0, 1, 0]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="#ffa500" />
+          </mesh>
+          
+          <fog attach="fog" args={['#87CEEB', 30, 150]} />
+        </Canvas>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 function Player() {
   const [pos, setPos] = useState({ x: 0, z: 0 });
@@ -80,42 +156,10 @@ const CameraFollow = () => {
   return null;
 };
 
-const ProjectileUpdater = () => {
-  const updateProjectiles = useGameStore((state) => state.updateProjectiles);
+// Projectile management is now handled by LocalProjectileSystem
+// These old updaters have been removed to prevent Zustand store issues
 
-  useFrame((_, delta) => {
-    updateProjectiles(delta);
-  });
-
-  return null;
-};
-
-const SimpleProjectileUpdater = () => {
-  const projectiles = useGameStore(state => state.projectiles);
-  const removeProjectile = useGameStore(state => state.removeProjectile);
-  
-  useFrame((_, delta) => {
-    projectiles.forEach(proj => {
-      const speed = proj.type === 'arrow' ? 25 : 15;
-      const newX = proj.position.x + Math.sin(proj.rotation) * speed * delta;
-      const newZ = proj.position.z + Math.cos(proj.rotation) * speed * delta;
-      
-      // Update position directly without triggering store update every frame
-      proj.position.x = newX;
-      proj.position.z = newZ;
-      
-      // Remove projectiles that are too far away
-      const distance = Math.sqrt(newX * newX + newZ * newZ);
-      if (distance > 500) {
-        removeProjectile(proj.id);
-      }
-    });
-  });
-  
-  return null;
-};
-
-export default function BasicScene() {
+const SurvivalScene = () => {
   const [waveTransitionState, setWaveTransitionState] = useState({
     isTransition: false,
     currentWave: 1,
@@ -132,7 +176,7 @@ export default function BasicScene() {
   }, []);
 
   return (
-    <div style={{ width: '100vw', height: '100vh' }}>
+    <>
       {/* Wave Transition UI - outside Canvas so it renders on top */}
       <WaveTransition 
         isVisible={waveTransitionState.isTransition}
@@ -153,12 +197,75 @@ export default function BasicScene() {
         {/* GLOBAL COLLISION SYSTEM */}
         <GlobalCollisionSystem />
         
-        {/* LOCAL ENEMY SYSTEM - NEVER TOUCHES ZUSTAND STORE */}
+        {/* LOCAL ENEMY SYSTEM - SURVIVAL MODE ONLY */}
         <LocalEnemySystem />
         
-        {/* LOCAL PROJECTILE SYSTEM - NEVER TOUCHES ZUSTAND STORE */}
+        {/* LOCAL PROJECTILE SYSTEM */}
         <LocalProjectileSystem />
       </Canvas>
-    </div>
+    </>
   );
+};
+
+const StoryScene = () => {
+  return (
+    <Canvas shadows>
+      <color attach="background" args={['#87CEEB']} />
+      <fog attach="fog" args={['#87CEEB', 30, 150]} />
+      <PerspectiveCamera makeDefault position={[0, 12, 15]} fov={75} />
+      <CameraFollow />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
+      <CatCharacter />
+      <ForestEnvironment />
+      
+      {/* GLOBAL COLLISION SYSTEM */}
+      <GlobalCollisionSystem />
+      
+      {/* LOCAL PROJECTILE SYSTEM - Still needed for story combat */}
+      <LocalProjectileSystem />
+      
+      {/* STORY MODE NPCs - Clan members, quest givers, etc */}
+      <NPCSystem />
+      
+      {/* STORY ENCOUNTERS - Practice targets, story-specific enemies */}
+      <StoryEncounterSystem />
+    </Canvas>
+  );
+};
+
+export default function BasicScene() {
+  const gameMode = useGameStore(state => state.gameMode);
+  const storyModeActive = useGameStore(state => state.storyMode.isActive);
+  
+  console.log('[BASIC SCENE] Rendering with gameMode:', gameMode, 'storyModeActive:', storyModeActive);
+  
+  // Don't render anything if no game mode has been selected yet
+  if (gameMode === 'survival' && !storyModeActive) {
+    // This is survival mode - render survival scene with error boundary
+    console.log('[BASIC SCENE] Rendering survival mode');
+    return (
+      <div style={{ width: '100vw', height: '100vh' }} key="survival-scene">
+        <SceneErrorBoundary sceneName="Survival">
+          <SurvivalScene />
+        </SceneErrorBoundary>
+      </div>
+    );
+  }
+  
+  if (storyModeActive) {
+    // This is story mode - render story scene with error boundary
+    console.log('[BASIC SCENE] Rendering story mode');
+    return (
+      <div style={{ width: '100vw', height: '100vh' }} key="story-scene">
+        <SceneErrorBoundary sceneName="Story">
+          <StoryScene />
+        </SceneErrorBoundary>
+      </div>
+    );
+  }
+
+  // No mode selected yet - don't render anything (game mode selection will show)
+  console.log('[BASIC SCENE] No mode selected, returning null');
+  return null;
 }

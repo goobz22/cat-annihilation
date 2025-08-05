@@ -1,4 +1,58 @@
+import React from 'react';
 import { useFrame } from '@react-three/fiber';
+
+/**
+ * Error boundary for GlobalCollisionSystem - prevents collision system crashes
+ */
+class CollisionErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorCount: number }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorCount: 0 };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[COLLISION ERROR BOUNDARY] Collision system error:', error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Auto-retry for collision system
+    if (this.state.errorCount < 4) {
+      console.log(`[COLLISION ERROR BOUNDARY] Auto-retry attempt ${this.state.errorCount + 1} in 1 second...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log('[COLLISION ERROR BOUNDARY] Attempting to recover collision system...');
+        this.setState({ hasError: false });
+      }, 1000); // Fast retry for critical collision system
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      console.log('[COLLISION ERROR BOUNDARY] Collision system disabled - manual combat only');
+      
+      // Return invisible component - collision detection will be disabled but game continues
+      return null;
+    }
+
+    return this.props.children;
+  }
+}
 
 // Global collision arrays that both systems can access
 export const globalCollisionData = {
@@ -38,6 +92,19 @@ export const globalWeaponXP = {
 
 const GlobalCollisionSystem = () => {
   useFrame(() => {
+    // Clean up any orphaned projectiles that are too far from origin (crash prevention)
+    globalCollisionData.projectiles = globalCollisionData.projectiles.filter(projectile => {
+      const distanceFromOrigin = Math.sqrt(
+        projectile.position.x * projectile.position.x + 
+        projectile.position.z * projectile.position.z
+      );
+      if (distanceFromOrigin > 100) {
+        console.log(`🗑️ Removing far projectile ${projectile.id} at distance ${distanceFromOrigin.toFixed(1)} from origin`);
+        return false;
+      }
+      return true;
+    });
+    
     // Check projectile-enemy collisions
     globalCollisionData.projectiles.forEach(projectile => {
       globalCollisionData.enemies.forEach(enemy => {
@@ -46,7 +113,8 @@ const GlobalCollisionSystem = () => {
         const dy = projectile.position.y - enemy.position.y;
         const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         
-        console.log(`Checking collision: Projectile ${projectile.id} at (${projectile.position.x.toFixed(1)}, ${projectile.position.z.toFixed(1)}) vs Enemy ${enemy.id} at (${enemy.position.x.toFixed(1)}, ${enemy.position.z.toFixed(1)}) - Distance: ${distance.toFixed(2)}`);
+        // Skip collision check if projectile is too far away (performance optimization)
+        if (distance > 15) return; // Skip distant projectiles - they'll be cleaned up anyway
         
         if (distance < 1.5) { // Increased collision radius
           // Collision detected!
@@ -83,4 +151,13 @@ const GlobalCollisionSystem = () => {
   return null;
 };
 
-export default GlobalCollisionSystem;
+// Wrapped GlobalCollisionSystem with error boundary
+const SafeGlobalCollisionSystem = () => {
+  return (
+    <CollisionErrorBoundary>
+      <GlobalCollisionSystem />
+    </CollisionErrorBoundary>
+  );
+};
+
+export default SafeGlobalCollisionSystem;

@@ -1,9 +1,85 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useGameStore } from '../../../lib/store/gameStore';
 import { GAME_CONFIG } from '../../../config/gameConfig';
 import CatMesh from './CatMesh';
+import CustomizableCatMesh, { CatCustomization } from './CustomizableCatMesh';
 import Equipment from './Equipment';
+
+/**
+ * CRITICAL Error boundary for CatCharacter - prevents player from disappearing
+ */
+class CatCharacterErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorCount: number }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorCount: 0 };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[CAT CHARACTER ERROR BOUNDARY] CRITICAL - Player character error:', error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Aggressive auto-retry for critical player component
+    if (this.state.errorCount < 5) {
+      console.log(`[CAT CHARACTER ERROR BOUNDARY] CRITICAL AUTO-RETRY attempt ${this.state.errorCount + 1} in 1 second...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log('[CAT CHARACTER ERROR BOUNDARY] Attempting to recover player character...');
+        this.setState({ hasError: false });
+      }, 1000); // Fast retry for critical component
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      console.log('[CAT CHARACTER ERROR BOUNDARY] Rendering fallback player character');
+      
+      // Render a basic fallback player character that maintains core functionality
+      return (
+        <group position={[0, 0, 0]}>
+          {/* Basic cat body fallback */}
+          <mesh position={[0, 0.5, 0]} castShadow>
+            <boxGeometry args={[1, 0.8, 1.5]} />
+            <meshStandardMaterial color="#ffa500" />
+          </mesh>
+          {/* Cat head */}
+          <mesh position={[0, 1, 0.3]} castShadow>
+            <boxGeometry args={[0.6, 0.6, 0.6]} />
+            <meshStandardMaterial color="#ffa500" />
+          </mesh>
+          {/* Basic eyes */}
+          <mesh position={[-0.15, 1.1, 0.6]}>
+            <sphereGeometry args={[0.05, 8, 8]} />
+            <meshBasicMaterial color="black" />
+          </mesh>
+          <mesh position={[0.15, 1.1, 0.6]}>
+            <sphereGeometry args={[0.05, 8, 8]} />
+            <meshBasicMaterial color="black" />
+          </mesh>
+        </group>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 /**
  * Player controls - simplified version
@@ -123,7 +199,7 @@ const Controls = () => {
         case 0: // Left click for sword attacks only
           performAttack();
           break;
-        case 2: // Right click for shield bash - only if shield is in slot 4 and selected
+        case 2: { // Right click for shield bash - only if shield is in slot 4 and selected
           const state = useGameStore.getState();
           const inventory = state.player.inventory;
           const activeSlot = state.player.activeSlot;
@@ -131,6 +207,7 @@ const Controls = () => {
             performAttack(); // Use same attack system for shield bash
           }
           break;
+        }
       }
     };
 
@@ -252,6 +329,8 @@ const Controls = () => {
  * Main cat character component - MOVEMENT ONLY
  */
 const CatCharacter = () => {
+  // Get player customization from store
+  const playerCustomization = useGameStore(state => state.player.customization) as CatCustomization | undefined;
   const player = useGameStore((state) => state.player);
   const position = player.position;
   const inventory = useGameStore((state) => state.player.inventory);
@@ -265,16 +344,36 @@ const CatCharacter = () => {
   return (
     <group position={[position.x, position.y, position.z]} rotation={[0, position.rotation || 0, 0]}>
       <Controls />
-      <CatMesh 
-        isMoving={player.isMoving} 
-        isRunning={player.isRunning}
-        isJumping={player.isJumping}
-        isAttacking={player.isAttacking} 
-        isDefending={player.isDefending}
-      />
+      {playerCustomization ? (
+        <CustomizableCatMesh
+          customization={playerCustomization}
+          isMoving={player.isMoving} 
+          isRunning={player.isRunning}
+          isJumping={player.isJumping}
+          isAttacking={player.isAttacking} 
+          isDefending={player.isDefending}
+        />
+      ) : (
+        <CatMesh 
+          isMoving={player.isMoving} 
+          isRunning={player.isRunning}
+          isJumping={player.isJumping}
+          isAttacking={player.isAttacking} 
+          isDefending={player.isDefending}
+        />
+      )}
       <Equipment activeItem={activeItem} />
     </group>
   );
 };
 
-export default CatCharacter;
+// Wrapped CatCharacter with critical error boundary
+const SafeCatCharacter = () => {
+  return (
+    <CatCharacterErrorBoundary>
+      <CatCharacter />
+    </CatCharacterErrorBoundary>
+  );
+};
+
+export default SafeCatCharacter;

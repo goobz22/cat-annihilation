@@ -1,14 +1,128 @@
-import { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
 console.log('[FOREST ENV] ForestEnvironment module loading...');
 
 /**
+ * Enhanced Error Boundary that prevents unmounting and provides meaningful fallbacks
+ */
+class RobustErrorBoundary extends React.Component<
+  { 
+    children: React.ReactNode;
+    fallbackName?: string;
+    persistOnError?: boolean;
+  },
+  { 
+    hasError: boolean;
+    errorCount: number;
+    lastError?: Error;
+  }
+> {
+  private retryTimeout?: NodeJS.Timeout;
+
+  constructor(props: { children: React.ReactNode; fallbackName?: string; persistOnError?: boolean }) {
+    super(props);
+    this.state = { 
+      hasError: false, 
+      errorCount: 0,
+      lastError: undefined
+    };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { 
+      hasError: true,
+      lastError: error
+    };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(`[ERROR BOUNDARY] ${this.props.fallbackName || 'Component'} error:`, error, errorInfo);
+    
+    this.setState(prevState => ({
+      errorCount: prevState.errorCount + 1
+    }));
+
+    // Auto-retry after 5 seconds if persistOnError is true and error count is low
+    if (this.props.persistOnError && this.state.errorCount < 3) {
+      console.log(`[ERROR BOUNDARY] Auto-retry attempt ${this.state.errorCount + 1} in 5 seconds...`);
+      this.retryTimeout = setTimeout(() => {
+        console.log(`[ERROR BOUNDARY] Attempting to recover ${this.props.fallbackName}...`);
+        this.setState({ hasError: false, lastError: undefined });
+      }, 5000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const fallbackName = this.props.fallbackName || 'Component';
+      console.log(`[ERROR BOUNDARY] Rendering fallback for ${fallbackName}`);
+      
+      // Provide specific fallbacks based on component type
+      if (fallbackName.includes('Forest') || fallbackName.includes('Ground')) {
+        return (
+          <group>
+            {/* Minimal forest environment fallback */}
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]} receiveShadow>
+              <planeGeometry args={[200, 200]} />
+              <meshStandardMaterial color="#7fb069" />
+            </mesh>
+            <fog attach="fog" args={['#4c6156', 30, 150]} />
+            {/* Simple fallback trees */}
+            {[...Array(10)].map((_, i) => (
+              <mesh key={`fallback-tree-${i}`} position={[Math.sin(i) * 20, 3, Math.cos(i) * 20]} castShadow>
+                <cylinderGeometry args={[0.5, 0.5, 6]} />
+                <meshStandardMaterial color="#8B4513" />
+              </mesh>
+            ))}
+          </group>
+        );
+      }
+      
+      if (fallbackName.includes('NPC')) {
+        return (
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[0.8, 1.5, 0.6]} />
+            <meshStandardMaterial color="#888888" />
+          </mesh>
+        );
+      }
+      
+      if (fallbackName.includes('Enemy')) {
+        return (
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[0.8, 0.8, 0.8]} />
+            <meshStandardMaterial color="#8B4513" />
+          </mesh>
+        );
+      }
+      
+      // Generic fallback - invisible placeholder that maintains structure
+      return (
+        <group>
+          <mesh position={[0, 0, 0]} visible={false}>
+            <boxGeometry args={[0.1, 0.1, 0.1]} />
+            <meshBasicMaterial />
+          </mesh>
+        </group>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+/**
  * Tree model component
  */
 const Tree = ({ position, scale = 1, type = 'pine' }: { position: [number, number, number]; scale?: number; type?: 'pine' | 'oak' }) => {
-  console.log('[TREE] Creating tree component:', { position, scale, type });
   
   try {
     // Create refs for animation
@@ -78,7 +192,6 @@ const Tree = ({ position, scale = 1, type = 'pine' }: { position: [number, numbe
  * Bush component
  */
 const Bush = ({ position, scale = 1 }: { position: [number, number, number]; scale?: number }) => {
-  console.log('[BUSH] Creating bush component:', { position, scale });
   try {
     return (
       <mesh castShadow position={position} scale={[scale, scale, scale]}>
@@ -96,7 +209,6 @@ const Bush = ({ position, scale = 1 }: { position: [number, number, number]; sca
  * Rock component
  */
 const Rock = ({ position, scale = 1 }: { position: [number, number, number]; scale?: number }) => {
-  console.log('[ROCK] Creating rock component:', { position, scale });
   try {
     // Generate a random rotation for variety
     const rotationY = Math.random() * Math.PI * 2;
@@ -114,79 +226,74 @@ const Rock = ({ position, scale = 1 }: { position: [number, number, number]; sca
 };
 
 /**
- * Forest ground with grass texture
+ * Forest ground with grass texture - Internal component
  */
-const ForestGround = () => {
-  console.log('[FOREST GROUND] Initializing ForestGround component');
-  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+const ForestGroundInternal = () => {
   
-  // Create simple but detailed grass texture
+  // Create texture using useMemo to prevent re-creation on every render
+  const texture = useMemo(() => {
+    console.log('[FOREST GROUND] Creating grass texture with useMemo');
+    
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const context = canvas.getContext('2d');
+      
+      if (!context) {
+        console.error('[FOREST GROUND] Failed to get 2D context');
+        return null;
+      }
+      
+      // Base grass color - light green
+      context.fillStyle = '#7fb069';
+      context.fillRect(0, 0, 256, 256);
+      
+      // Add grass patterns - reduced for performance
+      for (let i = 0; i < 300; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const length = Math.random() * 4 + 2;
+        const width = 1;
+        
+        // Vary green shade
+        const variation = Math.floor(Math.random() * 20) - 10;
+        context.fillStyle = `rgb(${127 + variation}, ${176 + variation}, 105)`;
+        context.fillRect(x, y, width, length);
+      }
+      
+      // Add some darker spots
+      for (let i = 0; i < 15; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const size = Math.random() * 3 + 1;
+        
+        context.fillStyle = 'rgba(45, 80, 50, 0.5)';
+        context.beginPath();
+        context.arc(x, y, size, 0, Math.PI * 2);
+        context.fill();
+      }
+      
+      const newTexture = new THREE.CanvasTexture(canvas);
+      newTexture.wrapS = newTexture.wrapT = THREE.RepeatWrapping;
+      newTexture.repeat.set(20, 20);
+      console.log('[FOREST GROUND] Texture created successfully');
+      return newTexture;
+    } catch (error) {
+      console.error('[FOREST GROUND] Error creating grass texture:', error);
+      return null;
+    }
+  }, []); // Empty dependency array - only create once
+  
+  // Cleanup texture when component unmounts
   useEffect(() => {
-    console.log('[FOREST GROUND] Creating grass texture effect');
-    const createGrassTexture = () => {
-      try {
-        console.log('[FOREST GROUND] Starting grass texture creation');
-        const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 256;
-        const context = canvas.getContext('2d');
-        
-        if (!context) {
-          console.error('[FOREST GROUND] Failed to get 2D context');
-          return;
-        }
-        
-        console.log('[FOREST GROUND] Canvas context created successfully');
-        
-        // Base grass color - light green
-        context.fillStyle = '#7fb069';
-        context.fillRect(0, 0, 256, 256);
-        console.log('[FOREST GROUND] Base grass color applied');
-        
-        // Add grass patterns - simpler approach
-        console.log('[FOREST GROUND] Adding grass patterns');
-        for (let i = 0; i < 1000; i++) {
-          const x = Math.random() * 256;
-          const y = Math.random() * 256;
-          const length = Math.random() * 4 + 2;
-          const width = 1;
-          
-          // Vary green shade - light green variations
-          const variation = Math.floor(Math.random() * 20) - 10;
-          context.fillStyle = `rgb(${127 + variation}, ${176 + variation}, 105)`;
-          context.fillRect(x, y, width, length);
-        }
-        console.log('[FOREST GROUND] Grass patterns added');
-        
-        // Add some darker spots
-        console.log('[FOREST GROUND] Adding darker spots');
-        for (let i = 0; i < 50; i++) {
-          const x = Math.random() * 256;
-          const y = Math.random() * 256;
-          const size = Math.random() * 3 + 1;
-          
-          context.fillStyle = 'rgba(45, 80, 50, 0.5)';
-          context.beginPath();
-          context.arc(x, y, size, 0, Math.PI * 2);
-          context.fill();
-        }
-        console.log('[FOREST GROUND] Darker spots added');
-        
-        console.log('[FOREST GROUND] Creating THREE texture');
-        const newTexture = new THREE.CanvasTexture(canvas);
-        newTexture.wrapS = newTexture.wrapT = THREE.RepeatWrapping;
-        newTexture.repeat.set(20, 20);
-        setTexture(newTexture);
-        console.log('[FOREST GROUND] Texture created and set');
-      } catch (error) {
-        console.error('[FOREST GROUND] Error creating grass texture:', error);
+    return () => {
+      if (texture) {
+        console.log('[FOREST GROUND] Disposing texture on unmount');
+        texture.dispose();
       }
     };
-    
-    createGrassTexture();
-  }, []);
-  
-  console.log('[FOREST GROUND] Rendering ground mesh, texture:', texture);
+  }, [texture]);
   
   try {
     return (
@@ -207,14 +314,26 @@ const ForestGround = () => {
 };
 
 /**
+ * Wrapped ForestGround with error boundary
+ */
+const ForestGround = () => {
+  return (
+    <RobustErrorBoundary 
+      fallbackName="ForestGround" 
+      persistOnError={true}
+    >
+      <ForestGroundInternal />
+    </RobustErrorBoundary>
+  );
+};
+
+/**
  * Main forest environment component
  */
 const ForestEnvironment = () => {
-  console.log('[FOREST ENV] Initializing main ForestEnvironment component');
   
   // Add ambient sounds
   useEffect(() => {
-    console.log('[FOREST ENV] Setting up ambient sounds');
     try {
       const audio = new Audio('/assets/sounds/forest-ambient.mp3');
       audio.loop = true;
@@ -232,15 +351,13 @@ const ForestEnvironment = () => {
     }
   }, []);
   
-  console.log('[FOREST ENV] Starting to generate environment objects');
-  
-  // Generate trees in a natural pattern around the starting area
-  const trees = [];
-  const bushes = [];
-  const rocks = [];
+  // Generate all environment objects once using useMemo to prevent infinite re-renders
+  const { trees, bushes, rocks } = useMemo(() => {
+    const generatedTrees = [];
+    const generatedBushes = [];
+    const generatedRocks = [];
   
   // Add trees in a circle around the center, but not in the immediate center
-  console.log('[FOREST ENV] Generating circular trees');
   try {
     for (let i = 0; i < 100; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -255,7 +372,7 @@ const ForestEnvironment = () => {
       const treetype = Math.random() > 0.3 ? 'pine' : 'oak';
       const scale = 0.5 + Math.random() * 0.5;
       
-      trees.push(
+      generatedTrees.push(
         <Tree 
           key={`tree-${i}`} 
           position={[x, y, z]} 
@@ -264,13 +381,12 @@ const ForestEnvironment = () => {
         />
       );
     }
-    console.log('[FOREST ENV] Generated', trees.length, 'circular trees');
+    // Trees generated successfully
   } catch (error) {
     console.error('[FOREST ENV] Error generating circular trees:', error);
   }
   
   // Add additional trees in a grid pattern for better coverage
-  console.log('[FOREST ENV] Generating grid trees');
   try {
     for (let x = -300; x <= 300; x += 80) {
       for (let z = -300; z <= 300; z += 80) {
@@ -286,23 +402,22 @@ const ForestEnvironment = () => {
         const treetype = Math.random() > 0.4 ? 'pine' : 'oak';
         const scale = 0.4 + Math.random() * 0.6;
         
-        trees.push(
+                generatedTrees.push(
           <Tree 
             key={`grid-tree-${x}-${z}`} 
             position={[offsetX, 0, offsetZ]} 
             scale={scale}
-            type={treetype as 'pine' | 'oak'} 
+            type={treetype as 'pine' | 'oak'}
           />
         );
       }
     }
-    console.log('[FOREST ENV] Generated total trees:', trees.length);
+    // Grid trees generated
   } catch (error) {
     console.error('[FOREST ENV] Error generating grid trees:', error);
   }
   
   // Add some bushes
-  console.log('[FOREST ENV] Generating bushes');
   try {
     for (let i = 0; i < 60; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -310,7 +425,7 @@ const ForestEnvironment = () => {
       const x = Math.sin(angle) * distance;
       const z = Math.cos(angle) * distance;
       
-      bushes.push(
+      generatedBushes.push(
         <Bush 
           key={`bush-${i}`} 
           position={[x, 0, z]} 
@@ -318,13 +433,12 @@ const ForestEnvironment = () => {
         />
       );
     }
-    console.log('[FOREST ENV] Generated', bushes.length, 'bushes');
+    // Bushes generated
   } catch (error) {
     console.error('[FOREST ENV] Error generating bushes:', error);
   }
   
   // Add some rocks
-  console.log('[FOREST ENV] Generating rocks');
   try {
     for (let i = 0; i < 40; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -332,7 +446,7 @@ const ForestEnvironment = () => {
       const x = Math.sin(angle) * distance;
       const z = Math.cos(angle) * distance;
       
-      rocks.push(
+      generatedRocks.push(
         <Rock 
           key={`rock-${i}`} 
           position={[x, 0, z]} 
@@ -340,12 +454,17 @@ const ForestEnvironment = () => {
         />
       );
     }
-    console.log('[FOREST ENV] Generated', rocks.length, 'rocks');
+    // Rocks generated
   } catch (error) {
     console.error('[FOREST ENV] Error generating rocks:', error);
   }
   
-  console.log('[FOREST ENV] Rendering final forest environment group');
+    return {
+      trees: generatedTrees,
+      bushes: generatedBushes,
+      rocks: generatedRocks
+    };
+  }, []); // Empty dependency array - generate only once
   
   try {
     return (
@@ -365,4 +484,16 @@ const ForestEnvironment = () => {
   }
 };
 
-export default ForestEnvironment;
+// Wrapped component with robust error boundary
+const SafeForestEnvironment = () => {
+  return (
+    <RobustErrorBoundary 
+      fallbackName="ForestEnvironment" 
+      persistOnError={true}
+    >
+      <ForestEnvironment />
+    </RobustErrorBoundary>
+  );
+};
+
+export default SafeForestEnvironment;

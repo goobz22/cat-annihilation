@@ -134,7 +134,6 @@ const CatMesh = memo(({
       // Body animation - animate the main body mesh in bodyGroup
       const actualBody = group.current;
       if (actualBody) {
-        const heightAdjustment = isRunning ? 0.15 : 0.1;
         // Keep body at fixed height
         actualBody.position.y = 0.2;
       }
@@ -211,7 +210,6 @@ const CatMesh = memo(({
       newAnimState.walkTime += delta;
       if (newAnimState.walkTime !== oldWalkTime) stateChanged = true;
       
-      const breathCycle = Math.sin(newAnimState.walkTime);
       
       const actualBody = group.current;
       if (actualBody) {

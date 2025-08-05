@@ -3,6 +3,8 @@ import { useGameStore } from '../../lib/store/gameStore';
 
 const GameOverScreen = () => {
   const isGameOver = useGameStore(state => state.isGameOver);
+  const gameMode = useGameStore(state => state.gameMode);
+  const storyModeActive = useGameStore(state => state.storyMode.isActive);
   const enemies = useGameStore(state => state.enemies);
   const [showScreen, setShowScreen] = useState(false);
   const [deathStats, setDeathStats] = useState({ enemiesKilled: 0, survivalTime: 0 });
@@ -43,6 +45,9 @@ const GameOverScreen = () => {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [showScreen, handleRestart]);
+  
+  // Only show game over screen in survival mode (after all hooks are called)
+  if (gameMode !== 'survival' || storyModeActive) return null;
   
   if (!showScreen) return null;
   
