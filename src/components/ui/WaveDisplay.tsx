@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { waveState, subscribeToWaveState } from '../game/WaveState';
+import { useGameStore } from '../../lib/store/gameStore';
 
 const WaveDisplay = () => {
+  const gameMode = useGameStore(state => state.gameMode);
+  const storyModeActive = useGameStore(state => state.storyMode.isActive);
   const [currentWave, setCurrentWave] = useState(waveState.currentWave);
   const [isWaveTransition, setIsWaveTransition] = useState(waveState.isTransition);
   const [showTransition, setShowTransition] = useState(false);
@@ -42,6 +45,9 @@ const WaveDisplay = () => {
       setTimeout(() => setAnimateWave(false), 500);
     }
   }, [currentWave, isWaveTransition]);
+
+  // Only show wave display in survival mode (after all hooks are called)
+  if (gameMode !== 'survival' || storyModeActive) return null;
 
   return (
     <>

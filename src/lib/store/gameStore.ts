@@ -1,4 +1,12 @@
 import { create } from 'zustand';
+import { 
+  loadGameMode, 
+  saveGameMode, 
+  loadStoryProgress, 
+  saveStoryProgress,
+  loadPlayerProgress,
+  savePlayerProgress
+} from './gameStatePersistence';
 
 /**
  * Interface for the game day/night cycle
@@ -49,6 +57,27 @@ interface IPlayerState {
   maxHealth: number;
   inventory: (IInventoryItem | null)[];
   activeSlot: number;
+  customization?: {
+    primaryColor: string;
+    secondaryColor?: string;
+    eyeColor: string;
+    noseColor: string;
+    pawColor?: string;
+    pattern?: 'solid' | 'tabby' | 'calico' | 'tuxedo' | 'siamese' | 'spots';
+    patternColor?: string;
+    earSize?: 'small' | 'normal' | 'large';
+    tailLength?: 'short' | 'normal' | 'long';
+    furLength?: 'short' | 'medium' | 'long';
+    bodyType?: 'slim' | 'normal' | 'chubby';
+    collar?: {
+      color: string;
+      hasTag?: boolean;
+    };
+    scars?: Array<{
+      position: 'eye' | 'ear' | 'body';
+      side?: 'left' | 'right';
+    }>;
+  };
 }
 
 
@@ -93,6 +122,99 @@ interface ICatStats {
 }
 
 /**
+ * Interface for quest system
+ */
+interface IQuestObjective {
+  id: string;
+  type: 'kill' | 'collect' | 'visit' | 'talk' | 'survive' | 'escort';
+  target: string;
+  count: number;
+  currentCount: number;
+  description: string;
+}
+
+interface IQuestReward {
+  type: 'xp' | 'item' | 'rank' | 'territory' | 'ability';
+  value: string | number;
+  amount?: number;
+  description: string;
+}
+
+interface IQuest {
+  id: string;
+  title: string;
+  description: string;
+  category: 'novice' | 'warrior' | 'elite' | 'daily';
+  prerequisites: string[];
+  objectives: IQuestObjective[];
+  rewards: IQuestReward[];
+  status: 'locked' | 'available' | 'active' | 'completed';
+  giver?: string; // NPC who gives the quest
+  location?: string; // Where quest takes place
+}
+
+/**
+ * Interface for clan system
+ */
+interface IClan {
+  id: 'MistClan' | 'StormClan' | 'EmberClan' | 'FrostClan';
+  name: string;
+  territory: string;
+  specialty: string;
+  values: string[];
+  sacredSite: string;
+  relationship: 'ally' | 'neutral' | 'hostile';
+}
+
+/**
+ * Interface for story mode skill progression
+ */
+interface IStorySkills {
+  combat: number;
+  hunting: number;
+  herbalism: number;
+  leadership: number;
+  mysticism: number;
+  exploration: number;
+}
+
+/**
+ * Interface for NPC dialog system
+ */
+interface IDialog {
+  isOpen: boolean;
+  npcName: string;
+  npcRole: string;
+  message: string;
+  options?: IDialogOption[];
+}
+
+interface IDialogOption {
+  id: string;
+  text: string;
+  action?: () => void;
+}
+
+/**
+ * Interface for story mode state
+ */
+interface IStoryModeState {
+  isActive: boolean;
+  playerClan: 'MistClan' | 'StormClan' | 'EmberClan' | 'FrostClan' | null;
+  playerRank: 'outsider' | 'apprentice' | 'warrior' | 'senior_warrior' | 'deputy' | 'leader';
+  mentorName: string;
+  quests: IQuest[];
+  activeQuests: string[]; // Quest IDs currently being pursued
+  completedQuests: string[];
+  storySkills: IStorySkills;
+  clanRelationships: Record<string, 'ally' | 'neutral' | 'hostile'>;
+  territoryAccess: string[]; // Areas player can access
+  mysticalConnections: number; // Connection to ancestor spirits (0-100)
+  questBookOpen: boolean;
+  dialog: IDialog;
+}
+
+/**
  * Interface for the game state
  */
 interface IGameState {
@@ -112,6 +234,8 @@ interface IGameState {
   catStats: ICatStats;
   isPaused: boolean;
   isMenuPaused: boolean;
+  gameMode: 'survival' | 'story' | null;
+  storyMode: IStoryModeState;
   setWorldLoaded: (loaded: boolean) => void;
   setWorld: (world: any) => void;
   setDayCycle: (cycle: IDayCycle) => void;
@@ -143,6 +267,19 @@ interface IGameState {
   resetNineLives: () => void;
   setPaused: (paused: boolean) => void;
   setMenuPaused: (paused: boolean) => void;
+  setGameMode: (mode: 'survival' | 'story') => void;
+  setPlayerClan: (clan: 'MistClan' | 'StormClan' | 'EmberClan' | 'FrostClan' | null) => void;
+  setPlayerRank: (rank: 'outsider' | 'apprentice' | 'warrior' | 'senior_warrior' | 'deputy' | 'leader') => void;
+  addQuest: (quest: IQuest) => void;
+  updateQuest: (questId: string, updates: Partial<IQuest>) => void;
+  completeQuest: (questId: string) => void;
+  activateQuest: (questId: string) => void;
+  updateQuestObjective: (questId: string, objectiveId: string, progress: number) => void;
+  addStoryXP: (skill: keyof IStorySkills, amount: number) => void;
+  setClanRelationship: (clan: string, relationship: 'ally' | 'neutral' | 'hostile') => void;
+  toggleQuestBook: () => void;
+  showDialog: (npcName: string, npcRole: string, message: string, options?: IDialogOption[]) => void;
+  closeDialog: () => void;
 }
 
 /**
@@ -262,29 +399,282 @@ const initialPlayerState: IPlayerState = {
   activeSlot: 0,
 };
 
+/**
+ * Clan data for story mode
+ */
+const clansData: Record<string, IClan> = {
+  MistClan: {
+    id: 'MistClan',
+    name: 'MistClan',
+    territory: 'Misty Marshlands & Creek Valleys',
+    specialty: 'Stealth, fishing, swimming',
+    values: ['Adaptability', 'Cunning', 'Patience'],
+    sacredSite: 'Moonlit Falls',
+    relationship: 'neutral'
+  },
+  StormClan: {
+    id: 'StormClan',
+    name: 'StormClan',
+    territory: 'Rocky Highlands & Pine Forests',
+    specialty: 'Mountain combat, endurance',
+    values: ['Strength', 'Honor', 'Determination'],
+    sacredSite: 'Thunder Peak',
+    relationship: 'neutral'
+  },
+  EmberClan: {
+    id: 'EmberClan',
+    name: 'EmberClan',
+    territory: 'Autumn Forests & Oak Groves',
+    specialty: 'Hunting, herb knowledge',
+    values: ['Wisdom', 'Tradition', 'Healing'],
+    sacredSite: 'The Elder Grove',
+    relationship: 'neutral'
+  },
+  FrostClan: {
+    id: 'FrostClan',
+    name: 'FrostClan',
+    territory: 'Northern Pines & Snowy Valleys',
+    specialty: 'Winter survival, tracking',
+    values: ['Resilience', 'Loyalty', 'Community'],
+    sacredSite: 'Crystal Caverns',
+    relationship: 'neutral'
+  }
+};
 
+/**
+ * Initial quests for story mode
+ */
+const initialQuests: IQuest[] = [
+  {
+    id: 'first-pawsteps',
+    title: 'First Pawsteps',
+    description: 'Learn the basics of clan life by exploring your new territory.',
+    category: 'novice',
+    prerequisites: [],
+    objectives: [
+      {
+        id: 'talk-to-leader',
+        type: 'talk',
+        target: 'clan-leader',
+        count: 1,
+        currentCount: 0,
+        description: 'Speak with your clan leader'
+      }
+    ],
+    rewards: [
+      {
+        type: 'xp',
+        value: 'exploration',
+        amount: 10,
+        description: '+10 Exploration XP'
+      },
+      {
+        type: 'rank',
+        value: 'apprentice',
+        description: 'Become an apprentice'
+      }
+    ],
+    status: 'available',
+    giver: 'clan-leader',
+    location: 'clan-camp'
+  },
+  {
+    id: 'territory-bounds',
+    title: 'Territory Bounds',
+    description: 'Learn where your clan\'s territory begins and ends.',
+    category: 'novice',
+    prerequisites: ['first-pawsteps'],
+    objectives: [
+      {
+        id: 'talk-to-mentor',
+        type: 'talk',
+        target: 'mentor',
+        count: 1,
+        currentCount: 0,
+        description: 'Learn from your mentor'
+      },
+      {
+        id: 'explore-territory',
+        type: 'visit',
+        target: 'territory-bounds',
+        count: 20,
+        currentCount: 0,
+        description: 'Explore the clan territory (move around)'
+      }
+    ],
+    rewards: [
+      {
+        type: 'xp',
+        value: 'exploration',
+        amount: 15,
+        description: '+15 Exploration XP'
+      },
+      {
+        type: 'item',
+        value: 'territory-map',
+        description: 'Territory Map'
+      }
+    ],
+    status: 'locked',
+    giver: 'mentor',
+    location: 'clan-camp'
+  },
+  {
+    id: 'first-hunt',
+    title: 'The First Hunt',
+    description: 'Prove your hunting skills by catching prey for the clan.',
+    category: 'novice',
+    prerequisites: ['territory-bounds'],
+    objectives: [
+      {
+        id: 'hunt-training',
+        type: 'kill',
+        target: 'practice-targets',
+        count: 5,
+        currentCount: 0,
+        description: 'Practice hunting by defeating 5 practice targets'
+      }
+    ],
+    rewards: [
+      {
+        type: 'xp',
+        value: 'hunting',
+        amount: 20,
+        description: '+20 Hunting XP'
+      },
+      {
+        type: 'xp',
+        value: 'combat',
+        amount: 10,
+        description: '+10 Combat XP'
+      }
+    ],
+    status: 'locked',
+    giver: 'mentor',
+    location: 'hunting-grounds'
+  }
+];
+
+/**
+ * Load initial story mode state (with persistence)
+ */
+const createInitialStoryMode = (): IStoryModeState => {
+  const baseState: IStoryModeState = {
+    isActive: false,
+    playerClan: null,
+    playerRank: 'outsider',
+    mentorName: '',
+    quests: initialQuests,
+    activeQuests: [],
+    completedQuests: [],
+    storySkills: {
+      combat: 0,
+      hunting: 0,
+      herbalism: 0,
+      leadership: 0,
+      mysticism: 0,
+      exploration: 0
+    },
+    clanRelationships: {
+      MistClan: 'neutral',
+      StormClan: 'neutral',
+      EmberClan: 'neutral',
+      FrostClan: 'neutral'
+    },
+    territoryAccess: ['clan-camp'],
+    mysticalConnections: 0,
+    questBookOpen: false,
+    dialog: {
+      isOpen: false,
+      npcName: '',
+      npcRole: '',
+      message: '',
+      options: []
+    }
+  };
+
+  // Load persisted story progress
+  const savedProgress = loadStoryProgress();
+  if (savedProgress) {
+    return {
+      ...baseState,
+      ...savedProgress,
+      // Always use current quest definitions
+      quests: initialQuests,
+      // Ensure dialog state is reset
+      questBookOpen: false,
+      dialog: baseState.dialog
+    };
+  }
+
+  return baseState;
+};
+
+const initialStoryMode = createInitialStoryMode();
+
+/**
+ * Load initial state with persistence
+ */
+const createInitialState = () => {
+  // Load persisted game mode
+  const savedGameMode = loadGameMode();
+  
+  // Load persisted player progress
+  const savedPlayerProgress = loadPlayerProgress();
+  let loadedCatStats = initialCatStats;
+  let loadedWeaponSkills = initialWeaponSkills;
+  
+  if (savedPlayerProgress) {
+    // Apply saved cat stats
+    if (savedPlayerProgress.catLevel && savedPlayerProgress.catXp) {
+      loadedCatStats = {
+        ...initialCatStats,
+        level: savedPlayerProgress.catLevel,
+        xp: savedPlayerProgress.catXp,
+        xpToNextLevel: calculateXPNeeded(savedPlayerProgress.catLevel + 1)
+      };
+    }
+    
+    // Apply saved weapon skills
+    if (savedPlayerProgress.weaponSkills) {
+      loadedWeaponSkills = savedPlayerProgress.weaponSkills;
+    }
+  }
+
+  return {
+    gameMode: savedGameMode,
+    catStats: loadedCatStats,
+    weaponSkills: loadedWeaponSkills,
+    storyMode: initialStoryMode
+  };
+};
 
 /**
  * Create the game store
  */
-export const useGameStore = create<IGameState>((set) => ({
-  isWorldLoaded: false,
-  world: null,
-  dayCycle: initialDayCycle,
-  connectionError: null,
-  player: initialPlayerState,
-  availableSpells: availableSpells,
-  inventoryBag: initialInventoryBag,
-  enemies: [],
-  isGameOver: false,
-  currentWave: 1,
-  enemiesKilled: 0,
-  isWaveTransition: false,
-  weaponSkills: initialWeaponSkills,
-  catStats: initialCatStats,
-  isPaused: false,
-  isMenuPaused: false,
-  setWorldLoaded: (loaded) => set({ isWorldLoaded: loaded }),
+export const useGameStore = create<IGameState>((set, get) => {
+  const initialState = createInitialState();
+  
+  return {
+    isWorldLoaded: false,
+    world: null,
+    dayCycle: initialDayCycle,
+    connectionError: null,
+    player: initialPlayerState,
+    availableSpells: availableSpells,
+    inventoryBag: initialInventoryBag,
+    enemies: [],
+    isGameOver: false,
+    currentWave: 1,
+    enemiesKilled: 0,
+    isWaveTransition: false,
+    weaponSkills: initialState.weaponSkills,
+    catStats: initialState.catStats,
+    isPaused: false,
+    isMenuPaused: false,
+    gameMode: initialState.gameMode,
+    storyMode: initialState.storyMode,
+    setWorldLoaded: (loaded) => set({ isWorldLoaded: loaded }),
   setWorld: (world) => set({ world }),
   setDayCycle: (cycle) => set({ dayCycle: cycle }),
   setConnectionError: (error) => set({ connectionError: error }),
@@ -537,6 +927,9 @@ export const useGameStore = create<IGameState>((set) => ({
     const currentHealthRatio = state.player.health / state.player.maxHealth;
     const newCurrentHealth = Math.max(state.player.health, Math.ceil(newMaxHealth * currentHealthRatio));
     
+    // Save player progress to localStorage
+    savePlayerProgress(newCatStats, state.weaponSkills, state.currentWave, state.enemiesKilled);
+    
     return {
       catStats: newCatStats,
       player: {
@@ -554,4 +947,165 @@ export const useGameStore = create<IGameState>((set) => ({
   })),
   setPaused: (paused) => set({ isPaused: paused }),
   setMenuPaused: (paused) => set({ isMenuPaused: paused }),
-})); 
+  setGameMode: (mode) => set((state) => {
+    saveGameMode(mode);
+    return { gameMode: mode };
+  }),
+  setPlayerClan: (clan) => set((state) => {
+    const newStoryMode = { ...state.storyMode, playerClan: clan, isActive: true };
+    saveStoryProgress(newStoryMode);
+    return { storyMode: newStoryMode };
+  }),
+  setPlayerRank: (rank) => set((state) => {
+    const newStoryMode = { ...state.storyMode, playerRank: rank };
+    saveStoryProgress(newStoryMode);
+    return { storyMode: newStoryMode };
+  }),
+  addQuest: (quest) => set((state) => ({
+    storyMode: { 
+      ...state.storyMode, 
+      quests: [...state.storyMode.quests, quest] 
+    }
+  })),
+  updateQuest: (questId, updates) => set((state) => ({
+    storyMode: {
+      ...state.storyMode,
+      quests: state.storyMode.quests.map(quest => 
+        quest.id === questId ? { ...quest, ...updates } : quest
+      )
+    }
+  })),
+  completeQuest: (questId) => set((state) => {
+    const quest = state.storyMode.quests.find(q => q.id === questId);
+    if (!quest) return state;
+
+    // Award quest rewards
+    let newStorySkills = { ...state.storyMode.storySkills };
+    let newPlayerRank = state.storyMode.playerRank;
+    
+    quest.rewards.forEach(reward => {
+      if (reward.type === 'xp' && typeof reward.value === 'string') {
+        const skill = reward.value as keyof IStorySkills;
+        if (skill in newStorySkills) {
+          newStorySkills[skill] += reward.amount || 0;
+        }
+      } else if (reward.type === 'rank') {
+        newPlayerRank = reward.value as typeof newPlayerRank;
+      }
+    });
+
+    console.log(`📜 Quest completed: ${quest.title}`);
+    quest.rewards.forEach(reward => {
+      console.log(`🎁 Reward: ${reward.description}`);
+    });
+
+    const newStoryMode = {
+      ...state.storyMode,
+      quests: state.storyMode.quests.map(q => 
+        q.id === questId ? { ...q, status: 'completed' as const } : q
+      ),
+      activeQuests: state.storyMode.activeQuests.filter(id => id !== questId),
+      completedQuests: [...state.storyMode.completedQuests, questId],
+      storySkills: newStorySkills,
+      playerRank: newPlayerRank
+    };
+    
+    saveStoryProgress(newStoryMode);
+    return { storyMode: newStoryMode };
+  }),
+  activateQuest: (questId) => set((state) => {
+    const quest = state.storyMode.quests.find(q => q.id === questId);
+    if (!quest || quest.status !== 'available') return state;
+
+    console.log(`📋 Quest activated: ${quest.title}`);
+    
+    const newStoryMode = {
+      ...state.storyMode,
+      quests: state.storyMode.quests.map(q => 
+        q.id === questId ? { ...q, status: 'active' as const } : q
+      ),
+      activeQuests: [...state.storyMode.activeQuests, questId]
+    };
+    
+    saveStoryProgress(newStoryMode);
+    return { storyMode: newStoryMode };
+  }),
+  updateQuestObjective: (questId, objectiveId, progress) => set((state) => {
+    const quest = state.storyMode.quests.find(q => q.id === questId);
+    if (!quest) return state;
+
+    const updatedQuest = {
+      ...quest,
+      objectives: quest.objectives.map(obj => 
+        obj.id === objectiveId 
+          ? { ...obj, currentCount: Math.min(progress, obj.count) }
+          : obj
+      )
+    };
+
+    // Check if quest is completed
+    const allObjectivesComplete = updatedQuest.objectives.every(obj => obj.currentCount >= obj.count);
+    if (allObjectivesComplete && quest.status === 'active') {
+      // Auto-complete the quest
+      setTimeout(() => {
+        useGameStore.getState().completeQuest(questId);
+      }, 100);
+    }
+
+    return {
+      storyMode: {
+        ...state.storyMode,
+        quests: state.storyMode.quests.map(q => 
+          q.id === questId ? updatedQuest : q
+        )
+      }
+    };
+  }),
+  addStoryXP: (skill, amount) => set((state) => {
+    const newSkills = { ...state.storyMode.storySkills };
+    newSkills[skill] += amount;
+    
+    console.log(`📈 +${amount} ${skill.toUpperCase()} XP (Total: ${newSkills[skill]})`);
+    
+    const newStoryMode = { ...state.storyMode, storySkills: newSkills };
+    saveStoryProgress(newStoryMode);
+    return { storyMode: newStoryMode };
+  }),
+  setClanRelationship: (clan, relationship) => set((state) => ({
+    storyMode: {
+      ...state.storyMode,
+      clanRelationships: {
+        ...state.storyMode.clanRelationships,
+        [clan]: relationship
+      }
+    }
+  })),
+  toggleQuestBook: () => set((state) => ({
+    storyMode: { ...state.storyMode, questBookOpen: !state.storyMode.questBookOpen }
+  })),
+  showDialog: (npcName: string, npcRole: string, message: string, options?: IDialogOption[]) => set((state) => ({
+    storyMode: {
+      ...state.storyMode,
+      dialog: {
+        isOpen: true,
+        npcName,
+        npcRole,
+        message,
+        options: options || []
+      }
+    }
+  })),
+  closeDialog: () => set((state) => ({
+    storyMode: {
+      ...state.storyMode,
+      dialog: {
+        isOpen: false,
+        npcName: '',
+        npcRole: '',
+        message: '',
+        options: []
+      }
+    }
+  })),
+  };
+}); 

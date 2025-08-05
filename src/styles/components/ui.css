@@ -702,3 +702,402 @@
     top: 10px;
   }
 }
+
+/* Quest Objective Overlay Styles */
+.quest-objective-overlay {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 320px;
+  z-index: 100;
+  font-family: inherit;
+}
+
+.player-status {
+  background: linear-gradient(145deg, rgba(45, 45, 45, 0.95), rgba(26, 26, 26, 0.95));
+  border: 2px solid rgba(68, 68, 68, 0.8);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.clan-name {
+  color: #4ecdc4;
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 2px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.player-rank {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.current-quest {
+  background: linear-gradient(145deg, rgba(45, 45, 45, 0.95), rgba(26, 26, 26, 0.95));
+  border: 2px solid rgba(78, 205, 196, 0.6);
+  border-radius: 10px;
+  padding: 12px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7), 0 0 15px rgba(78, 205, 196, 0.2);
+  animation: questGlow 3s ease-in-out infinite alternate;
+}
+
+@keyframes questGlow {
+  0% {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7), 0 0 15px rgba(78, 205, 196, 0.2);
+  }
+  100% {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7), 0 0 20px rgba(78, 205, 196, 0.3);
+  }
+}
+
+.quest-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(78, 205, 196, 0.3);
+}
+
+.quest-icon {
+  font-size: 20px;
+  background: rgba(78, 205, 196, 0.2);
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(78, 205, 196, 0.4);
+}
+
+.quest-info {
+  flex: 1;
+}
+
+.quest-title {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 2px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  letter-spacing: 0.5px;
+}
+
+.quest-category {
+  color: #4ecdc4;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.quest-objectives {
+  margin-bottom: 10px;
+}
+
+.objective {
+  margin-bottom: 8px;
+  transition: all 0.3s ease;
+}
+
+.objective.completed {
+  opacity: 0.7;
+}
+
+.objective.completed .objective-text {
+  text-decoration: line-through;
+  color: #95e1d3;
+}
+
+.objective-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.objective-icon {
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+}
+
+.objective-text {
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 500;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.objective-counter {
+  color: #4ecdc4;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(78, 205, 196, 0.1);
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(78, 205, 196, 0.3);
+}
+
+.objective-progress {
+  height: 3px;
+  background: rgba(68, 68, 68, 0.8);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-left: 24px;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4ecdc4, #95e1d3);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+  box-shadow: 0 0 6px rgba(78, 205, 196, 0.5);
+}
+
+.quest-hint {
+  text-align: center;
+  color: #888;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-top: 1px solid rgba(68, 68, 68, 0.5);
+  padding-top: 8px;
+}
+
+.quest-hint kbd {
+  background: rgba(68, 68, 68, 0.8);
+  border: 1px solid rgba(119, 119, 119, 0.6);
+  border-radius: 3px;
+  color: #4ecdc4;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  margin: 0 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .quest-objective-overlay {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+  
+  .current-quest {
+    padding: 10px;
+  }
+  
+  .quest-title {
+    font-size: 13px;
+  }
+  
+  .quest-category {
+    font-size: 10px;
+  }
+  
+  .objective-text {
+    font-size: 11px;
+  }
+  
+  .clan-name {
+    font-size: 13px;
+  }
+  
+  .player-rank {
+    font-size: 10px;
+  }
+}
+
+/* =================================
+   Dialog Component Styles
+   ================================= */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.dialog-container {
+  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+  border: 2px solid #3498db;
+  border-radius: 12px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  animation: dialogSlideIn 0.3s ease-out;
+}
+
+@keyframes dialogSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-30px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 20px 0 20px;
+  border-bottom: 2px solid rgba(52, 152, 219, 0.3);
+  margin-bottom: 20px;
+}
+
+.dialog-npc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog-npc-name {
+  font-size: 24px;
+  font-weight: bold;
+  color: #f39c12;
+  margin: 0;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.dialog-npc-role {
+  font-size: 14px;
+  color: #95a5a6;
+  text-transform: capitalize;
+  font-style: italic;
+}
+
+.dialog-close-btn {
+  background: none;
+  border: none;
+  color: #e74c3c;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.dialog-close-btn:hover {
+  background: rgba(231, 76, 60, 0.2);
+  transform: scale(1.1);
+}
+
+.dialog-content {
+  padding: 0 20px 20px 20px;
+}
+
+.dialog-message {
+  font-size: 16px;
+  line-height: 1.6;
+  color: #ecf0f1;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 20px;
+  border-radius: 8px;
+  border-left: 4px solid #3498db;
+  margin-bottom: 20px;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+}
+
+.dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dialog-option-btn {
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+  border: 2px solid transparent;
+}
+
+.dialog-option-btn:hover {
+  background: linear-gradient(135deg, #2980b9 0%, #21618c 100%);
+  border-color: #f39c12;
+  transform: translateX(5px);
+}
+
+.dialog-footer {
+  padding: 0 20px 20px 20px;
+  text-align: center;
+}
+
+.dialog-continue-btn {
+  background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+  color: white;
+  border: none;
+  padding: 12px 30px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: bold;
+}
+
+.dialog-continue-btn:hover {
+  background: linear-gradient(135deg, #229954 0%, #1e8449 100%);
+  transform: scale(1.05);
+}
+
+/* Mobile responsiveness for dialog */
+@media (max-width: 768px) {
+  .dialog-container {
+    margin: 10px;
+    max-width: calc(100vw - 20px);
+  }
+  
+  .dialog-npc-name {
+    font-size: 20px;
+  }
+  
+  .dialog-message {
+    font-size: 14px;
+    padding: 15px;
+  }
+  
+  .dialog-option-btn,
+  .dialog-continue-btn {
+    font-size: 13px;
+    padding: 10px 15px;
+  }
+}
