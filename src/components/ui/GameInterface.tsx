@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useGameStore } from '../../lib/store/gameStore';
 import Dialog from './Dialog';
+import Compass from './Compass';
 
 /**
  * Day/night cycle display
@@ -175,9 +176,14 @@ const EditorPanel = () => {
  * Main game interface
  */
 const GameInterface = ({ children }: { children: React.ReactNode }) => {
+  const gameMode = useGameStore(state => state.gameMode);
+  const storyModeActive = useGameStore(state => state.storyMode.isActive);
+  
   return (
     <>
       {children}
+      {/* Show compass only in story mode */}
+      {gameMode === 'story' && storyModeActive && <Compass />}
       <div className="game-interface-overlay">
         {/* Main UI Panel - Upper Left Corner */}
         <div className="game-interface-panel">

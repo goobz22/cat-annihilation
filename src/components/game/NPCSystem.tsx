@@ -7,6 +7,24 @@ import { recordNPCInteraction } from './NPCInteractionTracker';
 import CustomizableCatMesh, { CatCustomization } from './CatCharacter/CustomizableCatMesh';
 import { NPC_CUSTOMIZATIONS, generateRandomClanCat } from '../../config/clanCustomizations';
 import { useCatCustomization } from '../../contexts/CatCustomizationContext';
+import { terrainCollisionData } from './terrain/TerrainCollisionSystem';
+
+// Utility function to get correct height for NPC positioning
+const getCorrectNPCHeight = (x: number, z: number): number => {
+  // Check if NPC should be on a bridge
+  for (const bridge of terrainCollisionData.bridges) {
+    const halfWidth = bridge.width / 2;
+    const halfLength = bridge.length / 2;
+    
+    if (x >= bridge.x - halfWidth && x <= bridge.x + halfWidth &&
+        z >= bridge.z - halfLength && z <= bridge.z + halfLength) {
+      return bridge.height; // Place NPC on bridge platform
+    }
+  }
+  
+  // Default to ground level
+  return 0;
+};
 
 /**
  * Error boundary for NPC components - prevents NPCs from unmounting on errors
@@ -57,7 +75,7 @@ class NPCErrorBoundary extends React.Component<
       
       // Render a simple fallback NPC that maintains functionality
       return (
-        <group position={[0, 0, 0]}>
+        <group position={[0, 1, 0]}>
           <mesh position={[0, 0.75, 0]}>
             <boxGeometry args={[0.8, 1.5, 0.6]} />
             <meshStandardMaterial color="#888888" />
@@ -332,7 +350,7 @@ const NPCSystem = () => {
       {
         id: 'clan-leader',
         name: `${playerClan} Leader`,
-        position: [0, 0, -5] as [number, number, number],
+        position: [0, getCorrectNPCHeight(0, -5), -5] as [number, number, number],
         role: 'clan-leader' as const,
         color: baseClanColor,
         clan: playerClan,
@@ -348,7 +366,7 @@ const NPCSystem = () => {
       {
         id: 'mentor',
         name: 'Your Mentor',
-        position: [3, 0, -3] as [number, number, number],
+        position: [3, getCorrectNPCHeight(3, -3), -3] as [number, number, number],
         role: 'mentor' as const,
         color: baseClanColor,
         clan: playerClan,
@@ -363,7 +381,7 @@ const NPCSystem = () => {
       {
         id: 'elder',
         name: `${playerClan} Elder`,
-        position: [-3, 0, -3] as [number, number, number],
+        position: [-3, getCorrectNPCHeight(-3, -3), -3] as [number, number, number],
         role: 'elder' as const,
         color: "#999999",
         clan: playerClan,
@@ -377,7 +395,7 @@ const NPCSystem = () => {
       {
         id: 'fellow-warrior',
         name: `${playerClan} Warrior`,
-        position: [5, 0, 0] as [number, number, number],
+        position: [5, getCorrectNPCHeight(5, 0), 0] as [number, number, number],
         role: 'warrior' as const,
         color: baseClanColor,
         clan: playerClan,
@@ -391,7 +409,7 @@ const NPCSystem = () => {
       {
         id: 'apprentice',
         name: 'Young Apprentice',
-        position: [-5, 0, 2] as [number, number, number],
+        position: [-5, getCorrectNPCHeight(-5, 2), 2] as [number, number, number],
         role: 'apprentice' as const,
         color: "#cccccc",
         clan: playerClan,

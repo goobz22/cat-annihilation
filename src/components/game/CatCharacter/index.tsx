@@ -3,9 +3,10 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useGameStore } from '../../../lib/store/gameStore';
 import { GAME_CONFIG } from '../../../config/gameConfig';
 import CatMesh from './CatMesh';
-import CustomizableCatMesh, { CatCustomization } from './CustomizableCatMesh';
+import CustomizableCatMesh from './CustomizableCatMesh';
 import { useCatCustomization } from '../../../contexts/CatCustomizationContext';
 import Equipment from './Equipment';
+import { terrainCollisionData } from '../terrain/TerrainCollisionSystem';
 
 /**
  * CRITICAL Error boundary for CatCharacter - prevents player from disappearing
@@ -295,21 +296,152 @@ const Controls = () => {
       isMoving = true;
     }
     
+    // Prevent movement into water areas (predictive collision detection)
+    let canMoveToPosition = true;
+    terrainCollisionData.rivers.forEach(river => {
+      const waterBuffer = 2.0; // Larger buffer for predictive detection
+      const bufferedMinX = river.minX - waterBuffer;
+      const bufferedMaxX = river.maxX + waterBuffer;
+      const bufferedMinZ = river.minZ - waterBuffer;
+      const bufferedMaxZ = river.maxZ + waterBuffer;
+      
+      // Check if attempted movement would enter water buffer zone
+      if (x >= bufferedMinX && x <= bufferedMaxX && z >= bufferedMinZ && z <= bufferedMaxZ) {
+        // Check if we're on a bridge at this position
+        let onBridgeAtNewPosition = false;
+        terrainCollisionData.bridges.forEach(bridge => {
+          const halfWidth = bridge.width / 2;
+          const halfLength = bridge.length / 2;
+          
+          if (x >= bridge.x - halfWidth && x <= bridge.x + halfWidth &&
+              z >= bridge.z - halfLength && z <= bridge.z + halfLength) {
+            onBridgeAtNewPosition = true;
+          }
+        });
+        
+        // Only prevent movement if not on a bridge
+        if (!onBridgeAtNewPosition) {
+          canMoveToPosition = false;
+          // Revert to previous position
+          x = position.x;
+          z = position.z;
+        }
+      }
+    });
+
+    // Check terrain height (bridges and ramps only - collision handled by TerrainCollisionSystem)
+    let finalY = y;
+    
+    // Check if player is on a bridge or approaching a ramp
+    terrainCollisionData.bridges.forEach(bridge => {
+      const halfWidth = bridge.width / 2;
+      const halfLength = bridge.length / 2;
+      
+      // Check if on bridge platform
+      if (x >= bridge.x - halfWidth && x <= bridge.x + halfWidth &&
+          z >= bridge.z - halfLength && z <= bridge.z + halfLength) {
+        finalY = bridge.height + 0.75; // Elevate player ON TOP OF bridge (bridge height + cat height offset)
+      }
+      
+      // Check if on bridge ramps (for Gathering Bridge - wrap-around corner ramps)
+      if (bridge.x === 0 && bridge.z === 0) { // Gathering Bridge
+        
+        // Southwest wrap-around ramp
+        if (x >= -halfWidth - 20 && x <= -halfWidth + 5 && z >= -halfLength - 5 && z <= -halfLength + 12) {
+          // West side of SW ramp
+          if (x <= -halfWidth - 5) {
+            const rampProgress = (-halfWidth - 5 - x) / 15; // 15 = ramp extent
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        } else if (x >= -halfWidth - 5 && x <= -halfWidth + 12 && z >= -halfLength - 20 && z <= -halfLength + 5) {
+          // South side of SW ramp
+          if (z <= -halfLength - 5) {
+            const rampProgress = (-halfLength - 5 - z) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        }
+        
+        // Northwest wrap-around ramp
+        if (x >= -halfWidth - 20 && x <= -halfWidth + 5 && z >= halfLength - 12 && z <= halfLength + 5) {
+          // West side of NW ramp
+          if (x <= -halfWidth - 5) {
+            const rampProgress = (-halfWidth - 5 - x) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        } else if (x >= -halfWidth - 5 && x <= -halfWidth + 12 && z >= halfLength - 5 && z <= halfLength + 20) {
+          // North side of NW ramp
+          if (z >= halfLength + 5) {
+            const rampProgress = (z - halfLength - 5) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        }
+        
+        // Northeast wrap-around ramp
+        if (x >= halfWidth - 5 && x <= halfWidth + 20 && z >= halfLength - 12 && z <= halfLength + 5) {
+          // East side of NE ramp
+          if (x >= halfWidth + 5) {
+            const rampProgress = (x - halfWidth - 5) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        } else if (x >= halfWidth - 12 && x <= halfWidth + 5 && z >= halfLength - 5 && z <= halfLength + 20) {
+          // North side of NE ramp
+          if (z >= halfLength + 5) {
+            const rampProgress = (z - halfLength - 5) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        }
+        
+        // Southeast wrap-around ramp
+        if (x >= halfWidth - 5 && x <= halfWidth + 20 && z >= -halfLength - 5 && z <= -halfLength + 12) {
+          // East side of SE ramp
+          if (x >= halfWidth + 5) {
+            const rampProgress = (x - halfWidth - 5) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        } else if (x >= halfWidth - 12 && x <= halfWidth + 5 && z >= -halfLength - 20 && z <= -halfLength + 5) {
+          // South side of SE ramp
+          if (z <= -halfLength - 5) {
+            const rampProgress = (-halfLength - 5 - z) / 15;
+            finalY = (bridge.height + 0.75) * (1 - rampProgress);
+          } else {
+            finalY = bridge.height + 0.75;
+          }
+        }
+      }
+    });
+    
+    // Note: River and object collision is now handled by TerrainCollisionSystem
+    // This component only handles bridge height and ramp transitions
+    
     // Apply movement and rotation
     const hasRotated = controlsActive.current.left || controlsActive.current.right;
     
-    if (isMoving || hasRotated) {
+    if ((isMoving && canMoveToPosition) || hasRotated) {
       // Prevent NaN values
       if (isNaN(rotation)) rotation = position.rotation || 0;
       if (isNaN(x)) x = position.x;
       if (isNaN(z)) z = position.z;
       
-      setPlayerPosition({ x, y, z, rotation });
+      setPlayerPosition({ x, y: finalY, z, rotation });
     }
     
-    if (isMoving && !player.isMoving) {
+    if (isMoving && canMoveToPosition && !player.isMoving) {
       setPlayerMoving(true);
-    } else if (!isMoving && player.isMoving) {
+    } else if ((!isMoving || !canMoveToPosition) && player.isMoving) {
       setPlayerMoving(false);
     }
     
