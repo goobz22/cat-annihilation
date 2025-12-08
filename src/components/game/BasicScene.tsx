@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Box, PerspectiveCamera } from '@react-three/drei';
+import * as THREE from 'three';
 import ForestEnvironment from './ForestEnvironment';
 import CatCharacter from './CatCharacter';
+import SimpleTerrainSystem from './terrain/SimpleTerrainSystem';
+import TerrainCollisionSystem from './terrain/TerrainCollisionSystem';
 import LocalProjectileSystem from './LocalProjectileSystem';
 import LocalEnemySystem from './LocalEnemySystem';
 import GlobalCollisionSystem from './GlobalCollisionSystem';
@@ -208,19 +211,32 @@ const SurvivalScene = () => {
 };
 
 const StoryScene = () => {
+  const playerPosition = useGameStore(state => state.player.position);
+  
+  // Memoize the player position to prevent constant re-renders
+  const playerPos3D = useMemo(
+    () => new THREE.Vector3(playerPosition.x, 0, playerPosition.z),
+    [playerPosition.x, playerPosition.z]
+  );
+  
   return (
     <Canvas shadows>
       <color attach="background" args={['#87CEEB']} />
-      <fog attach="fog" args={['#87CEEB', 30, 150]} />
       <PerspectiveCamera makeDefault position={[0, 12, 15]} fov={75} />
       <CameraFollow />
       <ambientLight intensity={0.5} />
       <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
       <CatCharacter />
-      <ForestEnvironment />
+      {/* Use SimpleTerrainSystem for stability */}
+      <React.Suspense fallback={null}>
+        <SimpleTerrainSystem playerPosition={playerPos3D} />
+      </React.Suspense>
       
       {/* GLOBAL COLLISION SYSTEM */}
       <GlobalCollisionSystem />
+      
+      {/* TERRAIN COLLISION SYSTEM - Rivers and bridges */}
+      <TerrainCollisionSystem />
       
       {/* LOCAL PROJECTILE SYSTEM - Still needed for story combat */}
       <LocalProjectileSystem />

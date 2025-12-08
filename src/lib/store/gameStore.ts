@@ -191,6 +191,7 @@ interface IStoryModeState {
   mysticalConnections: number; // Connection to ancestor spirits (0-100)
   questBookOpen: boolean;
   dialog: IDialog;
+  currentBiome?: 'mist' | 'storm' | 'ember' | 'frost' | 'gathering' | 'neutral'; // Current biome player is in
 }
 
 /**
@@ -366,7 +367,7 @@ const initialCatStats: ICatStats = {
  */
 const initialPlayerState: IPlayerState = {
   cat: null,
-  position: { x: 0, y: 0, z: 0, rotation: 0 },
+      position: { x: 0, y: 2, z: 0, rotation: 0 },
   isMoving: false,
   isRunning: false,
   isJumping: false,

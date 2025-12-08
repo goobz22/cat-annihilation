@@ -20,6 +20,7 @@ const QuestBook = lazy(() => import('./components/ui/QuestBook'));
 const QuestTracker = lazy(() => import('./components/ui/QuestTracker'));
 const QuestObjectiveOverlay = lazy(() => import('./components/ui/QuestObjectiveOverlay'));
 const Dialog = lazy(() => import('./components/ui/Dialog'));
+const Compass = lazy(() => import('./components/ui/Compass'));
 
 function App() {
   return (
@@ -47,6 +48,7 @@ function AppContent() {
       {gameModeSelected && (
         <Suspense fallback={<div className="loading-screen">Loading game...</div>}>
           {/* UI Components */}
+          {storyModeActive && <Compass />}
           <WaveDisplay />
           <WeaponSkills />
           <CatStats />
