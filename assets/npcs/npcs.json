@@ -1,0 +1,392 @@
+{
+  "npcs": [
+    {
+      "id": "mist_shadowwhisker",
+      "name": "Shadowwhisker",
+      "type": "Mentor",
+      "clan": "MistClan",
+      "position": [15.0, 0.5, 20.0],
+      "interactionRadius": 3.5,
+      "modelPath": "models/cats/mist_mentor.glb",
+      "dialogTreeId": "mentor_intro_mist",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "stealth_step",
+          "name": "Stealth Step",
+          "description": "Move silently through the mist, becoming nearly invisible for 5 seconds",
+          "cost": 100,
+          "requiredClan": "MistClan",
+          "requiredLevel": 1
+        },
+        {
+          "abilityId": "shadow_strike",
+          "name": "Shadow Strike",
+          "description": "Strike from the shadows dealing 200% damage on first hit",
+          "cost": 250,
+          "requiredClan": "MistClan",
+          "requiredLevel": 3
+        },
+        {
+          "abilityId": "mist_cloak",
+          "name": "Mist Cloak",
+          "description": "Summon a protective mist that reduces incoming damage by 50% for 10 seconds",
+          "cost": 500,
+          "requiredClan": "MistClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "mist_mistheart",
+      "name": "Mistheart",
+      "type": "ClanLeader",
+      "clan": "MistClan",
+      "position": [20.0, 0.5, 25.0],
+      "interactionRadius": 4.0,
+      "modelPath": "models/cats/mist_leader.glb",
+      "dialogTreeId": "clan_leader_welcome_mist",
+      "quests": ["mist_main_1", "mist_main_2", "mist_main_3"]
+    },
+    {
+      "id": "mist_fogpaw",
+      "name": "Fogpaw",
+      "type": "Merchant",
+      "clan": "MistClan",
+      "position": [18.0, 0.5, 22.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/mist_merchant.glb",
+      "dialogTreeId": "merchant_general",
+      "quests": [],
+      "shopInventory": [
+        {
+          "itemId": "smoke_bomb",
+          "name": "Smoke Bomb",
+          "description": "Creates a cloud of smoke for quick escapes",
+          "price": 50,
+          "stock": -1,
+          "requiredClan": "MistClan"
+        },
+        {
+          "itemId": "shadow_blade",
+          "name": "Shadow Blade",
+          "description": "A blade forged in darkness, increases stealth damage",
+          "price": 300,
+          "stock": 3,
+          "requiredClan": "MistClan",
+          "requiredLevel": 3
+        },
+        {
+          "itemId": "misty_potion",
+          "name": "Misty Potion",
+          "description": "Restores 100 HP and grants brief invisibility",
+          "price": 75,
+          "stock": -1
+        },
+        {
+          "itemId": "stealth_cloak",
+          "name": "Stealth Cloak",
+          "description": "Lightweight cloak that enhances stealth abilities",
+          "price": 500,
+          "stock": 1,
+          "requiredClan": "MistClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "storm_thunderstrike",
+      "name": "Thunderstrike",
+      "type": "Mentor",
+      "clan": "StormClan",
+      "position": [-15.0, 0.5, 20.0],
+      "interactionRadius": 3.5,
+      "modelPath": "models/cats/storm_mentor.glb",
+      "dialogTreeId": "mentor_intro_storm",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "lightning_dash",
+          "name": "Lightning Dash",
+          "description": "Dash forward at lightning speed, leaving a trail of electricity",
+          "cost": 100,
+          "requiredClan": "StormClan",
+          "requiredLevel": 1
+        },
+        {
+          "abilityId": "thunder_roar",
+          "name": "Thunder Roar",
+          "description": "Release a powerful roar that stuns nearby enemies for 3 seconds",
+          "cost": 250,
+          "requiredClan": "StormClan",
+          "requiredLevel": 3
+        },
+        {
+          "abilityId": "storm_fury",
+          "name": "Storm Fury",
+          "description": "Channel the power of the storm, increasing attack speed by 50% for 15 seconds",
+          "cost": 500,
+          "requiredClan": "StormClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "storm_stormstar",
+      "name": "Stormstar",
+      "type": "ClanLeader",
+      "clan": "StormClan",
+      "position": [-20.0, 0.5, 25.0],
+      "interactionRadius": 4.0,
+      "modelPath": "models/cats/storm_leader.glb",
+      "dialogTreeId": "clan_leader_welcome_storm",
+      "quests": ["storm_main_1", "storm_main_2", "storm_main_3"]
+    },
+    {
+      "id": "storm_lightningclaw",
+      "name": "Lightningclaw",
+      "type": "Trainer",
+      "clan": "StormClan",
+      "position": [-18.0, 0.5, 22.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/storm_trainer.glb",
+      "dialogTreeId": "trainer_general",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "speed_burst",
+          "name": "Speed Burst",
+          "description": "Temporarily increase movement speed by 75%",
+          "cost": 150,
+          "requiredClan": "StormClan",
+          "requiredLevel": 2
+        },
+        {
+          "abilityId": "chain_lightning",
+          "name": "Chain Lightning",
+          "description": "Strike an enemy with lightning that chains to nearby targets",
+          "cost": 400,
+          "requiredClan": "StormClan",
+          "requiredLevel": 4
+        }
+      ]
+    },
+    {
+      "id": "ember_flamefur",
+      "name": "Flamefur",
+      "type": "Mentor",
+      "clan": "EmberClan",
+      "position": [15.0, 0.5, -20.0],
+      "interactionRadius": 3.5,
+      "modelPath": "models/cats/ember_mentor.glb",
+      "dialogTreeId": "mentor_intro_ember",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "fireball",
+          "name": "Fireball",
+          "description": "Launch a ball of fire that explodes on impact",
+          "cost": 100,
+          "requiredClan": "EmberClan",
+          "requiredLevel": 1
+        },
+        {
+          "abilityId": "flame_shield",
+          "name": "Flame Shield",
+          "description": "Surround yourself with flames that damage attackers",
+          "cost": 250,
+          "requiredClan": "EmberClan",
+          "requiredLevel": 3
+        },
+        {
+          "abilityId": "inferno",
+          "name": "Inferno",
+          "description": "Create a massive pillar of fire that burns all enemies in an area",
+          "cost": 500,
+          "requiredClan": "EmberClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "ember_blazestar",
+      "name": "Blazestar",
+      "type": "ClanLeader",
+      "clan": "EmberClan",
+      "position": [20.0, 0.5, -25.0],
+      "interactionRadius": 4.0,
+      "modelPath": "models/cats/ember_leader.glb",
+      "dialogTreeId": "clan_leader_welcome_ember",
+      "quests": ["ember_main_1", "ember_main_2", "ember_main_3"]
+    },
+    {
+      "id": "ember_ashwhisker",
+      "name": "Ashwhisker",
+      "type": "Merchant",
+      "clan": "EmberClan",
+      "position": [18.0, 0.5, -22.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/ember_merchant.glb",
+      "dialogTreeId": "merchant_general",
+      "quests": [],
+      "shopInventory": [
+        {
+          "itemId": "fire_essence",
+          "name": "Fire Essence",
+          "description": "Pure fire energy used to enhance abilities",
+          "price": 100,
+          "stock": -1,
+          "requiredClan": "EmberClan"
+        },
+        {
+          "itemId": "flame_sword",
+          "name": "Flame Sword",
+          "description": "A sword wreathed in eternal flames",
+          "price": 350,
+          "stock": 2,
+          "requiredClan": "EmberClan",
+          "requiredLevel": 3
+        },
+        {
+          "itemId": "phoenix_feather",
+          "name": "Phoenix Feather",
+          "description": "Revives you once upon death with 50% HP",
+          "price": 1000,
+          "stock": 1,
+          "requiredClan": "EmberClan",
+          "requiredLevel": 7
+        },
+        {
+          "itemId": "burning_potion",
+          "name": "Burning Potion",
+          "description": "Restores 100 HP and increases fire damage for 60 seconds",
+          "price": 75,
+          "stock": -1
+        }
+      ]
+    },
+    {
+      "id": "frost_icepelt",
+      "name": "Icepelt",
+      "type": "Mentor",
+      "clan": "FrostClan",
+      "position": [-15.0, 0.5, -20.0],
+      "interactionRadius": 3.5,
+      "modelPath": "models/cats/frost_mentor.glb",
+      "dialogTreeId": "mentor_intro_frost",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "ice_shard",
+          "name": "Ice Shard",
+          "description": "Launch sharp ice shards at enemies, slowing them by 30%",
+          "cost": 100,
+          "requiredClan": "FrostClan",
+          "requiredLevel": 1
+        },
+        {
+          "abilityId": "frozen_armor",
+          "name": "Frozen Armor",
+          "description": "Coat yourself in ice, reducing damage by 40%",
+          "cost": 250,
+          "requiredClan": "FrostClan",
+          "requiredLevel": 3
+        },
+        {
+          "abilityId": "blizzard",
+          "name": "Blizzard",
+          "description": "Summon a devastating blizzard that freezes all enemies in the area",
+          "cost": 500,
+          "requiredClan": "FrostClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "frost_winterstar",
+      "name": "Winterstar",
+      "type": "ClanLeader",
+      "clan": "FrostClan",
+      "position": [-20.0, 0.5, -25.0],
+      "interactionRadius": 4.0,
+      "modelPath": "models/cats/frost_leader.glb",
+      "dialogTreeId": "clan_leader_welcome_frost",
+      "quests": ["frost_main_1", "frost_main_2", "frost_main_3"]
+    },
+    {
+      "id": "frost_snowpaw",
+      "name": "Snowpaw",
+      "type": "Healer",
+      "clan": "FrostClan",
+      "position": [-18.0, 0.5, -22.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/frost_healer.glb",
+      "dialogTreeId": "healer_general",
+      "quests": [],
+      "shopInventory": [
+        {
+          "itemId": "healing_snow",
+          "name": "Healing Snow",
+          "description": "Restores 150 HP instantly",
+          "price": 50,
+          "stock": -1
+        },
+        {
+          "itemId": "frost_potion",
+          "name": "Frost Potion",
+          "description": "Restores 100 HP and increases ice resistance for 60 seconds",
+          "price": 75,
+          "stock": -1
+        },
+        {
+          "itemId": "ice_crystal",
+          "name": "Ice Crystal",
+          "description": "Rare crystal used to enhance ice abilities",
+          "price": 200,
+          "stock": 5,
+          "requiredClan": "FrostClan"
+        },
+        {
+          "itemId": "winter_blessing",
+          "name": "Winter's Blessing",
+          "description": "Grants immunity to all status effects for 30 seconds",
+          "price": 500,
+          "stock": 2,
+          "requiredClan": "FrostClan",
+          "requiredLevel": 5
+        }
+      ]
+    },
+    {
+      "id": "neutral_wanderer",
+      "name": "Mysterious Wanderer",
+      "type": "QuestGiver",
+      "clan": "None",
+      "position": [0.0, 0.5, 30.0],
+      "interactionRadius": 3.5,
+      "modelPath": "models/cats/wanderer.glb",
+      "dialogTreeId": "wanderer_intro",
+      "quests": ["side_quest_1", "side_quest_2"]
+    },
+    {
+      "id": "neutral_elder",
+      "name": "Elder Whiskers",
+      "type": "Mentor",
+      "clan": "None",
+      "position": [0.0, 0.5, -30.0],
+      "interactionRadius": 4.0,
+      "modelPath": "models/cats/elder.glb",
+      "dialogTreeId": "elder_wisdom",
+      "quests": [],
+      "trainingOptions": [
+        {
+          "abilityId": "ancient_wisdom",
+          "name": "Ancient Wisdom",
+          "description": "Gain 25% more experience from all sources",
+          "cost": 750,
+          "requiredLevel": 10
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,224 @@
+#version 450
+
+// Clustered Lighting Compute Shader
+// Assigns lights to frustum clusters for efficient deferred rendering
+
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
+
+#include "../common/constants.glsl"
+#include "../common/utils.glsl"
+
+// Camera data
+layout(set = 0, binding = 0) uniform CameraData {
+    mat4 view;
+    mat4 projection;
+    mat4 viewProj;
+    mat4 invViewProj;
+    vec3 cameraPos;
+    float nearPlane;
+    float farPlane;
+} camera;
+
+// Light data
+struct PointLight {
+    vec3 position;
+    float radius;
+    vec3 color;
+    float intensity;
+};
+
+struct SpotLight {
+    vec3 position;
+    float range;
+    vec3 direction;
+    float innerConeAngle;
+    vec3 color;
+    float outerConeAngle;
+    float intensity;
+    vec3 padding;
+};
+
+layout(set = 0, binding = 1) uniform LightData {
+    uint pointLightCount;
+    uint spotLightCount;
+    uint padding1;
+    uint padding2;
+    PointLight pointLights[256];
+    SpotLight spotLights[128];
+} lights;
+
+// Output buffers
+layout(set = 0, binding = 2) buffer ClusterLightIndices {
+    uint data[];
+} clusterLightIndices;
+
+layout(set = 0, binding = 3) buffer ClusterLightGrid {
+    uvec2 data[]; // x = offset, y = count
+} clusterLightGrid;
+
+layout(set = 0, binding = 4) buffer AtomicCounter {
+    uint counter;
+} atomicCounter;
+
+// Shared memory for cluster bounds
+shared vec3 clusterMinAABB;
+shared vec3 clusterMaxAABB;
+shared uint clusterLightCount;
+shared uint clusterLightList[MAX_LIGHTS_PER_CLUSTER];
+
+// Calculate cluster AABB in view space
+void calculateClusterAABB(uvec3 clusterIndex) {
+    vec2 screenSize = vec2(CLUSTER_GRID_X, CLUSTER_GRID_Y);
+    vec2 tileSize = 1.0 / screenSize;
+
+    // Screen space bounds
+    vec2 minScreen = vec2(clusterIndex.xy) * tileSize;
+    vec2 maxScreen = vec2(clusterIndex.xy + uvec2(1, 1)) * tileSize;
+
+    // Convert to NDC
+    minScreen = minScreen * 2.0 - 1.0;
+    maxScreen = maxScreen * 2.0 - 1.0;
+
+    // Calculate depth bounds (logarithmic distribution)
+    float nearPlane = camera.nearPlane;
+    float farPlane = camera.farPlane;
+
+    float zSliceMin = float(clusterIndex.z) / float(CLUSTER_GRID_Z);
+    float zSliceMax = float(clusterIndex.z + 1) / float(CLUSTER_GRID_Z);
+
+    float minDepth = nearPlane * pow(farPlane / nearPlane, zSliceMin);
+    float maxDepth = nearPlane * pow(farPlane / nearPlane, zSliceMax);
+
+    // Compute 8 corners of the cluster frustum in view space
+    vec3 corners[8];
+    mat4 invProj = inverse(camera.projection);
+
+    for (int i = 0; i < 8; i++) {
+        vec2 screenPos = (i & 1) != 0 ? maxScreen : minScreen;
+        screenPos.y = (i & 2) != 0 ? maxScreen.y : minScreen.y;
+        float depth = (i & 4) != 0 ? maxDepth : minDepth;
+
+        vec4 viewPos = invProj * vec4(screenPos, depth / farPlane, 1.0);
+        corners[i] = viewPos.xyz / viewPos.w;
+    }
+
+    // Calculate AABB from corners
+    vec3 minAABB = corners[0];
+    vec3 maxAABB = corners[0];
+
+    for (int i = 1; i < 8; i++) {
+        minAABB = min(minAABB, corners[i]);
+        maxAABB = max(maxAABB, corners[i]);
+    }
+
+    clusterMinAABB = minAABB;
+    clusterMaxAABB = maxAABB;
+}
+
+// Test if a sphere intersects an AABB
+bool sphereAABBIntersection(vec3 center, float radius, vec3 aabbMin, vec3 aabbMax) {
+    vec3 closestPoint = clamp(center, aabbMin, aabbMax);
+    float distanceSquared = dot(closestPoint - center, closestPoint - center);
+    return distanceSquared <= radius * radius;
+}
+
+// Test if a cone intersects an AABB
+bool coneAABBIntersection(vec3 apex, vec3 direction, float range, float angle, vec3 aabbMin, vec3 aabbMax) {
+    // Simplified cone-AABB test
+    // First check sphere intersection for quick rejection
+    if (!sphereAABBIntersection(apex, range, aabbMin, aabbMax)) {
+        return false;
+    }
+
+    // Check if any corner of the AABB is inside the cone
+    vec3 corners[8] = {
+        vec3(aabbMin.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMax.z)
+    };
+
+    for (int i = 0; i < 8; i++) {
+        vec3 toCorner = corners[i] - apex;
+        float dist = length(toCorner);
+
+        if (dist < range) {
+            float cosAngle = dot(normalize(toCorner), direction);
+            if (cosAngle > cos(angle)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void main() {
+    uvec3 clusterIndex = gl_WorkGroupID.xyz;
+    uint clusterLinearIndex = clusterIndexToLinear(clusterIndex);
+    uint localThreadIndex = gl_LocalInvocationIndex;
+
+    // Initialize shared memory
+    if (localThreadIndex == 0) {
+        clusterLightCount = 0;
+        calculateClusterAABB(clusterIndex);
+    }
+
+    barrier();
+
+    // Each thread processes a subset of lights
+    uint lightStride = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    uint threadLightStart = localThreadIndex;
+
+    // Test point lights
+    for (uint i = threadLightStart; i < lights.pointLightCount; i += lightStride) {
+        PointLight light = lights.pointLights[i];
+
+        // Transform light position to view space
+        vec3 lightViewPos = (camera.view * vec4(light.position, 1.0)).xyz;
+
+        // Test intersection
+        if (sphereAABBIntersection(lightViewPos, light.radius, clusterMinAABB, clusterMaxAABB)) {
+            uint index = atomicAdd(clusterLightCount, 1);
+            if (index < MAX_LIGHTS_PER_CLUSTER) {
+                clusterLightList[index] = i; // Point light index
+            }
+        }
+    }
+
+    // Test spot lights
+    for (uint i = threadLightStart; i < lights.spotLightCount; i += lightStride) {
+        SpotLight light = lights.spotLights[i];
+
+        // Transform light to view space
+        vec3 lightViewPos = (camera.view * vec4(light.position, 1.0)).xyz;
+        vec3 lightViewDir = normalize((camera.view * vec4(light.direction, 0.0)).xyz);
+
+        // Test intersection
+        if (coneAABBIntersection(lightViewPos, lightViewDir, light.range,
+                                light.outerConeAngle, clusterMinAABB, clusterMaxAABB)) {
+            uint index = atomicAdd(clusterLightCount, 1);
+            if (index < MAX_LIGHTS_PER_CLUSTER) {
+                clusterLightList[index] = i | 0x80000000u; // Spot light index with high bit set
+            }
+        }
+    }
+
+    barrier();
+
+    // Write results to global memory (first thread only)
+    if (localThreadIndex == 0) {
+        uint lightCount = min(clusterLightCount, MAX_LIGHTS_PER_CLUSTER);
+        uint offset = atomicAdd(atomicCounter.counter, lightCount);
+
+        clusterLightGrid.data[clusterLinearIndex] = uvec2(offset, lightCount);
+
+        for (uint i = 0; i < lightCount; i++) {
+            clusterLightIndices.data[offset + i] = clusterLightList[i];
+        }
+    }
+}

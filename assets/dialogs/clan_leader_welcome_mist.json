@@ -1,0 +1,203 @@
+{
+  "id": "clan_leader_welcome_mist",
+  "name": "MistClan Leader Welcome",
+  "startNode": "first_meeting",
+  "nodes": [
+    {
+      "id": "first_meeting",
+      "speaker": "Mistheart",
+      "text": "Welcome to MistClan's territory, traveler. I am Mistheart, leader of those who walk in shadow. Word has reached me of your deeds. You show promise, and MistClan could use a warrior of your caliber.",
+      "options": [
+        {
+          "text": "I am honored, Mistheart. What can I do for MistClan?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Tell me about MistClan's current situation.",
+          "responseId": "clan_status"
+        },
+        {
+          "text": "I'm just passing through.",
+          "responseId": "just_visiting"
+        }
+      ]
+    },
+    {
+      "id": "offer_service",
+      "speaker": "Mistheart",
+      "text": "Your eagerness is commendable. MistClan faces many challenges. The dog invasion grows bolder each day, and our scouts report strange movements in the ancient ruins to the east. But first, I must know: are you willing to join our clan and uphold our ways?",
+      "options": [
+        {
+          "text": "I pledge myself to MistClan.",
+          "responseId": "join_clan",
+          "requiredClan": "None"
+        },
+        {
+          "text": "What does joining MistClan entail?",
+          "responseId": "explain_joining"
+        },
+        {
+          "text": "I prefer to remain independent for now.",
+          "responseId": "decline_join"
+        }
+      ]
+    },
+    {
+      "id": "clan_status",
+      "speaker": "Mistheart",
+      "text": "Our clan endures, as we always have, hidden from those who would destroy us. The dog armies have pushed us from our ancestral hunting grounds. StormClan and EmberClan bicker over territory while the real threat grows. We need allies, but more importantly, we need warriors who can strike from the shadows.",
+      "options": [
+        {
+          "text": "I want to help. What needs to be done?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "How are the other clans responding?",
+          "responseId": "other_clans"
+        }
+      ]
+    },
+    {
+      "id": "explain_joining",
+      "speaker": "Mistheart",
+      "text": "To join MistClan is to embrace the shadows as your home. You will have access to our mentors' teachings, our merchants' wares, and most importantly, you will have the backing of every MistClan warrior. In return, we ask for your loyalty and your claws when the clan is threatened.",
+      "options": [
+        {
+          "text": "I accept. I will join MistClan.",
+          "responseId": "join_clan"
+        },
+        {
+          "text": "This is a big decision. I need time to think.",
+          "responseId": "need_time"
+        }
+      ]
+    },
+    {
+      "id": "join_clan",
+      "speaker": "Mistheart",
+      "text": "Then let the mist bear witness to your oath. From this moment forward, you are a member of MistClan. Walk in shadow, strike with precision, and never forget: we are the unseen blade. Shadowwhisker will teach you our ways. Now, there is urgent business that requires your unique skills.",
+      "autoAdvance": false,
+      "options": [
+        {
+          "text": "What is this urgent business?",
+          "responseId": "first_quest"
+        }
+      ]
+    },
+    {
+      "id": "first_quest",
+      "speaker": "Mistheart",
+      "text": "Dog scouts have been spotted near our supply cache in the Whispering Woods. We cannot afford to lose those supplies. I need you to eliminate the scouts quietly - no survivors, no witnesses. Can you handle this?",
+      "options": [
+        {
+          "text": "Consider it done. I'll leave no trace.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "How many scouts are we talking about?",
+          "responseId": "quest_details"
+        }
+      ]
+    },
+    {
+      "id": "quest_details",
+      "speaker": "Mistheart",
+      "text": "Our watchers counted at least five, possibly more. They're setting up a forward camp. Strike before they can send word back to their pack. Use the skills Shadowwhisker taught you - this is what stealth is for.",
+      "options": [
+        {
+          "text": "Understood. I won't fail you.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if they've already sent messengers?",
+          "responseId": "contingency"
+        }
+      ]
+    },
+    {
+      "id": "contingency",
+      "speaker": "Mistheart",
+      "text": "Then we adapt. MistClan always has a backup plan. But let's not borrow trouble before it arrives. Focus on the task at paw. Eliminate the scouts, and we'll deal with whatever comes next together.",
+      "options": [
+        {
+          "text": "You're right. I'll handle the scouts.",
+          "responseId": "accept_quest"
+        }
+      ]
+    },
+    {
+      "id": "accept_quest",
+      "speaker": "Mistheart",
+      "text": "Excellent. Return to me when the deed is done. May the mist conceal your approach and the shadows guide your claws. Good hunting, warrior.",
+      "options": [
+        {
+          "text": "For MistClan.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "other_clans",
+      "speaker": "Mistheart",
+      "text": "Stormstar speaks of unity but hoards resources. Blazestar wants to meet the dogs in open battle - suicidal. Winterstar at least has sense, but FrostClan keeps to themselves. We can only rely on our own strength and cunning.",
+      "options": [
+        {
+          "text": "Perhaps I can help bridge these divisions?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Every clan for themselves then.",
+          "responseId": "clan_status"
+        }
+      ]
+    },
+    {
+      "id": "just_visiting",
+      "speaker": "Mistheart",
+      "text": "I see. Then I will simply say this: these lands grow more dangerous by the day. If you have no clan to watch your back, you may not survive what's coming. Consider your options carefully, wanderer.",
+      "options": [
+        {
+          "text": "You've given me much to think about.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Perhaps you're right. Tell me more about joining.",
+          "responseId": "explain_joining"
+        }
+      ]
+    },
+    {
+      "id": "decline_join",
+      "speaker": "Mistheart",
+      "text": "A pity. You would have made a fine addition to our ranks. The offer remains open, should you change your mind. But know this: in the coming storm, those without allies will be swept away.",
+      "options": [
+        {
+          "text": "I'll keep that in mind.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "need_time",
+      "speaker": "Mistheart",
+      "text": "Wise to consider carefully. But do not take too long - the mist waits for no one, and neither do our enemies. When you're ready, you know where to find me.",
+      "options": [
+        {
+          "text": "Thank you for understanding.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Mistheart",
+      "text": "Walk carefully, traveler. The shadows have eyes.",
+      "options": [
+        {
+          "text": "Farewell, Mistheart.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "CatAnnihilation"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [0]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "SpellOrb",
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "name": "SpellOrbMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3",
+      "max": [0.15, 0.15, 0.15],
+      "min": [-0.15, -0.15, -0.15]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 96,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 216
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 216,
+      "byteLength": 216
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 432,
+      "byteLength": 192
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 624,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAgD4AAAA+AAAAAAAAgD4AAAA+AAAAPgAAgD4AAAA+AAAAPgAAgD4AAAAAAAAAAL6oqio/AAAAAAAAAAC+qKoqPwAAAD6oqiq/AAAAAAAAAAC+qKoqvwAAAD6oqiq/AAAAPqiqqj4AAAA+qKqqPgAAAD4AAIA+AAAAPgAAgD4AAAA+qKqqPgAAAD6oqqo+AAAAPqiqqr4AAAA+qKqqvgAAAD6oqiq/AAAAPqiqqr4AAAA+qKoqvwAAAD6oqqq+AAAAPqiqqj4AAAA+qKoqPwAAAD6oqqo+AAAAPqiqqj4AAAA+AACAPgAAAD6oqqo+AAAAPqiqqj4AAAA+AAAAPgAAgD6oqqo+AAAAPqiqqj4AAAAAAACAP6iqqj4AAAAAqKqqPgAAAD6oqqo+AAAAAKiqKr8AAAAAAACAP6iqKr8AAAA+qKoqvwAAAACoqiq/AAAAPqiqKr8AAAAAqKqqvgAAAD6oqqq+AAAAAKiqqr4AAAA+qKqqvgAAAACoqqo+AAAAPqiqqj4AAAAAqKqqPgAAAD6oqqo+AAAAAKiqqr4AAAA+qKqqvgAAAACoqqq+AAAAPqiqqr4AAAAAqKoqPwAAAD6oqio/AAAAAKiqKj8AAAA+qKoqPwAAAACoqqo+AAAAPqiqqj4AAAAAqKqqPgAAAD6oqqo+AAAAPgAAgD4AAAA+AAAAvgAAgD4AAAA+qKqqvgAAAD6oqqq+AAAAPgAAgL4AAAA+qKoqvwAAAD6oqqq+AAAAPgAAgL4AAAA+AAAAAAAAAD4AAIA+AAAAPgAAgD4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+AAAAPgAAgD4AAAA+AAAAPgAAgD4AAAAAqKoqPwAAAACoqqo+AAAAPqiqqj4AAAAAqKoqPwAAAD6oqio/AAAAPqiqqj4AAAAAqKoqvwAAAACoqqq+AAAAPqiqqr4AAAAAqKoqvwAAAD6oqiq/AAAAPqiqqr4AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAIAAwAEAAUABgAHAAgACQAKAAsADAANAA4ADwAQABEAEgATABQAFQABAAIAAwACAAMABAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUABgAHAAgABAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUACQAKAAsACAAJAAoACwAMAA0ADgAPABAAEQASABMAFAAVAAwADQAOAA8AEAARAAkACgALAAwADQAOAA8AEAARABIAEwAUABUA"
+    }
+  ],
+  "materials": [
+    {
+      "name": "SpellMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.5, 0.3, 1.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      "emissiveFactor": [0.3, 0.2, 0.6]
+    }
+  ]
+}

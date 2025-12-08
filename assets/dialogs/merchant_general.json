@@ -1,0 +1,287 @@
+{
+  "id": "merchant_general",
+  "name": "General Merchant Dialog",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "$merchantName",
+      "text": "Welcome, welcome! You've come to the right place if you're looking for quality goods. I've got everything a warrior could need - weapons, potions, armor, you name it!",
+      "options": [
+        {
+          "text": "Show me what you have for sale.",
+          "responseId": "open_shop"
+        },
+        {
+          "text": "What's your best item?",
+          "responseId": "best_item"
+        },
+        {
+          "text": "Any special deals today?",
+          "responseId": "special_deals"
+        },
+        {
+          "text": "Just browsing, thanks.",
+          "responseId": "browsing"
+        }
+      ]
+    },
+    {
+      "id": "open_shop",
+      "speaker": "$merchantName",
+      "text": "Certainly! Take your time, look around. Every item has been personally selected for quality. If you're a member of $clanName, you'll find I offer special prices to clan members. Loyalty should be rewarded, after all!",
+      "options": [
+        {
+          "text": "Let me see your inventory.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "Tell me about your clan-specific items.",
+          "responseId": "clan_items"
+        },
+        {
+          "text": "Never mind, I'll come back later.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "best_item",
+      "speaker": "$merchantName",
+      "text": "Ah, you have a discerning eye! My pride and joy varies by what you're after. For raw power, nothing beats the legendary weapons. For survival, the revival items are priceless. For a warrior of $clanName, I'd recommend the clan-specific equipment - tailored to your fighting style.",
+      "options": [
+        {
+          "text": "Show me the legendary weapons.",
+          "responseId": "legendary_items"
+        },
+        {
+          "text": "I'm interested in survival items.",
+          "responseId": "survival_items"
+        },
+        {
+          "text": "Let me browse everything.",
+          "responseId": "show_inventory"
+        }
+      ]
+    },
+    {
+      "id": "special_deals",
+      "speaker": "$merchantName",
+      "text": "Always! I'm running a special on healing potions - buy three, get one free. And for proven warriors of level 5 or higher, I've unlocked my premium collection. The prices aren't cheap, but the quality speaks for itself.",
+      "options": [
+        {
+          "text": "I'll take those healing potions.",
+          "responseId": "buy_potions"
+        },
+        {
+          "text": "Show me the premium collection.",
+          "responseId": "premium_items",
+          "requiredLevel": 5
+        },
+        {
+          "text": "What else do you have?",
+          "responseId": "open_shop"
+        }
+      ]
+    },
+    {
+      "id": "clan_items",
+      "speaker": "$merchantName",
+      "text": "Clan-specific items are my specialty! Each clan has unique needs. MistClan warriors prefer stealth-enhancing gear. StormClan needs speed amplifiers. EmberClan requires fire-resistant armor and amplifiers. FrostClan wants ice-infused equipment. I stock them all!",
+      "options": [
+        {
+          "text": "Show me items for my clan.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "Can I buy items from other clans?",
+          "responseId": "cross_clan"
+        }
+      ]
+    },
+    {
+      "id": "cross_clan",
+      "speaker": "$merchantName",
+      "text": "Technically yes, but most clan-specific items are attuned to their respective clan's energy. A MistClan warrior using EmberClan fire magic? Doesn't work well, trust me. Stick to what your clan specializes in, and you'll see much better results.",
+      "options": [
+        {
+          "text": "That makes sense. Show me my clan's items.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "What about neutral items?",
+          "responseId": "neutral_items"
+        }
+      ]
+    },
+    {
+      "id": "neutral_items",
+      "speaker": "$merchantName",
+      "text": "Ah yes, the universal goods! Healing potions, basic weapons, utility items - these work for everyone regardless of clan. They're usually cheaper too. Perfect for warriors just starting out or those who haven't chosen a clan yet.",
+      "options": [
+        {
+          "text": "Let me see those.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "Actually, show me everything.",
+          "responseId": "show_inventory"
+        }
+      ]
+    },
+    {
+      "id": "legendary_items",
+      "speaker": "$merchantName",
+      "text": "The legendary tier! These are rare finds, I'll tell you. Phoenix Feathers that bring you back from death, ancient weapons that channel pure elemental energy, armor blessed by the clan founders themselves. They cost a fortune, but they might just save your life when it matters most.",
+      "options": [
+        {
+          "text": "I can afford it. Show me.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "Maybe when I have more coin.",
+          "responseId": "save_up"
+        }
+      ]
+    },
+    {
+      "id": "survival_items",
+      "speaker": "$merchantName",
+      "text": "Smart thinking! The best warriors aren't the strongest, they're the ones who survive. I've got healing potions of all strengths, revival items, resistance buffs, and emergency escape tools. Can't win a fight if you're dead, right?",
+      "options": [
+        {
+          "text": "Show me what you've got.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "How much for a full survival kit?",
+          "responseId": "survival_kit"
+        }
+      ]
+    },
+    {
+      "id": "survival_kit",
+      "speaker": "$merchantName",
+      "text": "A survival kit? Let me put together a package for you: three healing potions, one revival item, a resistance buff, and an escape tool. Normally 500 coins total, but I can bundle it for 400. Deal?",
+      "options": [
+        {
+          "text": "Deal! I'll take it.",
+          "responseId": "buy_survival_kit"
+        },
+        {
+          "text": "Let me think about it.",
+          "responseId": "open_shop"
+        }
+      ]
+    },
+    {
+      "id": "buy_potions",
+      "speaker": "$merchantName",
+      "text": "Excellent choice! Healing potions are the backbone of any warrior's inventory. That's three for the price of three, plus one free. You won't regret it!",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.0,
+      "nextNode": "transaction_complete"
+    },
+    {
+      "id": "buy_survival_kit",
+      "speaker": "$merchantName",
+      "text": "Wonderful! You won't find a better deal anywhere. Let me package that up for you. Stay safe out there!",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.0,
+      "nextNode": "transaction_complete"
+    },
+    {
+      "id": "premium_items",
+      "speaker": "$merchantName",
+      "text": "Ah, a warrior of distinction! The premium collection is not for the faint of heart or light of purse. These are items collected from ancient battlefields, enhanced by master craftscats, and tested in real combat. Each one is unique.",
+      "options": [
+        {
+          "text": "I'm interested. Open your collection.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "What makes them so special?",
+          "responseId": "premium_details"
+        }
+      ]
+    },
+    {
+      "id": "premium_details",
+      "speaker": "$merchantName",
+      "text": "Each premium item has been enhanced beyond normal limits. Weapons that never dull, armor that repairs itself, potions with permanent effects. They're investments in your future. The kind of gear that legendary warriors are remembered for wielding.",
+      "options": [
+        {
+          "text": "Let me see them.",
+          "responseId": "show_inventory"
+        },
+        {
+          "text": "I'll need to save up first.",
+          "responseId": "save_up"
+        }
+      ]
+    },
+    {
+      "id": "save_up",
+      "speaker": "$merchantName",
+      "text": "Wise to plan ahead! I'll keep my best items in stock for you. Complete some quests, take down some dogs, and you'll have the coin in no time. I'll be here when you're ready!",
+      "options": [
+        {
+          "text": "Thanks. I'll be back.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Show me what I can afford now.",
+          "responseId": "show_inventory"
+        }
+      ]
+    },
+    {
+      "id": "show_inventory",
+      "speaker": "$merchantName",
+      "text": "Here's my complete inventory. Take your time, examine the items, and let me know if you have any questions. Remember, quality costs coin, but cheap gear costs lives!",
+      "options": [
+        {
+          "text": "Thanks for your help.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "transaction_complete",
+      "speaker": "$merchantName",
+      "text": "Pleasure doing business with you! Come back anytime. And if you find any rare materials out there, I buy those too!",
+      "options": [
+        {
+          "text": "Will do. Goodbye!",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "browsing",
+      "speaker": "$merchantName",
+      "text": "Of course, of course! Browse to your heart's content. No pressure. When you're ready to buy, just give me a yowl!",
+      "options": [
+        {
+          "text": "Actually, let me see your wares.",
+          "responseId": "open_shop"
+        },
+        {
+          "text": "Thanks, I'll come back later.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "$merchantName",
+      "text": "Safe travels, warrior! May your claws stay sharp and your coin purse heavy!",
+      "options": [
+        {
+          "text": "Goodbye!",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

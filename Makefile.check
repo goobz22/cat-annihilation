@@ -1,0 +1,117 @@
+# Makefile.check - Syntax checking for Cat Annihilation C++ files
+# Uses stub headers to check compilation without linking
+
+# Compiler settings
+CXX := $(shell which g++ clang++ c++ 2>/dev/null | head -1)
+CXXFLAGS := -std=c++17 -fsyntax-only -Wall -Wextra
+INCLUDES := -I. -Iengine -Igame -Ibuild_stubs
+DEFINES := -DVK_NO_PROTOTYPES -DUSING_STUBS
+
+# Project directories
+ENGINE_DIR := engine
+GAME_DIR := game
+BUILD_STUBS := build_stubs
+
+# Find all C++ files
+ENGINE_SOURCES := $(shell find $(ENGINE_DIR) -name "*.cpp" 2>/dev/null)
+GAME_SOURCES := $(shell find $(GAME_DIR) -name "*.cpp" 2>/dev/null)
+ALL_SOURCES := $(ENGINE_SOURCES) $(GAME_SOURCES)
+
+# Find all header files
+ENGINE_HEADERS := $(shell find $(ENGINE_DIR) -name "*.hpp" -o -name "*.h" 2>/dev/null)
+GAME_HEADERS := $(shell find $(GAME_DIR) -name "*.hpp" -o -name "*.h" 2>/dev/null)
+ALL_HEADERS := $(ENGINE_HEADERS) $(GAME_HEADERS)
+
+# Marker files for successful checks
+CHECK_DIR := .check_markers
+SOURCE_CHECKS := $(patsubst %.cpp,$(CHECK_DIR)/%.checked,$(ALL_SOURCES))
+HEADER_CHECKS := $(patsubst %.hpp,$(CHECK_DIR)/%.h_checked,$(ALL_HEADERS))
+HEADER_CHECKS += $(patsubst %.h,$(CHECK_DIR)/%.h_checked,$(filter %.h,$(ALL_HEADERS)))
+
+.PHONY: all clean check-sources check-headers report help
+
+# Default target
+all: check-sources check-headers report
+
+# Check compiler exists
+check-compiler:
+	@if [ -z "$(CXX)" ]; then \
+		echo "ERROR: No C++ compiler found!"; \
+		echo "Please install g++ or clang++"; \
+		exit 1; \
+	fi
+	@echo "Using compiler: $(CXX)"
+
+# Check all source files
+check-sources: check-compiler $(SOURCE_CHECKS)
+	@echo "Source file syntax check complete"
+
+# Check all header files
+check-headers: check-compiler $(HEADER_CHECKS)
+	@echo "Header file syntax check complete"
+
+# Pattern rule for checking .cpp files
+$(CHECK_DIR)/%.checked: %.cpp
+	@mkdir -p $(dir $@)
+	@echo "Checking $<..."
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFINES) $< && touch $@ || \
+		(echo "FAILED: $<"; exit 1)
+
+# Pattern rule for checking .hpp files
+$(CHECK_DIR)/%.h_checked: %.hpp
+	@mkdir -p $(dir $@)
+	@echo "Checking $<..."
+	@echo '#include "$<"' | $(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFINES) -x c++ - && touch $@ || \
+		(echo "FAILED: $<"; exit 1)
+
+# Pattern rule for checking .h files
+$(CHECK_DIR)/%.h_checked: %.h
+	@mkdir -p $(dir $@)
+	@echo "Checking $<..."
+	@echo '#include "$<"' | $(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFINES) -x c++ - && touch $@ || \
+		(echo "FAILED: $<"; exit 1)
+
+# Generate report
+report:
+	@echo ""
+	@echo "=========================================="
+	@echo "COMPILATION CHECK REPORT"
+	@echo "=========================================="
+	@echo "Total source files: $(words $(ALL_SOURCES))"
+	@echo "Total header files: $(words $(ALL_HEADERS))"
+	@echo ""
+	@if [ -d "$(CHECK_DIR)" ]; then \
+		CHECKED=$$(find $(CHECK_DIR) -name "*.checked" -o -name "*.h_checked" 2>/dev/null | wc -l); \
+		TOTAL=$$(($(words $(ALL_SOURCES)) + $(words $(ALL_HEADERS)))); \
+		echo "Files checked: $$CHECKED / $$TOTAL"; \
+		if [ $$CHECKED -eq $$TOTAL ]; then \
+			echo "Status: ✓ ALL PASSED"; \
+		else \
+			echo "Status: ✗ SOME FAILED"; \
+		fi; \
+	else \
+		echo "Status: Not yet checked"; \
+	fi
+	@echo "=========================================="
+	@echo ""
+
+# Clean check markers
+clean:
+	@echo "Cleaning check markers..."
+	@rm -rf $(CHECK_DIR)
+	@echo "Clean complete"
+
+# Help target
+help:
+	@echo "Cat Annihilation - Makefile.check"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all              - Check all sources and headers (default)"
+	@echo "  check-sources    - Check only .cpp files"
+	@echo "  check-headers    - Check only .hpp/.h files"
+	@echo "  report           - Show checking status"
+	@echo "  clean            - Remove check markers"
+	@echo "  help             - Show this help"
+	@echo ""
+	@echo "This Makefile checks syntax only (no linking) using stub headers"
+	@echo "for GPU libraries (Vulkan, CUDA, etc.)"

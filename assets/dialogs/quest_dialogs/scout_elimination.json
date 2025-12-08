@@ -1,0 +1,210 @@
+{
+  "id": "scout_elimination",
+  "name": "Scout Elimination Quest Dialog",
+  "startNode": "quest_available",
+  "nodes": [
+    {
+      "id": "quest_available",
+      "speaker": "Mistheart",
+      "text": "Ah, you've returned. Perfect timing. I have a delicate matter that requires your particular skills. Dog scouts have been spotted near our supply cache in the Whispering Woods. They cannot be allowed to report our position back to their pack.",
+      "options": [
+        {
+          "text": "I'll handle it. Where exactly are they?",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "How many scouts are we talking about?",
+          "responseId": "ask_details"
+        },
+        {
+          "text": "I'm not ready for this yet.",
+          "responseId": "decline_quest"
+        }
+      ]
+    },
+    {
+      "id": "accept_quest",
+      "speaker": "Mistheart",
+      "text": "The Whispering Woods, northeast of here. Follow the old hunting trail until you smell smoke - they've made camp. Our scouts counted five dogs, possibly more. Strike from the shadows, eliminate them silently, and leave no survivors. This is what you trained for.",
+      "options": [
+        {
+          "text": "Understood. I'll leave immediately.",
+          "responseId": "depart"
+        },
+        {
+          "text": "Any particular approach you recommend?",
+          "responseId": "tactical_advice"
+        }
+      ]
+    },
+    {
+      "id": "ask_details",
+      "speaker": "Mistheart",
+      "text": "At least five confirmed, possibly up to eight. They're setting up a forward observation post. Not heavily armed by dog standards, but dangerous nonetheless. They have sentries posted, so a frontal assault would be foolish. This is a job for stealth, not strength.",
+      "options": [
+        {
+          "text": "I can handle it. I accept the mission.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "Eight dogs seems like a lot for one cat...",
+          "responseId": "express_concern"
+        }
+      ]
+    },
+    {
+      "id": "express_concern",
+      "speaker": "Mistheart",
+      "text": "Which is precisely why I chose you. A lesser warrior would see the numbers and hesitate. You see the opportunity - isolated targets, separated from their pack, vulnerable. Use your training. Shadow Strike the sentries first, then pick off the rest before they can organize. You're MistClan now. We don't fight fair. We fight smart.",
+      "options": [
+        {
+          "text": "You're right. I'll use every advantage I have.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "I understand, but I still need to prepare first.",
+          "responseId": "decline_quest"
+        }
+      ]
+    },
+    {
+      "id": "tactical_advice",
+      "speaker": "Mistheart",
+      "text": "Take out the sentries first - they're isolated and easy targets. That will buy you time before the alarm is raised. Then either pick off the stragglers one by one, or if you're feeling bold, smoke bomb the camp and eliminate them in the chaos. Trust your instincts and your training.",
+      "options": [
+        {
+          "text": "Good plan. I'm on it.",
+          "responseId": "depart"
+        },
+        {
+          "text": "What if they sound an alarm before I can stop them?",
+          "responseId": "contingency"
+        }
+      ]
+    },
+    {
+      "id": "contingency",
+      "speaker": "Mistheart",
+      "text": "Then you adapt. If they sound the alarm, you have two choices: complete the mission quickly before reinforcements arrive, or retreat and we'll reassess. I trust your judgment in the field. You're a warrior, not a mindless soldier. Use your head as well as your claws.",
+      "options": [
+        {
+          "text": "Understood. I won't let you down.",
+          "responseId": "depart"
+        }
+      ]
+    },
+    {
+      "id": "depart",
+      "speaker": "Mistheart",
+      "text": "May the mist conceal your approach and the shadows guide your strikes. Return when the deed is done. MistClan is counting on you.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.0,
+      "nextNode": "quest_active"
+    },
+    {
+      "id": "quest_active",
+      "speaker": "System",
+      "text": "Quest Active: Scout Elimination - Eliminate the dog scouts in Whispering Woods before they can report MistClan's position.",
+      "options": [
+        {
+          "text": "Begin mission.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "decline_quest",
+      "speaker": "Mistheart",
+      "text": "I see. Then prepare yourself and return when you're ready. But don't take too long - the scouts won't wait forever to send their report. Time is a factor here.",
+      "options": [
+        {
+          "text": "I'll be ready soon.",
+          "responseId": "promise_return"
+        },
+        {
+          "text": "Maybe someone else should handle this.",
+          "responseId": "suggest_alternative"
+        }
+      ]
+    },
+    {
+      "id": "promise_return",
+      "speaker": "Mistheart",
+      "text": "See that you are. MistClan needs warriors who can act when action is required.",
+      "options": [
+        {
+          "text": "I understand.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "suggest_alternative",
+      "speaker": "Mistheart",
+      "text": "*narrows eyes* I chose you specifically because you have the skills and training for this. If you're not ready to serve your clan when called upon, then perhaps MistClan isn't the right fit for you. Think carefully about your commitment, warrior.",
+      "options": [
+        {
+          "text": "You're right. I'll take the mission.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "I need to reconsider my place here.",
+          "responseId": "loyalty_question"
+        }
+      ]
+    },
+    {
+      "id": "loyalty_question",
+      "speaker": "Mistheart",
+      "text": "A concerning response. Loyalty is everything to a clan. We protect our own, but we expect the same in return. I'll give you time to reflect on your commitment. When you're certain of your path, return to me. Until then, dismissed.",
+      "options": [
+        {
+          "text": "I... I'll think about it.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "quest_complete_return",
+      "speaker": "Mistheart",
+      "text": "You've returned. I received word - the dog scouts are eliminated, their camp destroyed. Well done. You struck precisely, left no survivors, and disappeared like mist. This is exactly what MistClan warriors do. You've proven yourself today.",
+      "options": [
+        {
+          "text": "It was my honor to serve the clan.",
+          "responseId": "humble_response"
+        },
+        {
+          "text": "The mission was easier than expected.",
+          "responseId": "confident_response"
+        }
+      ]
+    },
+    {
+      "id": "humble_response",
+      "speaker": "Mistheart",
+      "text": "Humble and capable - a rare combination. Your reward: 250 coins and this Shadow Blade, recovered from our armory. You've earned it. More importantly, you've earned the clan's trust. We'll have more work for you soon.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.5,
+      "nextNode": "quest_reward"
+    },
+    {
+      "id": "confident_response",
+      "speaker": "Mistheart",
+      "text": "Confidence is good, but don't let it become arrogance. Today's easy mission might be tomorrow's deadly trap if you underestimate your enemies. Still, you completed the task flawlessly. Here's your reward: 250 coins and a Shadow Blade from our armory. Well earned.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.5,
+      "nextNode": "quest_reward"
+    },
+    {
+      "id": "quest_reward",
+      "speaker": "Mistheart",
+      "text": "Rest, resupply, and prepare yourself. The dog invasion won't end with one eliminated scout party. MistClan will need you again.",
+      "options": [
+        {
+          "text": "I'll be ready when called upon.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

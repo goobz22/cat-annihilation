@@ -1,0 +1,1292 @@
+{
+  "quests": [
+    {
+      "id": "shadow_001_awakening",
+      "title": "Shadow Awakening",
+      "description": "Begin your journey as a Shadow Clan warrior",
+      "loreText": "The Shadow Clan has long protected the realm from the darkness. Now, the canine hordes threaten our territory. Prove yourself worthy.",
+      "type": "MainStory",
+      "requiredLevel": 1,
+      "requiredClan": "Shadow",
+      "prerequisites": [],
+      "questGiverId": "shadow_elder_nyx",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Talk",
+          "description": "Speak with Elder Nyx",
+          "targetId": "shadow_elder_nyx",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat 10 dogs to prove your skill",
+          "targetId": "Dog",
+          "requiredCount": 10,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 50,
+        "items": ["shadow_cloak"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "shadow_002_stealth",
+      "title": "Master of Stealth",
+      "description": "Learn the ancient arts of shadow combat",
+      "loreText": "To strike from darkness is the way of the Shadow Clan. Master stealth, and your enemies will never see you coming.",
+      "type": "MainStory",
+      "requiredLevel": 3,
+      "requiredClan": "Shadow",
+      "prerequisites": ["shadow_001_awakening"],
+      "questGiverId": "shadow_master_umbra",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Eliminate 15 FastDogs using stealth",
+          "targetId": "FastDog",
+          "requiredCount": 15,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Explore",
+          "description": "Scout the Moonlit Grove",
+          "targetId": "moonlit_grove",
+          "requiredCount": 1,
+          "waypointLocation": [150, 0, 200]
+        }
+      ],
+      "rewards": {
+        "xp": 250,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": "shadow_step",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "shadow_003_dark_alpha",
+      "title": "The Dark Alpha",
+      "description": "Face the leader of the shadow pack",
+      "loreText": "A corrupted alpha leads the dogs in our territory. This beast must be stopped before it spreads its influence further.",
+      "type": "MainStory",
+      "requiredLevel": 5,
+      "requiredClan": "Shadow",
+      "prerequisites": ["shadow_002_stealth"],
+      "questGiverId": "shadow_elder_nyx",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat the Dark Alpha",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Retrieve the Shadow Gem from the Alpha",
+          "targetId": "shadow_gem",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 500,
+        "currency": 250,
+        "items": ["shadow_blade", "alpha_fang"],
+        "abilityUnlock": null,
+        "territoryUnlock": "shadow_sanctum"
+      }
+    },
+    {
+      "id": "shadow_004_united",
+      "title": "Shadows United",
+      "description": "Rally the Shadow Clan warriors",
+      "loreText": "The time has come to unite our scattered forces. Gather the shadow warriors and prepare for the final confrontation.",
+      "type": "MainStory",
+      "requiredLevel": 8,
+      "requiredClan": "Shadow",
+      "prerequisites": ["shadow_003_dark_alpha"],
+      "questGiverId": "shadow_elder_nyx",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Talk",
+          "description": "Recruit Shadow Assassin Whisper",
+          "targetId": "shadow_whisper",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Talk",
+          "description": "Recruit Shadow Scout Dusk",
+          "targetId": "shadow_dusk",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Defend",
+          "description": "Defend the Shadow Sanctum",
+          "targetId": "shadow_sanctum",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 750,
+        "currency": 400,
+        "items": ["shadow_armor_set"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "shadow_005_eclipse",
+      "title": "Eclipse of the Dogs",
+      "description": "Lead the final assault against the canine invasion",
+      "loreText": "Under the cover of the lunar eclipse, we strike. The dogs will know the true power of the Shadow Clan!",
+      "type": "MainStory",
+      "requiredLevel": 10,
+      "requiredClan": "Shadow",
+      "prerequisites": ["shadow_004_united"],
+      "questGiverId": "shadow_elder_nyx",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 50 enemies in the Eclipse Battle",
+          "targetId": "Dog",
+          "requiredCount": 50,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Slay the Corrupted Warlord",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 1500,
+        "currency": 1000,
+        "items": ["eclipse_shadowblade", "shadow_clan_crown"],
+        "abilityUnlock": "shadow_eclipse",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "warrior_001_trial",
+      "title": "Trial by Combat",
+      "description": "Prove your strength in the Warrior Arena",
+      "loreText": "Strength is earned through battle. Show the Warrior Clan that you have what it takes to stand among legends.",
+      "type": "MainStory",
+      "requiredLevel": 1,
+      "requiredClan": "Warrior",
+      "prerequisites": [],
+      "questGiverId": "warrior_chief_rex",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 15 dogs in honorable combat",
+          "targetId": "Dog",
+          "requiredCount": 15,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat 5 BigDogs to prove your might",
+          "targetId": "BigDog",
+          "requiredCount": 5,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 50,
+        "items": ["warrior_axe"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "warrior_002_iron_paw",
+      "title": "The Iron Paw",
+      "description": "Master the legendary Iron Paw technique",
+      "loreText": "Ancient warriors forged the Iron Paw technique to crush any foe. Train under Master Fang to learn this devastating art.",
+      "type": "MainStory",
+      "requiredLevel": 3,
+      "requiredClan": "Warrior",
+      "prerequisites": ["warrior_001_trial"],
+      "questGiverId": "warrior_master_fang",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Survive",
+          "description": "Survive 300 seconds of combat training",
+          "targetId": "survive",
+          "requiredCount": 300,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat 20 enemies using melee combat only",
+          "targetId": "Dog",
+          "requiredCount": 20,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 250,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": "iron_paw_strike",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "warrior_003_berserker",
+      "title": "Berserker's Rage",
+      "description": "Channel the ancient berserker fury",
+      "loreText": "The most fearsome warriors tap into a primal rage that makes them unstoppable. But beware - the berserker's path is dangerous.",
+      "type": "MainStory",
+      "requiredLevel": 5,
+      "requiredClan": "Warrior",
+      "prerequisites": ["warrior_002_iron_paw"],
+      "questGiverId": "warrior_chief_rex",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 30 enemies without retreating",
+          "targetId": "Dog",
+          "requiredCount": 30,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Slay the Brutal Warlord",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 500,
+        "currency": 250,
+        "items": ["berserker_helmet", "rage_stone"],
+        "abilityUnlock": "berserker_rage",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "warrior_004_crimson",
+      "title": "Battle of Crimson Fields",
+      "description": "Lead the warriors into legendary battle",
+      "loreText": "The Crimson Fields will run red with the blood of our enemies. Rally the warriors and show no mercy!",
+      "type": "MainStory",
+      "requiredLevel": 8,
+      "requiredClan": "Warrior",
+      "prerequisites": ["warrior_003_berserker"],
+      "questGiverId": "warrior_chief_rex",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Defend",
+          "description": "Hold the Crimson Fields against the invasion",
+          "targetId": "crimson_fields",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat 100 enemies in the battle",
+          "targetId": "Dog",
+          "requiredCount": 100,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 750,
+        "currency": 400,
+        "items": ["crimson_armor_set"],
+        "abilityUnlock": null,
+        "territoryUnlock": "warrior_stronghold"
+      }
+    },
+    {
+      "id": "warrior_005_champion",
+      "title": "Champion of War",
+      "description": "Become the legendary Champion of the Warrior Clan",
+      "loreText": "Only the strongest warrior can claim the title of Champion. Face the ultimate challenge and earn eternal glory!",
+      "type": "MainStory",
+      "requiredLevel": 10,
+      "requiredClan": "Warrior",
+      "prerequisites": ["warrior_004_crimson"],
+      "questGiverId": "warrior_chief_rex",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 3 Boss Dogs in single combat",
+          "targetId": "BossDog",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Survive",
+          "description": "Survive 600 seconds in the Arena of Champions",
+          "targetId": "survive",
+          "requiredCount": 600,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 1500,
+        "currency": 1000,
+        "items": ["champion_warhammer", "warrior_crown"],
+        "abilityUnlock": "unstoppable_force",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "hunter_001_first_hunt",
+      "title": "The First Hunt",
+      "description": "Prove your worth as a Hunter",
+      "loreText": "The Hunter Clan values precision and patience. Show us you can track and eliminate your targets with skill.",
+      "type": "MainStory",
+      "requiredLevel": 1,
+      "requiredClan": "Hunter",
+      "prerequisites": [],
+      "questGiverId": "hunter_elder_talon",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Hunt down 12 FastDogs",
+          "targetId": "FastDog",
+          "requiredCount": 12,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect tracking marks from your prey",
+          "targetId": "tracking_mark",
+          "requiredCount": 12,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 50,
+        "items": ["hunter_bow"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "hunter_002_eagle_eye",
+      "title": "Eagle Eye Training",
+      "description": "Master the art of precision shooting",
+      "loreText": "A true hunter never misses. Train your eye to see what others cannot, and your arrows will always find their mark.",
+      "type": "MainStory",
+      "requiredLevel": 3,
+      "requiredClan": "Hunter",
+      "prerequisites": ["hunter_001_first_hunt"],
+      "questGiverId": "hunter_master_keen",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 25 enemies from range",
+          "targetId": "Dog",
+          "requiredCount": 25,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Explore",
+          "description": "Scout the Eagle's Perch",
+          "targetId": "eagles_perch",
+          "requiredCount": 1,
+          "waypointLocation": [200, 50, 150]
+        }
+      ],
+      "rewards": {
+        "xp": 250,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": "eagle_eye",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "hunter_003_primal",
+      "title": "The Primal Hunt",
+      "description": "Track and hunt the legendary Primal Beast",
+      "loreText": "Deep in the wilderness lurks a beast of legend. Only the greatest hunter can track and defeat this primal terror.",
+      "type": "MainStory",
+      "requiredLevel": 5,
+      "requiredClan": "Hunter",
+      "prerequisites": ["hunter_002_eagle_eye"],
+      "questGiverId": "hunter_elder_talon",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Explore",
+          "description": "Find the Primal Beast's lair",
+          "targetId": "primal_lair",
+          "requiredCount": 1,
+          "waypointLocation": [300, 0, 300]
+        },
+        {
+          "type": "Kill",
+          "description": "Slay the Primal Beast",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 500,
+        "currency": 250,
+        "items": ["primal_bow", "beast_pelt"],
+        "abilityUnlock": null,
+        "territoryUnlock": "hunters_lodge"
+      }
+    },
+    {
+      "id": "hunter_004_pack",
+      "title": "Pack Tactics",
+      "description": "Assemble your hunting party",
+      "loreText": "Even the lone hunter needs allies. Gather the finest trackers and prepare for the great hunt.",
+      "type": "MainStory",
+      "requiredLevel": 8,
+      "requiredClan": "Hunter",
+      "prerequisites": ["hunter_003_primal"],
+      "questGiverId": "hunter_elder_talon",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Talk",
+          "description": "Recruit Tracker Swift",
+          "targetId": "hunter_swift",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Talk",
+          "description": "Recruit Sniper Hawkeye",
+          "targetId": "hunter_hawkeye",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Hunt 40 enemies as a pack",
+          "targetId": "Dog",
+          "requiredCount": 40,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 750,
+        "currency": 400,
+        "items": ["hunters_armor_set"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "hunter_005_great_hunt",
+      "title": "The Great Hunt",
+      "description": "Lead the ultimate hunt against the invaders",
+      "loreText": "The time has come for the Great Hunt. Every dog in our territory shall be tracked down and eliminated. None shall escape!",
+      "type": "MainStory",
+      "requiredLevel": 10,
+      "requiredClan": "Hunter",
+      "prerequisites": ["hunter_004_pack"],
+      "questGiverId": "hunter_elder_talon",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Eliminate 75 enemies in the Great Hunt",
+          "targetId": "Dog",
+          "requiredCount": 75,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat the Pack Alpha",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 1500,
+        "currency": 1000,
+        "items": ["legendary_longbow", "hunter_crown"],
+        "abilityUnlock": "hunters_mark",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "mystic_001_awakening",
+      "title": "Awakening the Gift",
+      "description": "Discover your mystical powers",
+      "loreText": "The Mystic Clan channels ancient energies that flow through all things. You possess the gift - now you must learn to control it.",
+      "type": "MainStory",
+      "requiredLevel": 1,
+      "requiredClan": "Mystic",
+      "prerequisites": [],
+      "questGiverId": "mystic_oracle_luna",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Gather 5 Mystic Crystals",
+          "targetId": "mystic_crystal",
+          "requiredCount": 5,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Channel your power to defeat 10 dogs",
+          "targetId": "Dog",
+          "requiredCount": 10,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 50,
+        "items": ["mystic_staff"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "mystic_002_arcane",
+      "title": "The Arcane Path",
+      "description": "Study the ancient arcane arts",
+      "loreText": "The path of the mystic is one of knowledge and power. Study the ancient texts and unlock abilities beyond mortal comprehension.",
+      "type": "MainStory",
+      "requiredLevel": 3,
+      "requiredClan": "Mystic",
+      "prerequisites": ["mystic_001_awakening"],
+      "questGiverId": "mystic_sage_wisdom",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Explore",
+          "description": "Study at the Ancient Library",
+          "targetId": "ancient_library",
+          "requiredCount": 1,
+          "waypointLocation": [100, 20, 250]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect 3 Arcane Tomes",
+          "targetId": "arcane_tome",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 250,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": "arcane_bolt",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "mystic_003_elemental",
+      "title": "Elemental Mastery",
+      "description": "Master control over the elements",
+      "loreText": "Fire, ice, lightning - the elements obey those with true power. Prove you can wield these forces and bend them to your will.",
+      "type": "MainStory",
+      "requiredLevel": 5,
+      "requiredClan": "Mystic",
+      "prerequisites": ["mystic_002_arcane"],
+      "questGiverId": "mystic_oracle_luna",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 20 enemies using elemental magic",
+          "targetId": "Dog",
+          "requiredCount": 20,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Slay the Elemental Guardian",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 500,
+        "currency": 250,
+        "items": ["elemental_orb", "magic_robes"],
+        "abilityUnlock": "elemental_fury",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "mystic_004_circle",
+      "title": "The Circle of Power",
+      "description": "Form the Mystic Circle",
+      "loreText": "The greatest magic requires the power of many. Form the Circle of Power and channel energies beyond imagination.",
+      "type": "MainStory",
+      "requiredLevel": 8,
+      "requiredClan": "Mystic",
+      "prerequisites": ["mystic_003_elemental"],
+      "questGiverId": "mystic_oracle_luna",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Talk",
+          "description": "Recruit Enchanter Starlight",
+          "targetId": "mystic_starlight",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Talk",
+          "description": "Recruit Summoner Void",
+          "targetId": "mystic_void",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Defend",
+          "description": "Defend the Mystic Sanctuary",
+          "targetId": "mystic_sanctuary",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 750,
+        "currency": 400,
+        "items": ["mystic_armor_set"],
+        "abilityUnlock": null,
+        "territoryUnlock": "arcane_tower"
+      }
+    },
+    {
+      "id": "mystic_005_ascension",
+      "title": "Arcane Ascension",
+      "description": "Ascend to become an Archmage",
+      "loreText": "The ultimate power awaits those brave enough to reach for it. Transcend mortal limitations and achieve Arcane Ascension!",
+      "type": "MainStory",
+      "requiredLevel": 10,
+      "requiredClan": "Mystic",
+      "prerequisites": ["mystic_004_circle"],
+      "questGiverId": "mystic_oracle_luna",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Gather 10 Essence of Ascension",
+          "targetId": "essence_ascension",
+          "requiredCount": 10,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat the Corrupted Archmage",
+          "targetId": "BossDog",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 1500,
+        "currency": 1000,
+        "items": ["staff_of_ascension", "mystic_crown"],
+        "abilityUnlock": "arcane_ascension",
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_001_kitten",
+      "title": "Lost Kitten",
+      "description": "Find and rescue the lost kitten",
+      "loreText": "A young kitten has wandered into dangerous territory. Rescue them before the dogs find them!",
+      "type": "SideQuest",
+      "requiredLevel": 2,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "worried_mother",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Explore",
+          "description": "Find the lost kitten",
+          "targetId": "lost_kitten_location",
+          "requiredCount": 1,
+          "waypointLocation": [50, 0, 100]
+        },
+        {
+          "type": "Escort",
+          "description": "Escort the kitten home safely",
+          "targetId": "kitten_home",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 150,
+        "currency": 75,
+        "items": ["kitten_toy"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_002_supplies",
+      "title": "Supply Run",
+      "description": "Gather supplies for the settlement",
+      "loreText": "Our supplies are running low. Venture out and gather what we need.",
+      "type": "SideQuest",
+      "requiredLevel": 1,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "quartermaster_patches",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Collect 10 food rations",
+          "targetId": "food_ration",
+          "requiredCount": 10,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect 5 medicine herbs",
+          "targetId": "medicine_herb",
+          "requiredCount": 5,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_003_merchant",
+      "title": "The Merchant's Problem",
+      "description": "Clear the trade route of dogs",
+      "loreText": "Dogs are blocking the trade route. Clear them out so merchants can pass safely.",
+      "type": "SideQuest",
+      "requiredLevel": 3,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "merchant_felix",
+      "turnInNpcId": "merchant_felix",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Clear 15 dogs from the trade route",
+          "targetId": "Dog",
+          "requiredCount": 15,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Talk",
+          "description": "Report back to Merchant Felix",
+          "targetId": "merchant_felix",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 200,
+        "currency": 150,
+        "items": ["merchant_discount_token"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_004_ruins",
+      "title": "Secrets of the Ruins",
+      "description": "Explore the ancient ruins",
+      "loreText": "Ancient ruins have been discovered nearby. Explore them and uncover their secrets.",
+      "type": "SideQuest",
+      "requiredLevel": 5,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "scholar_whiskers",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Explore",
+          "description": "Explore the Ancient Ruins",
+          "targetId": "ancient_ruins",
+          "requiredCount": 1,
+          "waypointLocation": [180, 10, 180]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect 3 Ancient Artifacts",
+          "targetId": "ancient_artifact",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 300,
+        "currency": 200,
+        "items": ["ancient_relic"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_005_healer",
+      "title": "The Healer's Request",
+      "description": "Gather rare healing ingredients",
+      "loreText": "The healer needs rare ingredients to create powerful remedies. Help gather what is needed.",
+      "type": "SideQuest",
+      "requiredLevel": 4,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "healer_moss",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Collect 5 Moonpetal Flowers",
+          "targetId": "moonpetal",
+          "requiredCount": 5,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect 3 Crystal Dewdrops",
+          "targetId": "crystal_dew",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 250,
+        "currency": 125,
+        "items": ["healing_potion_superior"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_006_guard",
+      "title": "Guard Duty",
+      "description": "Defend the outpost from dog attacks",
+      "loreText": "The outpost needs defenders. Take up arms and protect our territory!",
+      "type": "SideQuest",
+      "requiredLevel": 3,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "guard_captain_stripes",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Defend",
+          "description": "Defend the outpost",
+          "targetId": "outpost",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Defeat 20 attacking dogs",
+          "targetId": "Dog",
+          "requiredCount": 20,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 200,
+        "currency": 150,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_007_rare_game",
+      "title": "Rare Game Hunt",
+      "description": "Hunt down rare elite enemies",
+      "loreText": "Elite enemies have been spotted in the area. Track them down for glory!",
+      "type": "SideQuest",
+      "requiredLevel": 6,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "huntmaster_claw",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Hunt 3 BigDogs",
+          "targetId": "BigDog",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Kill",
+          "description": "Hunt 3 FastDogs",
+          "targetId": "FastDog",
+          "requiredCount": 3,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 400,
+        "currency": 300,
+        "items": ["elite_hunter_trophy"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_008_message",
+      "title": "Urgent Message",
+      "description": "Deliver an urgent message to the northern camp",
+      "loreText": "An urgent message must reach the northern camp. Speed is essential!",
+      "type": "SideQuest",
+      "requiredLevel": 2,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "messenger_swift",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 300,
+      "objectives": [
+        {
+          "type": "Explore",
+          "description": "Reach the northern camp",
+          "targetId": "northern_camp",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 300]
+        },
+        {
+          "type": "Talk",
+          "description": "Deliver message to Commander Frost",
+          "targetId": "commander_frost",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 175,
+        "currency": 125,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_009_training",
+      "title": "Training Grounds",
+      "description": "Complete advanced combat training",
+      "loreText": "Test your skills in the training grounds and prove you're ready for tougher challenges.",
+      "type": "SideQuest",
+      "requiredLevel": 5,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "trainer_sharp",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 30 training dummies",
+          "targetId": "Dog",
+          "requiredCount": 30,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Survive",
+          "description": "Survive 180 seconds of combat trials",
+          "targetId": "survive",
+          "requiredCount": 180,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 350,
+        "currency": 200,
+        "items": ["training_certificate"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "side_010_collector",
+      "title": "The Collector",
+      "description": "Help the collector find rare items",
+      "loreText": "A collector seeks rare and exotic items. Find them and earn a reward!",
+      "type": "SideQuest",
+      "requiredLevel": 7,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "collector_whisker",
+      "turnInNpcId": "",
+      "canRepeat": false,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Collect a Rare Gemstone",
+          "targetId": "rare_gemstone",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect a Ancient Coin",
+          "targetId": "ancient_coin",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        },
+        {
+          "type": "Collect",
+          "description": "Collect a Dragon Scale",
+          "targetId": "dragon_scale",
+          "requiredCount": 1,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 500,
+        "currency": 500,
+        "items": ["collector_badge"],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "daily_001_patrol",
+      "title": "Daily Patrol",
+      "description": "Patrol the territory and eliminate threats",
+      "loreText": "Keep our territory safe with daily patrols.",
+      "type": "Daily",
+      "requiredLevel": 1,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "patrol_leader",
+      "turnInNpcId": "",
+      "canRepeat": true,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 20 dogs",
+          "targetId": "Dog",
+          "requiredCount": 20,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 100,
+        "currency": 50,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "daily_002_gather",
+      "title": "Daily Gathering",
+      "description": "Gather resources for the settlement",
+      "loreText": "We always need more resources. Gather what you can.",
+      "type": "Daily",
+      "requiredLevel": 1,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "resource_manager",
+      "turnInNpcId": "",
+      "canRepeat": true,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Collect",
+          "description": "Collect 15 resources",
+          "targetId": "resource",
+          "requiredCount": 15,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 75,
+        "currency": 75,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "daily_003_elite",
+      "title": "Elite Hunt",
+      "description": "Hunt down elite enemies",
+      "loreText": "Elite enemies pose a greater threat. Hunt them for bonus rewards.",
+      "type": "Daily",
+      "requiredLevel": 5,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "elite_hunter",
+      "turnInNpcId": "",
+      "canRepeat": true,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 5 BigDogs",
+          "targetId": "BigDog",
+          "requiredCount": 5,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 200,
+        "currency": 150,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "daily_004_speed",
+      "title": "Speed Challenge",
+      "description": "Defeat fast enemies quickly",
+      "loreText": "Test your speed against the fastest foes.",
+      "type": "Daily",
+      "requiredLevel": 3,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "speed_master",
+      "turnInNpcId": "",
+      "canRepeat": true,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Kill",
+          "description": "Defeat 10 FastDogs",
+          "targetId": "FastDog",
+          "requiredCount": 10,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 150,
+        "currency": 100,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    },
+    {
+      "id": "daily_005_survival",
+      "title": "Survival Test",
+      "description": "Survive against waves of enemies",
+      "loreText": "Test your endurance in the survival arena.",
+      "type": "Daily",
+      "requiredLevel": 4,
+      "requiredClan": null,
+      "prerequisites": [],
+      "questGiverId": "survival_instructor",
+      "turnInNpcId": "",
+      "canRepeat": true,
+      "timeLimit": 0,
+      "objectives": [
+        {
+          "type": "Survive",
+          "description": "Survive for 240 seconds",
+          "targetId": "survive",
+          "requiredCount": 240,
+          "waypointLocation": [0, 0, 0]
+        }
+      ],
+      "rewards": {
+        "xp": 175,
+        "currency": 125,
+        "items": [],
+        "abilityUnlock": null,
+        "territoryUnlock": null
+      }
+    }
+  ]
+}

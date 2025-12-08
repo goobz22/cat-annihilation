@@ -1,0 +1,209 @@
+#version 450
+
+// Frustum Culling Compute Shader
+// GPU-based frustum and occlusion culling for instances
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "../common/constants.glsl"
+#include "../common/utils.glsl"
+
+// Instance data (input)
+struct InstanceData {
+    mat4 transform;
+    vec4 boundingSphere; // xyz = center, w = radius
+    vec3 aabbMin;
+    uint meshIndex;
+    vec3 aabbMax;
+    uint materialIndex;
+};
+
+layout(set = 0, binding = 0) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+} instanceBuffer;
+
+// Camera data
+layout(set = 0, binding = 1) uniform CameraData {
+    mat4 view;
+    mat4 projection;
+    mat4 viewProj;
+    mat4 invViewProj;
+    vec3 cameraPos;
+    float nearPlane;
+    float farPlane;
+} camera;
+
+// Frustum planes (extracted from view-projection matrix)
+layout(set = 0, binding = 2) uniform FrustumData {
+    vec4 planes[6]; // left, right, bottom, top, near, far
+} frustum;
+
+// Occlusion data (optional, hierarchical Z-buffer)
+layout(set = 0, binding = 3) uniform sampler2D hizBuffer;
+
+layout(set = 0, binding = 4) uniform CullingSettings {
+    uint instanceCount;
+    uint enableOcclusionCulling;
+    float occlusionThreshold;
+    uint padding;
+} settings;
+
+// Output: visible instance indices
+layout(set = 0, binding = 5) writeonly buffer VisibleInstanceIndices {
+    uint indices[];
+} visibleInstances;
+
+// Output: atomic counter for visible instances
+layout(set = 0, binding = 6) buffer DrawCount {
+    uint count;
+} drawCount;
+
+// Test if a sphere is inside the frustum
+bool sphereFrustumTest(vec3 center, float radius) {
+    for (int i = 0; i < 6; i++) {
+        vec4 plane = frustum.planes[i];
+        float distance = dot(plane.xyz, center) + plane.w;
+
+        if (distance < -radius) {
+            return false; // Outside this plane
+        }
+    }
+    return true;
+}
+
+// Test if an AABB is inside the frustum
+bool aabbFrustumTest(vec3 aabbMin, vec3 aabbMax) {
+    // Test all 8 corners against all 6 planes
+    vec3 corners[8] = {
+        vec3(aabbMin.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMax.z)
+    };
+
+    for (int i = 0; i < 6; i++) {
+        vec4 plane = frustum.planes[i];
+        bool allOutside = true;
+
+        for (int j = 0; j < 8; j++) {
+            float distance = dot(plane.xyz, corners[j]) + plane.w;
+            if (distance >= 0.0) {
+                allOutside = false;
+                break;
+            }
+        }
+
+        if (allOutside) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Project AABB to screen space and test against HiZ buffer
+bool occlusionTest(vec3 aabbMin, vec3 aabbMax) {
+    // Transform AABB corners to clip space
+    vec3 corners[8] = {
+        vec3(aabbMin.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMin.z),
+        vec3(aabbMin.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMin.y, aabbMax.z),
+        vec3(aabbMin.x, aabbMax.y, aabbMax.z),
+        vec3(aabbMax.x, aabbMax.y, aabbMax.z)
+    };
+
+    vec2 screenMin = vec2(1.0);
+    vec2 screenMax = vec2(0.0);
+    float closestDepth = 1.0;
+
+    // Project all corners and find screen-space AABB
+    for (int i = 0; i < 8; i++) {
+        vec4 clipPos = camera.viewProj * vec4(corners[i], 1.0);
+
+        if (clipPos.w > 0.0) {
+            vec3 ndc = clipPos.xyz / clipPos.w;
+
+            // Convert to screen space [0, 1]
+            vec2 screenPos = ndc.xy * 0.5 + 0.5;
+
+            screenMin = min(screenMin, screenPos);
+            screenMax = max(screenMax, screenPos);
+            closestDepth = min(closestDepth, ndc.z);
+        }
+    }
+
+    // Check if projected to valid screen region
+    if (screenMin.x >= 1.0 || screenMax.x <= 0.0 ||
+        screenMin.y >= 1.0 || screenMax.y <= 0.0) {
+        return false; // Off-screen
+    }
+
+    // Clamp to screen
+    screenMin = clamp(screenMin, vec2(0.0), vec2(1.0));
+    screenMax = clamp(screenMax, vec2(0.0), vec2(1.0));
+
+    // Calculate appropriate mip level based on screen area
+    vec2 size = (screenMax - screenMin) * vec2(textureSize(hizBuffer, 0));
+    float maxDim = max(size.x, size.y);
+    float mipLevel = ceil(log2(maxDim));
+    mipLevel = clamp(mipLevel, 0.0, float(textureQueryLevels(hizBuffer) - 1));
+
+    // Sample HiZ buffer at calculated mip level
+    vec2 centerUV = (screenMin + screenMax) * 0.5;
+    float occluderDepth = textureLod(hizBuffer, centerUV, mipLevel).r;
+
+    // If object's closest depth is further than occluder, it's occluded
+    return closestDepth > occluderDepth + settings.occlusionThreshold;
+}
+
+void main() {
+    uint instanceIndex = gl_GlobalInvocationID.x;
+
+    // Bounds check
+    if (instanceIndex >= settings.instanceCount) {
+        return;
+    }
+
+    // Load instance data
+    InstanceData instance = instanceBuffer.instances[instanceIndex];
+
+    // Transform bounding sphere to world space
+    vec3 worldCenter = (instance.transform * vec4(instance.boundingSphere.xyz, 1.0)).xyz;
+    float worldRadius = instance.boundingSphere.w * max(
+        max(length(instance.transform[0].xyz),
+            length(instance.transform[1].xyz)),
+        length(instance.transform[2].xyz)
+    );
+
+    // Frustum culling (sphere test first for quick rejection)
+    if (!sphereFrustumTest(worldCenter, worldRadius)) {
+        return; // Culled
+    }
+
+    // Transform AABB to world space
+    vec3 worldAabbMin = (instance.transform * vec4(instance.aabbMin, 1.0)).xyz;
+    vec3 worldAabbMax = (instance.transform * vec4(instance.aabbMax, 1.0)).xyz;
+
+    // Refine frustum culling with AABB test
+    if (!aabbFrustumTest(worldAabbMin, worldAabbMax)) {
+        return; // Culled
+    }
+
+    // Optional occlusion culling
+    if (settings.enableOcclusionCulling != 0) {
+        if (occlusionTest(worldAabbMin, worldAabbMax)) {
+            return; // Occluded
+        }
+    }
+
+    // Instance is visible - add to output list
+    uint outputIndex = atomicAdd(drawCount.count, 1);
+    visibleInstances.indices[outputIndex] = instanceIndex;
+}

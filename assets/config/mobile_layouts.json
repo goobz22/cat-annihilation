@@ -1,0 +1,399 @@
+{
+  "version": "1.0",
+  "description": "Mobile control layout presets for Cat Annihilation",
+
+  "presets": {
+    "default": {
+      "name": "Default",
+      "description": "Standard mobile control layout for right-handed players",
+      "joysticks": [
+        {
+          "id": "movement",
+          "centerPosition": { "x": 120, "y": -150, "anchorY": "bottom" },
+          "outerRadius": 80,
+          "innerRadius": 30,
+          "deadzone": 0.15,
+          "isDynamic": false,
+          "visible": true,
+          "opacity": 0.5,
+          "baseColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.3 },
+          "thumbColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.6 }
+        },
+        {
+          "id": "camera",
+          "centerPosition": { "x": -120, "y": -150, "anchorX": "right", "anchorY": "bottom" },
+          "outerRadius": 80,
+          "innerRadius": 30,
+          "deadzone": 0.15,
+          "isDynamic": false,
+          "visible": false,
+          "opacity": 0.5,
+          "baseColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.3 },
+          "thumbColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.6 }
+        }
+      ],
+
+      "buttons": [
+        {
+          "id": "attack",
+          "label": "Attack",
+          "position": { "x": -100, "y": -100, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 50,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 1.0, "g": 0.2, "b": 0.2, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 0.0, "b": 0.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 0.0,
+          "iconPath": "assets/textures/ui/icon_attack.png"
+        },
+        {
+          "id": "dodge",
+          "label": "Dodge",
+          "position": { "x": -200, "y": -100, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 40,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 0.2, "g": 1.0, "b": 0.2, "a": 0.4 },
+          "pressedColor": { "r": 0.0, "g": 1.0, "b": 0.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 1.0,
+          "iconPath": "assets/textures/ui/icon_dodge.png"
+        },
+        {
+          "id": "jump",
+          "label": "Jump",
+          "position": { "x": -100, "y": -200, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 40,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 0.2, "g": 0.5, "b": 1.0, "a": 0.4 },
+          "pressedColor": { "r": 0.0, "g": 0.7, "b": 1.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 0.0,
+          "iconPath": "assets/textures/ui/icon_jump.png"
+        },
+        {
+          "id": "spell",
+          "label": "Spell",
+          "position": { "x": -200, "y": -200, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 40,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 0.8, "g": 0.2, "b": 1.0, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 0.0, "b": 1.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 5.0,
+          "iconPath": "assets/textures/ui/icon_spell.png"
+        },
+        {
+          "id": "block",
+          "label": "Block",
+          "position": { "x": 120, "y": -300, "anchorY": "bottom" },
+          "radius": 40,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 1.0, "g": 0.8, "b": 0.2, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 1.0, "b": 0.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 0.0,
+          "iconPath": "assets/textures/ui/icon_block.png"
+        },
+        {
+          "id": "sprint",
+          "label": "Sprint",
+          "position": { "x": 220, "y": -300, "anchorY": "bottom" },
+          "radius": 35,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 0.0,
+          "iconPath": "assets/textures/ui/icon_sprint.png"
+        },
+        {
+          "id": "pause",
+          "label": "||",
+          "position": { "x": -50, "y": 50, "anchorX": "right" },
+          "radius": 30,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 0.8, "g": 0.8, "b": 0.8, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 },
+          "cooldown": 0.0
+        }
+      ],
+
+      "swipeZones": [
+        {
+          "id": "camera_swipe",
+          "position": { "x": "30%", "y": 0 },
+          "size": { "x": "40%", "y": "50%" },
+          "detectSwipe": true,
+          "detectPinch": false,
+          "detectRotation": false
+        }
+      ],
+
+      "gestureMappings": {
+        "swipeUp": "jump",
+        "swipeDown": "dodge",
+        "swipeLeft": "dodgeLeft",
+        "swipeRight": "dodgeRight",
+        "doubleTap": "targetLock",
+        "longPress": "cameraControl",
+        "pinch": "zoom"
+      }
+    },
+
+    "lefty": {
+      "name": "Left-Handed",
+      "description": "Mirrored layout for left-handed players",
+      "inherits": "default",
+      "mirror": "horizontal",
+      "joysticks": [
+        {
+          "id": "movement",
+          "centerPosition": { "x": -120, "y": -150, "anchorX": "right", "anchorY": "bottom" }
+        }
+      ],
+      "buttons": [
+        {
+          "id": "attack",
+          "position": { "x": 100, "y": -100, "anchorY": "bottom" }
+        },
+        {
+          "id": "dodge",
+          "position": { "x": 200, "y": -100, "anchorY": "bottom" }
+        },
+        {
+          "id": "jump",
+          "position": { "x": 100, "y": -200, "anchorY": "bottom" }
+        },
+        {
+          "id": "spell",
+          "position": { "x": 200, "y": -200, "anchorY": "bottom" }
+        },
+        {
+          "id": "block",
+          "position": { "x": -120, "y": -300, "anchorX": "right", "anchorY": "bottom" }
+        },
+        {
+          "id": "sprint",
+          "position": { "x": -220, "y": -300, "anchorX": "right", "anchorY": "bottom" }
+        }
+      ]
+    },
+
+    "simple": {
+      "name": "Simple",
+      "description": "Minimal gesture-based layout for clean interface",
+      "joysticks": [
+        {
+          "id": "movement",
+          "centerPosition": { "x": 120, "y": -150, "anchorY": "bottom" },
+          "outerRadius": 80,
+          "innerRadius": 30,
+          "deadzone": 0.15,
+          "isDynamic": true,
+          "visible": true,
+          "opacity": 0.4
+        }
+      ],
+
+      "buttons": [
+        {
+          "id": "action",
+          "label": "Action",
+          "position": { "x": -100, "y": -100, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 60,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 1.0, "b": 0.0, "a": 0.7 },
+          "disabledColor": { "r": 0.5, "g": 0.5, "b": 0.5, "a": 0.2 }
+        },
+        {
+          "id": "pause",
+          "label": "||",
+          "position": { "x": -50, "y": 50, "anchorX": "right" },
+          "radius": 30,
+          "visible": true,
+          "opacity": 0.5
+        }
+      ],
+
+      "swipeZones": [
+        {
+          "id": "gestures",
+          "position": { "x": "25%", "y": 0 },
+          "size": { "x": "50%", "y": "100%" },
+          "detectSwipe": true,
+          "detectPinch": true,
+          "detectRotation": false
+        }
+      ],
+
+      "gestureMappings": {
+        "swipeUp": "jump",
+        "swipeDown": "dodge",
+        "swipeLeft": "previousWeapon",
+        "swipeRight": "nextWeapon",
+        "doubleTap": "attack",
+        "longPress": "block"
+      }
+    },
+
+    "pro": {
+      "name": "Pro",
+      "description": "Advanced layout with all available controls",
+      "inherits": "default",
+      "joysticks": [
+        {
+          "id": "movement",
+          "centerPosition": { "x": 120, "y": -150, "anchorY": "bottom" }
+        },
+        {
+          "id": "camera",
+          "centerPosition": { "x": -120, "y": -150, "anchorX": "right", "anchorY": "bottom" },
+          "visible": true
+        }
+      ],
+
+      "buttons": [
+        {
+          "id": "attack",
+          "position": { "x": -100, "y": -100, "anchorX": "right", "anchorY": "bottom" }
+        },
+        {
+          "id": "dodge",
+          "position": { "x": -200, "y": -100, "anchorX": "right", "anchorY": "bottom" }
+        },
+        {
+          "id": "jump",
+          "position": { "x": -100, "y": -200, "anchorX": "right", "anchorY": "bottom" }
+        },
+        {
+          "id": "spell",
+          "position": { "x": -200, "y": -200, "anchorX": "right", "anchorY": "bottom" }
+        },
+        {
+          "id": "block",
+          "position": { "x": 120, "y": -300, "anchorY": "bottom" }
+        },
+        {
+          "id": "sprint",
+          "position": { "x": 220, "y": -300, "anchorY": "bottom" }
+        },
+        {
+          "id": "extra1",
+          "label": "E1",
+          "position": { "x": -300, "y": -100, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 35,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 0.5, "g": 0.8, "b": 1.0, "a": 0.4 },
+          "pressedColor": { "r": 0.0, "g": 1.0, "b": 1.0, "a": 0.7 }
+        },
+        {
+          "id": "extra2",
+          "label": "E2",
+          "position": { "x": -300, "y": -200, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 35,
+          "visible": true,
+          "opacity": 0.5,
+          "normalColor": { "r": 1.0, "g": 0.5, "b": 0.8, "a": 0.4 },
+          "pressedColor": { "r": 1.0, "g": 0.0, "b": 0.8, "a": 0.7 }
+        },
+        {
+          "id": "pause",
+          "position": { "x": -50, "y": 50, "anchorX": "right" }
+        }
+      ],
+
+      "swipeZones": [],
+
+      "gestureMappings": {
+        "doubleTap": "targetLock"
+      }
+    },
+
+    "tablet": {
+      "name": "Tablet",
+      "description": "Optimized for larger tablet screens",
+      "inherits": "default",
+      "scale": 1.2,
+      "joysticks": [
+        {
+          "id": "movement",
+          "centerPosition": { "x": 150, "y": -180, "anchorY": "bottom" },
+          "outerRadius": 100,
+          "innerRadius": 40
+        },
+        {
+          "id": "camera",
+          "centerPosition": { "x": -150, "y": -180, "anchorX": "right", "anchorY": "bottom" },
+          "outerRadius": 100,
+          "innerRadius": 40,
+          "visible": true
+        }
+      ],
+
+      "buttons": [
+        {
+          "id": "attack",
+          "position": { "x": -120, "y": -120, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 60
+        },
+        {
+          "id": "dodge",
+          "position": { "x": -240, "y": -120, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 50
+        },
+        {
+          "id": "jump",
+          "position": { "x": -120, "y": -240, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 50
+        },
+        {
+          "id": "spell",
+          "position": { "x": -240, "y": -240, "anchorX": "right", "anchorY": "bottom" },
+          "radius": 50
+        }
+      ]
+    }
+  },
+
+  "settings": {
+    "defaultPreset": "default",
+    "autoDetectDevice": true,
+    "allowCustomization": true,
+    "saveCustomLayouts": true,
+    "feedbackHaptics": true,
+    "feedbackVisual": true,
+    "feedbackAudio": false,
+    "globalOpacity": 0.5,
+    "globalScale": 1.0
+  },
+
+  "deviceRules": {
+    "phone": {
+      "maxScreenWidth": 768,
+      "defaultPreset": "default",
+      "recommendedPresets": ["default", "lefty", "simple"]
+    },
+    "tablet": {
+      "minScreenWidth": 769,
+      "maxScreenWidth": 1366,
+      "defaultPreset": "tablet",
+      "recommendedPresets": ["tablet", "pro"]
+    },
+    "desktop_touch": {
+      "minScreenWidth": 1367,
+      "defaultPreset": "pro",
+      "recommendedPresets": ["pro", "simple"]
+    }
+  }
+}

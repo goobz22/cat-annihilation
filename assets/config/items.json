@@ -1,0 +1,278 @@
+{
+  "items": [
+    {
+      "itemId": "smoke_bomb",
+      "name": "Smoke Bomb",
+      "description": "Creates a cloud of smoke for quick escapes",
+      "category": "Consumable",
+      "rarity": "Common",
+      "maxStack": 10,
+      "sellPrice": 25
+    },
+    {
+      "itemId": "shadow_blade",
+      "name": "Shadow Blade",
+      "description": "A blade forged in darkness, increases stealth damage by 25%",
+      "category": "Weapon",
+      "rarity": "Rare",
+      "maxStack": 1,
+      "sellPrice": 150,
+      "canDrop": false
+    },
+    {
+      "itemId": "misty_potion",
+      "name": "Misty Potion",
+      "description": "Restores 100 HP and grants brief invisibility for 3 seconds",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 20,
+      "sellPrice": 35
+    },
+    {
+      "itemId": "stealth_cloak",
+      "name": "Stealth Cloak",
+      "description": "Lightweight cloak that enhances stealth abilities by 40%",
+      "category": "Armor",
+      "rarity": "Epic",
+      "maxStack": 1,
+      "sellPrice": 250,
+      "canDrop": false
+    },
+    {
+      "itemId": "fire_essence",
+      "name": "Fire Essence",
+      "description": "Pure fire energy used to enhance fire-based abilities",
+      "category": "Material",
+      "rarity": "Uncommon",
+      "maxStack": 50,
+      "sellPrice": 50
+    },
+    {
+      "itemId": "flame_sword",
+      "name": "Flame Sword",
+      "description": "A sword wreathed in eternal flames, deals fire damage",
+      "category": "Weapon",
+      "rarity": "Rare",
+      "maxStack": 1,
+      "sellPrice": 175,
+      "canDrop": false
+    },
+    {
+      "itemId": "phoenix_feather",
+      "name": "Phoenix Feather",
+      "description": "Revives you once upon death with 50% HP. Single use.",
+      "category": "Consumable",
+      "rarity": "Legendary",
+      "maxStack": 1,
+      "sellPrice": 500,
+      "canDrop": false,
+      "canSell": false
+    },
+    {
+      "itemId": "burning_potion",
+      "name": "Burning Potion",
+      "description": "Restores 100 HP and increases fire damage by 20% for 60 seconds",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 20,
+      "sellPrice": 35
+    },
+    {
+      "itemId": "healing_snow",
+      "name": "Healing Snow",
+      "description": "Restores 150 HP instantly",
+      "category": "Consumable",
+      "rarity": "Common",
+      "maxStack": 30,
+      "sellPrice": 25
+    },
+    {
+      "itemId": "frost_potion",
+      "name": "Frost Potion",
+      "description": "Restores 100 HP and increases ice resistance by 30% for 60 seconds",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 20,
+      "sellPrice": 35
+    },
+    {
+      "itemId": "ice_crystal",
+      "name": "Ice Crystal",
+      "description": "Rare crystal used to enhance ice abilities",
+      "category": "Material",
+      "rarity": "Rare",
+      "maxStack": 20,
+      "sellPrice": 100
+    },
+    {
+      "itemId": "winter_blessing",
+      "name": "Winter's Blessing",
+      "description": "Grants immunity to all status effects for 30 seconds",
+      "category": "Consumable",
+      "rarity": "Legendary",
+      "maxStack": 3,
+      "sellPrice": 250
+    },
+    {
+      "itemId": "lightning_charm",
+      "name": "Lightning Charm",
+      "description": "Increases movement speed by 15% permanently when equipped",
+      "category": "Misc",
+      "rarity": "Rare",
+      "maxStack": 1,
+      "sellPrice": 200,
+      "canDrop": false
+    },
+    {
+      "itemId": "storm_boots",
+      "name": "Storm Boots",
+      "description": "Boots infused with lightning, boost dash distance by 25%",
+      "category": "Armor",
+      "rarity": "Epic",
+      "maxStack": 1,
+      "sellPrice": 300,
+      "canDrop": false
+    },
+    {
+      "itemId": "basic_health_potion",
+      "name": "Basic Health Potion",
+      "description": "Restores 50 HP",
+      "category": "Consumable",
+      "rarity": "Common",
+      "maxStack": 50,
+      "sellPrice": 10
+    },
+    {
+      "itemId": "greater_health_potion",
+      "name": "Greater Health Potion",
+      "description": "Restores 200 HP",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 30,
+      "sellPrice": 50
+    },
+    {
+      "itemId": "super_health_potion",
+      "name": "Super Health Potion",
+      "description": "Restores 500 HP",
+      "category": "Consumable",
+      "rarity": "Rare",
+      "maxStack": 10,
+      "sellPrice": 150
+    },
+    {
+      "itemId": "mana_crystal",
+      "name": "Mana Crystal",
+      "description": "Restores 100 ability energy",
+      "category": "Consumable",
+      "rarity": "Common",
+      "maxStack": 30,
+      "sellPrice": 20
+    },
+    {
+      "itemId": "strength_buff",
+      "name": "Strength Tonic",
+      "description": "Increases attack damage by 25% for 120 seconds",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 15,
+      "sellPrice": 40
+    },
+    {
+      "itemId": "defense_buff",
+      "name": "Iron Hide Potion",
+      "description": "Reduces incoming damage by 20% for 120 seconds",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 15,
+      "sellPrice": 40
+    },
+    {
+      "itemId": "speed_buff",
+      "name": "Swift Paw Elixir",
+      "description": "Increases movement and attack speed by 30% for 90 seconds",
+      "category": "Consumable",
+      "rarity": "Rare",
+      "maxStack": 10,
+      "sellPrice": 75
+    },
+    {
+      "itemId": "dog_fang",
+      "name": "Dog Fang",
+      "description": "Trophy from a defeated dog. Can be sold for coin.",
+      "category": "Material",
+      "rarity": "Common",
+      "maxStack": 99,
+      "sellPrice": 5
+    },
+    {
+      "itemId": "alpha_fang",
+      "name": "Alpha Dog Fang",
+      "description": "Rare trophy from an alpha dog. Highly valuable.",
+      "category": "Material",
+      "rarity": "Rare",
+      "maxStack": 20,
+      "sellPrice": 50
+    },
+    {
+      "itemId": "ancient_scroll",
+      "name": "Ancient Scroll",
+      "description": "Contains knowledge of a forgotten ability",
+      "category": "Quest",
+      "rarity": "Epic",
+      "maxStack": 1,
+      "sellPrice": 0,
+      "canSell": false,
+      "canDrop": false
+    },
+    {
+      "itemId": "clan_banner",
+      "name": "Clan Banner",
+      "description": "A symbol of clan unity and pride",
+      "category": "Quest",
+      "rarity": "Rare",
+      "maxStack": 1,
+      "sellPrice": 0,
+      "canSell": false,
+      "canDrop": false
+    },
+    {
+      "itemId": "frost_lotus",
+      "name": "Frost Lotus",
+      "description": "Rare flower from frozen lakes, used in healing",
+      "category": "Material",
+      "rarity": "Rare",
+      "maxStack": 10,
+      "sellPrice": 75
+    },
+    {
+      "itemId": "moon_flower",
+      "name": "Moon Flower",
+      "description": "Blooms only under full moons, powerful reagent",
+      "category": "Material",
+      "rarity": "Epic",
+      "maxStack": 5,
+      "sellPrice": 150
+    },
+    {
+      "itemId": "escape_rope",
+      "name": "Escape Rope",
+      "description": "Instantly teleports you to the last safe location",
+      "category": "Consumable",
+      "rarity": "Uncommon",
+      "maxStack": 5,
+      "sellPrice": 100,
+      "canDrop": false
+    },
+    {
+      "itemId": "resurrection_stone",
+      "name": "Resurrection Stone",
+      "description": "Automatically revives you upon death with full HP. Single use.",
+      "category": "Consumable",
+      "rarity": "Legendary",
+      "maxStack": 1,
+      "sellPrice": 1000,
+      "canSell": false
+    }
+  ]
+}

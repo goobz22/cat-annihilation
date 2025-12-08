@@ -1,0 +1,161 @@
+{
+  "id": "mentor_intro_storm",
+  "name": "StormClan Mentor Introduction",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Thunderstrike",
+      "text": "Ho there, youngblood! I'm Thunderstrike, and if you're here, you're ready to learn what REAL speed feels like! StormClan doesn't creep around in shadows - we strike like lightning and vanish like thunder! You ready for this?",
+      "options": [
+        {
+          "text": "Yes! Teach me the ways of StormClan!",
+          "responseId": "eager_response"
+        },
+        {
+          "text": "Tell me about your training methods.",
+          "responseId": "training_info"
+        },
+        {
+          "text": "You seem very... enthusiastic.",
+          "responseId": "personality"
+        }
+      ]
+    },
+    {
+      "id": "eager_response",
+      "speaker": "Thunderstrike",
+      "text": "HAH! Now that's the spirit! I can see the storm in your eyes already! StormClan warriors are the fastest, the fiercest, the most UNSTOPPABLE force on the battlefield! But speed without control is just flailing. You ready to learn discipline AND devastation?",
+      "options": [
+        {
+          "text": "Absolutely! When do we start?",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "What's the first ability I'll learn?",
+          "responseId": "first_ability"
+        }
+      ]
+    },
+    {
+      "id": "training_info",
+      "speaker": "Thunderstrike",
+      "text": "My methods? Simple! We run until your paws bleed, then we run some more! We strike faster than thought, react quicker than instinct! Every StormClan warrior starts with Lightning Dash - you'll cross the battlefield before enemies blink. Then Thunder Roar for crowd control. Finally, Storm Fury for when you need to unleash EVERYTHING!",
+      "options": [
+        {
+          "text": "That sounds intense. I'm in!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Is there a less... painful approach?",
+          "responseId": "alternative_training"
+        }
+      ]
+    },
+    {
+      "id": "personality",
+      "speaker": "Thunderstrike",
+      "text": "Enthusiastic? HA! When you've felt lightning course through your veins, when you've moved so fast the world seems frozen, when you've struck down enemies before they knew you'd moved - THEN you'll understand! This isn't enthusiasm, youngblood. This is PASSION!",
+      "options": [
+        {
+          "text": "Your passion is infectious! Let's do this!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "I need that kind of energy. Teach me!",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "first_ability",
+      "speaker": "Thunderstrike",
+      "text": "Lightning Dash! You'll become a bolt of pure electricity! Close the gap on distant enemies, escape deadly situations, chase down cowards! It's the foundation of everything we do. Speed is life, youngblood. Remember that!",
+      "options": [
+        {
+          "text": "I can't wait to learn it!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "How fast are we talking?",
+          "responseId": "speed_details"
+        }
+      ]
+    },
+    {
+      "id": "alternative_training",
+      "speaker": "Thunderstrike",
+      "text": "Painful? PAINFUL?! Listen here - nothing worth having comes easy! But... I suppose we can start slow. Build up your endurance. Even a cub must learn to walk before they run. But know this: if you want to run with StormClan, eventually you WILL push your limits!",
+      "options": [
+        {
+          "text": "Fair enough. I'll give it my all!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Maybe I should try a different clan...",
+          "responseId": "reconsider"
+        }
+      ]
+    },
+    {
+      "id": "speed_details",
+      "speaker": "Thunderstrike",
+      "text": "Fast enough that arrows miss! Fast enough that blades slice empty air! Fast enough that when they turn to face you, you're ALREADY behind them! The exact speed? Who cares about numbers when you're moving like a force of nature!",
+      "options": [
+        {
+          "text": "That's exactly what I need! Let's begin!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Impressive! I'm ready to learn!",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "reconsider",
+      "speaker": "Thunderstrike",
+      "text": "HAH! That's okay, not everyone has the spark! MistClan might suit you better if you prefer sneaking. Or EmberClan if you like standing still and throwing fire. No shame in knowing your limits! But if you change your mind... the storm is always here, waiting.",
+      "options": [
+        {
+          "text": "Wait! I want to try! Give me a chance!",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "You're right. I'll explore other options.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "begin_training",
+      "speaker": "Thunderstrike",
+      "text": "YES! Now we're talking! Feel the electricity in the air? That's not the weather - that's YOUR potential! From this moment, you're learning the way of the storm! Fast, fierce, and FEARLESS! Let the thunder be your battle cry!",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "training_complete"
+    },
+    {
+      "id": "training_complete",
+      "speaker": "Thunderstrike",
+      "text": "Remember, youngblood: when in doubt, MOVE FASTER! Come back when you're ready for the next lesson. I'll be here, probably running laps. Or fighting. Or both! HAHA!",
+      "options": [
+        {
+          "text": "Thank you, Thunderstrike!",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Thunderstrike",
+      "text": "May your path be swift, wherever it leads! And if you ever feel that spark of lightning in your heart, you know where to find me!",
+      "options": [
+        {
+          "text": "Farewell!",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+/home/user/cat-annihilation/tests/build/CMakeFiles/unit_tests.dir
+/home/user/cat-annihilation/tests/build/CMakeFiles/integration_tests.dir
+/home/user/cat-annihilation/tests/build/CMakeFiles/test.dir
+/home/user/cat-annihilation/tests/build/CMakeFiles/edit_cache.dir
+/home/user/cat-annihilation/tests/build/CMakeFiles/rebuild_cache.dir
