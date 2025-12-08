@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Debug
+
+jobs:
+  validate:
+    name: Code Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++ python3 python3-pip
+
+    - name: Run validation script
+      run: |
+        chmod +x scripts/validate_code.sh
+        scripts/validate_code.sh
+
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          g++ \
+          python3
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          build_tests
+          tests/catch2
+        key: ${{ runner.os }}-build-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+
+    - name: Configure tests
+      run: |
+        mkdir -p build_tests
+        cd build_tests
+        cmake ../tests -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+
+    - name: Build tests
+      run: |
+        cd build_tests
+        cmake --build . -j$(nproc)
+
+    - name: Run unit tests
+      run: |
+        cd build_tests
+        ./unit_tests -r junit > unit_tests_results.xml || true
+        ./unit_tests -r console --success
+
+    - name: Run integration tests
+      run: |
+        cd build_tests
+        ./integration_tests -r junit > integration_tests_results.xml || true
+        ./integration_tests -r console --success
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          build_tests/unit_tests_results.xml
+          build_tests/integration_tests_results.xml
+
+    - name: Test summary
+      if: always()
+      run: |
+        echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "Unit tests and integration tests completed." >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Code formatting check (if using clang-format)
+  format-check:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install clang-format
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-format
+
+    - name: Check formatting
+      run: |
+        # Check if .clang-format exists
+        if [ -f ".clang-format" ]; then
+          find game engine tests -name "*.cpp" -o -name "*.hpp" | \
+            xargs clang-format --dry-run --Werror || true
+        else
+          echo "No .clang-format file found, skipping format check"
+        fi
+
+  # Summary job
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-test]
+    if: success()
+
+    steps:
+    - name: Success message
+      run: |
+        echo "✓ All CI checks passed!"
+        echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+        echo "✅ All validation and tests passed successfully!" >> $GITHUB_STEP_SUMMARY
