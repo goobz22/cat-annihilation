@@ -1,0 +1,154 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "CatAnnihilation"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [0]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "PineTree",
+      "children": [1, 2]
+    },
+    {
+      "name": "Trunk",
+      "mesh": 0
+    },
+    {
+      "name": "Foliage",
+      "mesh": 1,
+      "translation": [0.0, 1.5, 0.0]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "TrunkMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "FoliageMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4
+          },
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC3",
+      "max": [0.3, 2.0, 0.3],
+      "min": [-0.3, 0.0, -0.3]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 25,
+      "type": "VEC3",
+      "max": [1.5, 3.5, 1.5],
+      "min": [-1.5, 0.0, -1.5]
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 25,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 72,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 192
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 192,
+      "byteLength": 192
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 384,
+      "byteLength": 72
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 456,
+      "byteLength": 300
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 756,
+      "byteLength": 300
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1056,
+      "byteLength": 144
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 1200,
+      "uri": "data:application/octet-stream;base64,zczMvgAAAAAAzczOvszMzD4AAAAAAMzMzr7MzMw+AAAAAAAAgD7MzMy+AAAAAAAAAADMzMw+AACAPgAAAAAAAIA+zczMPgAAAAAAzczOvczMzD4AAAAAAMzMzr7MzMw+AAAAAAAAgD7MzMy+AAAAAAAAAADMzMw+AACAPgAAAAAAAIA+zczMvgAAAAAzMzM/zMzMPgAAAAAzMzM/zMzMvgAAAACamZk+zMzMPgAAAACamZk+zczMvgAAAACamZm+zMzMPgAAAACamZm+zczMvgAAAAAzMzO/zMzMPgAAAAAzMzO/zczMPgAAgD4zMzM/zMzMPgAAgD4zMzM/jML1vmE9Az+PwvU+YT0DP4/C9b5hPQO/j8L1PmE9A7+PwvW+YT0DP4/C9T5hPQM/j8L1vmE9A7+PwvU+YT0Dv4/C9b5hPQM/j8L1PmE9Az+PwvW+YT0Dv4/C9T5hPQO/j8L1vmE9Az+PwvU+YT0DP4/C9b5hPQO/j8L1PmE9A7+PwvW+j8L1PmE9Az+PwvU+j8L1PmE9Az+PwvW+j8L1PmE9A7+PwvU+j8L1PmE9A7+PwvW+j8L1PmE9Az+PwvU+j8L1PmE9Az+PwvW+j8L1PmE9A7+PwvU+j8L1PmE9A78AAAAAAAAAAAAAAACamRlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmZiZAAAAAAAAAgD+amRlAmpmZPmZmJkBmZiZAmpmZvmZmJkBmZiZAAAAAAAAAAABmZiZAzczMPppCEkAAAAAAAMzMzJpCEkBmZmY+vHcfQAAAAAAzMzM/vHcfQGZmZr68dx9AzczMPrx3H0DNzMy+vHcfQGZmZr68dx9AAAAAAAAAAABmZmY+vHcfQAAAAAAzMzM/vHcfQGZmZr68dx9AzczMPrx3H0DNzMy+vHcfQGZmZr68dx9AAAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/j8L1vmE9Az+PwvU+YT0DP4/C9b5hPQO/j8L1PmE9A7+PwvW+YT0DP4/C9T5hPQM/j8L1vmE9A7+PwvU+YT0Dv4/C9b5hPQM/j8L1PmE9Az+PwvW+YT0Dv4/C9T5hPQO/j8L1vmE9Az+PwvU+YT0DP4/C9b5hPQO/j8L1PmE9A7+PwvW+j8L1PmE9Az+PwvU+j8L1PmE9Az+PwvW+j8L1PmE9A7+PwvU+j8L1PmE9A7+PwvW+j8L1PmE9Az+PwvU+j8L1PmE9Az+PwvW+j8L1PmE9A7+PwvU+j8L1PmE9A78AAAAAAAAAAAAAAACamRlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmZiZAAAAAAAAAgD+amRlAmpmZPmZmJkBmZiZAmpmZvmZmJkBmZiZAAAAAAAAAAABmZiZAzczMPppCEkAAAAAAAMzMzJpCEkBmZmY+vHcfQAAAAAAzMzM/vHcfQGZmZr68dx9AzczMPrx3H0DNzMy+vHcfQGZmZr68dx9AAAAAAAAAAABmZmY+vHcfQAAAAAAzMzM/vHcfQGZmZr68dx9AzczMPrx3H0DNzMy+vHcfQGZmZr68dx9AAAAAAAABAAIAAwAEAAUABgAHAAgACQAKAAsABgAHAAgACQAKAAsADAANAA4ADwAJAAoACwAMAAEAAgADAAQABQAGAAcACAAJAAoACwAGAAcACAAJAAoACwAMAAEAAgADAAQABQAGAAgACQAKAAsADAANAA4ADwAQABEAEgATABQAFQAWABcAGAARABIAEwAUABUAFgAXABgAEQASABMAFAAVABYAFwAYABEAEgATABQAFQAWABcAGAA="
+    }
+  ],
+  "materials": [
+    {
+      "name": "TrunkMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.4, 0.25, 0.15, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      }
+    },
+    {
+      "name": "FoliageMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.1, 0.5, 0.2, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      }
+    }
+  ]
+}

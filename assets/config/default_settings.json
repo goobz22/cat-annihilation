@@ -1,0 +1,39 @@
+{
+    "graphics": {
+        "resolution": {
+            "width": 1920,
+            "height": 1080
+        },
+        "fullscreen": false,
+        "vsync": true,
+        "shadowQuality": "high",
+        "shadowResolution": 2048,
+        "antialiasing": "fxaa",
+        "bloom": true,
+        "ambientOcclusion": true
+    },
+    "audio": {
+        "masterVolume": 1.0,
+        "musicVolume": 0.7,
+        "sfxVolume": 0.8,
+        "voiceVolume": 1.0
+    },
+    "controls": {
+        "mouseSensitivity": 1.0,
+        "invertY": false,
+        "forward": "W",
+        "backward": "S",
+        "left": "A",
+        "right": "D",
+        "jump": "Space",
+        "attack": "MouseLeft",
+        "spell": "MouseRight",
+        "pause": "Escape"
+    },
+    "gameplay": {
+        "difficulty": "normal",
+        "showDamageNumbers": true,
+        "showFPS": false,
+        "cameraShake": true
+    }
+}

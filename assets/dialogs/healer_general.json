@@ -1,0 +1,312 @@
+{
+  "id": "healer_general",
+  "name": "Healer General Dialog",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Snowpaw",
+      "text": "Peace be with you, warrior. I sense you carry wounds - some visible, others not. I am a healer, trained in the ancient arts of restoration. How may I help you today?",
+      "options": [
+        {
+          "text": "I need healing.",
+          "responseId": "request_healing"
+        },
+        {
+          "text": "Do you sell healing supplies?",
+          "responseId": "show_shop"
+        },
+        {
+          "text": "What kind of healing do you practice?",
+          "responseId": "healing_info"
+        },
+        {
+          "text": "Just passing by.",
+          "responseId": "just_visiting"
+        }
+      ]
+    },
+    {
+      "id": "request_healing",
+      "speaker": "Snowpaw",
+      "text": "Of course. Let me examine you... *places paw gently on your shoulder* Yes, I can help. I offer two types of healing: basic restoration for minor wounds, or deep healing for serious injuries. Basic is free for clan members. Deep healing requires rare herbs and costs accordingly.",
+      "options": [
+        {
+          "text": "Basic healing is fine.",
+          "responseId": "basic_healing"
+        },
+        {
+          "text": "I need deep healing.",
+          "responseId": "deep_healing"
+        },
+        {
+          "text": "What's the difference?",
+          "responseId": "healing_difference"
+        }
+      ]
+    },
+    {
+      "id": "show_shop",
+      "speaker": "Snowpaw",
+      "text": "Indeed I do! I stock healing snow, restoration potions, resistance buffs, and rare medicinal crystals. I also carry some FrostClan-specific remedies. Everything is prepared with care and blessed for maximum effectiveness.",
+      "options": [
+        {
+          "text": "Show me what you have.",
+          "responseId": "open_inventory"
+        },
+        {
+          "text": "What's your most powerful healing item?",
+          "responseId": "best_healing"
+        },
+        {
+          "text": "Do you offer any discounts?",
+          "responseId": "discounts"
+        }
+      ]
+    },
+    {
+      "id": "healing_info",
+      "speaker": "Snowpaw",
+      "text": "I practice the ancient art of frost healing - using the purifying power of ice and snow to cleanse wounds and restore vitality. Unlike fire's cauterization or nature's slow growth, ice healing works by crystallizing damaged tissue and reforming it perfectly. It's painless and leaves no scars.",
+      "options": [
+        {
+          "text": "Fascinating! Can you teach me?",
+          "responseId": "learn_healing"
+        },
+        {
+          "text": "That sounds useful. Can you heal me?",
+          "responseId": "request_healing"
+        },
+        {
+          "text": "Interesting. What else do you do?",
+          "responseId": "greeting"
+        }
+      ]
+    },
+    {
+      "id": "learn_healing",
+      "speaker": "Snowpaw",
+      "text": "Healing magic is a sacred art, taught only to those dedicated to preserving life. It requires patience, compassion, and years of study. I can teach you basic field medicine - how to use healing items effectively, identify helpful herbs, and treat common injuries. Would that interest you?",
+      "options": [
+        {
+          "text": "Yes, please teach me field medicine.",
+          "responseId": "field_medicine"
+        },
+        {
+          "text": "Maybe another time. I'm focused on combat for now.",
+          "responseId": "focus_combat"
+        }
+      ]
+    },
+    {
+      "id": "basic_healing",
+      "speaker": "Snowpaw",
+      "text": "*closes eyes and channels frost energy* Feel the cooling sensation... your wounds are crystallizing, reforming, healing. There. The major damage is repaired. You should feel much better now. Rest when you can - even magic can't replace proper recovery time.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 2.5,
+      "nextNode": "healing_complete"
+    },
+    {
+      "id": "deep_healing",
+      "speaker": "Snowpaw",
+      "text": "Deep healing requires rare frost lotus and crystallized moon water. The cost is 200 coins, but it will restore you completely - even old scars and lingering ailments will fade. It's worth the price when your life depends on being at peak condition.",
+      "options": [
+        {
+          "text": "Here's 200 coins. Please proceed.",
+          "responseId": "pay_deep_healing"
+        },
+        {
+          "text": "That's expensive. Basic healing will do.",
+          "responseId": "basic_healing"
+        },
+        {
+          "text": "I'll come back when I have enough.",
+          "responseId": "save_coins"
+        }
+      ]
+    },
+    {
+      "id": "healing_difference",
+      "speaker": "Snowpaw",
+      "text": "Basic healing restores your health and closes wounds, but old injuries or lingering damage remain. Deep healing completely regenerates you - as if you'd never been injured at all. It also removes curses, poisons, and other afflictions. For most warriors, basic is sufficient.",
+      "options": [
+        {
+          "text": "Basic healing then.",
+          "responseId": "basic_healing"
+        },
+        {
+          "text": "I want the deep healing.",
+          "responseId": "deep_healing"
+        }
+      ]
+    },
+    {
+      "id": "pay_deep_healing",
+      "speaker": "Snowpaw",
+      "text": "*accepts payment and begins ritual* This will take a moment. Relax... breathe deeply... *frost energy intensifies* Feel the ancient power flowing through you, rewriting damage, erasing scars, purifying every cell. There. You are completely restored. How do you feel?",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "deep_healing_complete"
+    },
+    {
+      "id": "deep_healing_complete",
+      "speaker": "Snowpaw",
+      "text": "Perfect regeneration. Your body is now as if you'd never seen battle. Use this gift wisely - such complete healing takes a toll on the natural order. Don't waste it.",
+      "options": [
+        {
+          "text": "I feel amazing! Thank you!",
+          "responseId": "grateful"
+        },
+        {
+          "text": "Worth every coin.",
+          "responseId": "grateful"
+        }
+      ]
+    },
+    {
+      "id": "healing_complete",
+      "speaker": "Snowpaw",
+      "text": "You're welcome to return anytime you need aid. Healing is my calling, and I'm honored to help those who fight to protect us.",
+      "options": [
+        {
+          "text": "Thank you, Snowpaw.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "best_healing",
+      "speaker": "Snowpaw",
+      "text": "That would be Winter's Blessing - a legendary concoction that grants complete immunity to all status effects for 30 seconds. Poison, curses, burns, freezing, paralysis - nothing can touch you. It's expensive and rare, but in desperate situations, it's priceless.",
+      "options": [
+        {
+          "text": "I'll take one.",
+          "responseId": "open_inventory"
+        },
+        {
+          "text": "Show me all your items.",
+          "responseId": "open_inventory"
+        }
+      ]
+    },
+    {
+      "id": "discounts",
+      "speaker": "Snowpaw",
+      "text": "I offer reduced prices to FrostClan members - it's important we support our own. I also run periodic sales on common items when I have surplus. And if you bring me rare healing herbs you find in the wild, I'll trade you finished potions at a discount.",
+      "options": [
+        {
+          "text": "Fair enough. Show me your wares.",
+          "responseId": "open_inventory"
+        },
+        {
+          "text": "What herbs are you looking for?",
+          "responseId": "herb_info"
+        }
+      ]
+    },
+    {
+      "id": "herb_info",
+      "speaker": "Snowpaw",
+      "text": "Frost lotus from frozen lakes, moon flowers that bloom under full moons, crystallized dew from mountain peaks, and ancient ice from the eternal glacier. If you find any during your travels, bring them to me. I pay well for quality ingredients.",
+      "options": [
+        {
+          "text": "I'll keep an eye out.",
+          "responseId": "open_inventory"
+        },
+        {
+          "text": "Good to know. Let me see your shop.",
+          "responseId": "open_inventory"
+        }
+      ]
+    },
+    {
+      "id": "field_medicine",
+      "speaker": "Snowpaw",
+      "text": "Wonderful! Here's what every warrior should know: always carry basic healing potions. Use them before you're critically wounded, not after. Learn to identify poisonous plants versus healing ones. And most importantly - know when to retreat and heal rather than fight through injuries. Pride kills more warriors than enemies do.",
+      "options": [
+        {
+          "text": "Wise advice. Thank you!",
+          "responseId": "grateful"
+        },
+        {
+          "text": "I'll remember that.",
+          "responseId": "grateful"
+        }
+      ]
+    },
+    {
+      "id": "focus_combat",
+      "speaker": "Snowpaw",
+      "text": "I understand. Combat skills keep you alive in battle, but healing knowledge keeps you alive afterward. The offer stands whenever you're interested. For now, is there anything else I can help you with?",
+      "options": [
+        {
+          "text": "Show me your healing supplies.",
+          "responseId": "open_inventory"
+        },
+        {
+          "text": "Not right now. Thank you though.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "save_coins",
+      "speaker": "Snowpaw",
+      "text": "Of course. I'll be here when you're ready. In the meantime, basic healing is always available if you need it.",
+      "options": [
+        {
+          "text": "Actually, basic healing would help.",
+          "responseId": "basic_healing"
+        },
+        {
+          "text": "I'll come back later. Thank you.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "open_inventory",
+      "speaker": "Snowpaw",
+      "text": "Here's everything I have available. All items are freshly prepared and properly blessed. Take your time choosing.",
+      "options": [
+        {
+          "text": "Thank you.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "grateful",
+      "speaker": "Snowpaw",
+      "text": "You're most welcome. Stay safe out there, warrior. The world needs protectors like you.",
+      "options": [
+        {
+          "text": "Your kindness means a lot.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "just_visiting",
+      "speaker": "Snowpaw",
+      "text": "That's perfectly fine. May peace follow your path, traveler.",
+      "options": [
+        {
+          "text": "And yours as well.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Snowpaw",
+      "text": "May the frost guide you safely, warrior. Return anytime you need aid.",
+      "options": [
+        {
+          "text": "Farewell, Snowpaw.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

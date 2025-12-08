@@ -1,0 +1,131 @@
+{
+  "id": "mentor_intro_mist",
+  "name": "MistClan Mentor Introduction",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Shadowwhisker",
+      "text": "Greetings, young one. I sense the mist's call within you. You seek to learn the ancient ways of stealth and shadow?",
+      "options": [
+        {
+          "text": "Yes, I wish to learn the ways of MistClan.",
+          "responseId": "accept_training"
+        },
+        {
+          "text": "Tell me about MistClan's abilities.",
+          "responseId": "explain_abilities"
+        },
+        {
+          "text": "Not right now, perhaps later.",
+          "responseId": "decline"
+        }
+      ]
+    },
+    {
+      "id": "accept_training",
+      "speaker": "Shadowwhisker",
+      "text": "Excellent choice. The path of shadows is not for the weak of heart, but I see potential in you. We of MistClan value silence over strength, precision over power. Are you prepared to embrace these teachings?",
+      "options": [
+        {
+          "text": "I am ready to begin.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "What makes MistClan different from the others?",
+          "responseId": "clan_philosophy"
+        }
+      ]
+    },
+    {
+      "id": "explain_abilities",
+      "speaker": "Shadowwhisker",
+      "text": "MistClan specializes in stealth and deception. Our basic ability, Stealth Step, allows you to move unseen through the mist. As you progress, you'll learn Shadow Strike for devastating ambushes, and eventually master the Mist Cloak for protection. Each ability requires focus and dedication to master.",
+      "options": [
+        {
+          "text": "That sounds perfect for me. Let's begin training.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "How long does it take to master these abilities?",
+          "responseId": "training_time"
+        },
+        {
+          "text": "I'll think about it.",
+          "responseId": "decline"
+        }
+      ]
+    },
+    {
+      "id": "clan_philosophy",
+      "speaker": "Shadowwhisker",
+      "text": "While StormClan relies on raw speed and EmberClan on destructive force, we believe true power lies in not being seen at all. The greatest victory is one where your enemy never knew you were there. We are the whisper in the night, the shadow that has no form.",
+      "options": [
+        {
+          "text": "I understand. Please teach me.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "This philosophy resonates with me.",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "training_time",
+      "speaker": "Shadowwhisker",
+      "text": "Mastery cannot be rushed, young one. Some grasp Stealth Step in days, others take weeks. But remember: the journey itself teaches patience, and patience is the cornerstone of stealth. When you're ready to commit, return to me.",
+      "options": [
+        {
+          "text": "I'm ready to commit now.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Thank you for the wisdom. I'll return soon.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "begin_training",
+      "speaker": "Shadowwhisker",
+      "text": "Very well. Your journey into shadow begins today. I will teach you our techniques, but remember: true stealth comes from within. Clear your mind, trust the mist, and let the shadows be your guide. May the fog forever shield your path.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "training_complete"
+    },
+    {
+      "id": "training_complete",
+      "speaker": "Shadowwhisker",
+      "text": "When you wish to learn new abilities, return to me. I will be here, watching from the shadows.",
+      "options": [
+        {
+          "text": "Thank you, mentor.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "decline",
+      "speaker": "Shadowwhisker",
+      "text": "The mist is patient. When you are ready, the shadows will welcome you. Until then, walk carefully.",
+      "options": [
+        {
+          "text": "Farewell.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Shadowwhisker",
+      "text": "Walk softly, young one. May the mist guide your steps.",
+      "options": [
+        {
+          "text": "Goodbye.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

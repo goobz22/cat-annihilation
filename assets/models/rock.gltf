@@ -1,0 +1,89 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "CatAnnihilation"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [0]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Rock",
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "name": "RockMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 14,
+      "type": "VEC3",
+      "max": [0.6, 0.8, 0.5],
+      "min": [-0.5, 0.0, -0.6]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 14,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 72,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 168
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 168,
+      "byteLength": 168
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 336,
+      "byteLength": 144
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 480,
+      "uri": "data:application/octet-stream;base64,zczMPgAAAAAzMzO/zczMPgAAAACamZk+MzMzPwAAAACamZm+MzMzPwAAAAAAAIA/MzMzvgAAAACamZk+MzMzvgAAAACamZm+zczMvgAAAAAzMzO/zczMvgAAAACamZk+AAAAAAAAAAAAAAAAAAAAAAC7qqo+AAAAAAAAAAAAu6qqPgAAAAAAAIA/u6qqvgAAAAAAAIA/MzMzvgAAAAAAAAAAAAAAAAAAAACamZm+u6qqvgAAAACamZk+AAAAAAAAAABmZmY+mpmZPjMzMz4AAIA+AAAAPgAAgD8AAAA+AACAP5qZmT4zMzM+ZmZmPgAAAACamZk+MzMzPgAAgD4AAAA+AABAPwAAAD5mZmY+AAAAAI/C9T5xPYM+j8L1Pm/dAz+PwvU+j8L1PgAAgD8AAIA/AACAP2/dAz+PwvU+AACAP4/C9T4AAIA/j8L1PgAAgD+PwvU+AACAP4/C9T4AAIA/j8L1PgAAgD9v3QM/j8L1PgAAgD9v3QM/j8L1PgAAgD9v3QM/j8L1PgAAgD8AAIA/AACAP2/dAz+PwvU+ZmZmPgAAAAAAAAAAmpmZPjMzMz4AAAA+AAAAPgAAgD4AAAA+mpmZPjMzMz5mZmY+AAAAAAAAAD8AAAA+AAEAAgADAAQABQAGAAcACAAJAAoACwAMAAcADQAGAAcACAANAAIAAwAEAAEAAgADAAQABQAGAAcACAAJAAoACwAMAAcADQAGAAcACAANAAYABwAIAAUABgAHAAgACQAKAAsADAAHAA0ABgAHAAgADQAJAAoACwAIAAkACgALAAwABwANAAYABwAIAA0ADAAHAA0ACgALAAwABwANAAYABwAIAA0A"
+    }
+  ],
+  "materials": [
+    {
+      "name": "RockMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.5, 0.5, 0.5, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      }
+    }
+  ]
+}

@@ -1,0 +1,213 @@
+{
+  "id": "mentor_intro_ember",
+  "name": "EmberClan Mentor Introduction",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Flamefur",
+      "text": "The flames welcome you, seeker. I am Flamefur, keeper of EmberClan's ancient fire magic. You stand before me seeking power - but fire demands respect. Are you prepared to walk through the flames to claim your strength?",
+      "options": [
+        {
+          "text": "I am ready to master fire magic.",
+          "responseId": "show_resolve"
+        },
+        {
+          "text": "What does fire magic entail?",
+          "responseId": "explain_magic"
+        },
+        {
+          "text": "Isn't fire dangerous?",
+          "responseId": "danger_concern"
+        }
+      ]
+    },
+    {
+      "id": "show_resolve",
+      "speaker": "Flamefur",
+      "text": "Bold words. But resolve alone won't protect you when the flames test your spirit. Fire is not merely a weapon - it's a living force. It can warm or destroy, illuminate or consume. EmberClan warriors learn to channel this duality. Do you understand?",
+      "options": [
+        {
+          "text": "I understand. Fire is both creation and destruction.",
+          "responseId": "wise_answer"
+        },
+        {
+          "text": "I just want to throw fireballs at my enemies.",
+          "responseId": "simple_answer"
+        }
+      ]
+    },
+    {
+      "id": "explain_magic",
+      "speaker": "Flamefur",
+      "text": "Fire magic is the art of channeling thermal energy through willpower. You'll begin with Fireball - a concentrated sphere of flame. Progress to Flame Shield - protecting yourself with a corona of fire. Master Inferno - summoning a pillar of devastating flame. Each requires focus, control, and respect for the element.",
+      "options": [
+        {
+          "text": "I'm ready to learn this art.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "How does one 'respect' fire?",
+          "responseId": "respect_fire"
+        }
+      ]
+    },
+    {
+      "id": "danger_concern",
+      "speaker": "Flamefur",
+      "text": "Dangerous? Of course it is! That's the point! But a warrior who fears danger has already lost. Fire respects those who respect it. Treat it carelessly, and you'll be consumed. Treat it with reverence, and it becomes an extension of your will. Which type of warrior are you?",
+      "options": [
+        {
+          "text": "One who respects power. Teach me.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "How do I avoid getting burned?",
+          "responseId": "avoid_burns"
+        }
+      ]
+    },
+    {
+      "id": "wise_answer",
+      "speaker": "Flamefur",
+      "text": "Excellent! You grasp the fundamental truth. Many come seeking only destruction, but EmberClan's strength lies in understanding fire's full nature. A warrior who knows when to burn and when to warm - that is true mastery. You show promise.",
+      "options": [
+        {
+          "text": "Thank you. I'm honored to learn from you.",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "simple_answer",
+      "speaker": "Flamefur",
+      "text": "*sighs* Another one seeking only destruction. Very well. Fire will still serve you in battle, even if you don't fully appreciate its nature. But know this: those who see fire as merely a weapon never achieve true mastery. Perhaps in time, you'll understand.",
+      "options": [
+        {
+          "text": "I'll try to understand as I learn.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Right now I just need to fight dogs.",
+          "responseId": "pragmatic"
+        }
+      ]
+    },
+    {
+      "id": "respect_fire",
+      "speaker": "Flamefur",
+      "text": "To respect fire is to understand that you don't truly control it - you negotiate with it. You offer your will, your focus, your energy, and in return, fire lends you its power. Lose focus, and it will turn on you. Maintain discipline, and it becomes your greatest ally.",
+      "options": [
+        {
+          "text": "I will maintain that discipline.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Has it ever turned on you?",
+          "responseId": "personal_story"
+        }
+      ]
+    },
+    {
+      "id": "avoid_burns",
+      "speaker": "Flamefur",
+      "text": "You don't avoid them completely - minor burns are part of learning. But serious injury? That comes from arrogance or carelessness. Listen to your instincts. Feel the heat building before it becomes dangerous. Fire speaks to those who listen. You'll learn its language.",
+      "options": [
+        {
+          "text": "I'll learn to listen. Please teach me.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "Maybe fire magic isn't for me...",
+          "responseId": "reconsider"
+        }
+      ]
+    },
+    {
+      "id": "personal_story",
+      "speaker": "Flamefur",
+      "text": "Once, yes. In my youth, I thought I'd mastered fire. Arrogance. I attempted to summon an inferno while exhausted, distracted. The flames consumed my mentor's training ground and nearly killed me. These scars remind me: fire forgives nothing. But it also taught me everything.",
+      "options": [
+        {
+          "text": "I'll remember this lesson. Thank you for sharing.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "That's... concerning.",
+          "responseId": "second_thoughts"
+        }
+      ]
+    },
+    {
+      "id": "pragmatic",
+      "speaker": "Flamefur",
+      "text": "Practical, if not enlightened. Very well - I'll teach you to weaponize fire. But don't come crying to me when you hit your ceiling because you refused to understand the deeper principles. Ready to begin?",
+      "options": [
+        {
+          "text": "Ready.",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "second_thoughts",
+      "speaker": "Flamefur",
+      "text": "It should concern you! That's wisdom speaking. But don't let fear paralyze you. With proper training and respect, you'll wield fire safely. Every EmberClan warrior bears some scars - they're marks of growth, not failure. Will you let fear stop you?",
+      "options": [
+        {
+          "text": "No. I'll face my fear and learn.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "I think I need more time to prepare.",
+          "responseId": "reconsider"
+        }
+      ]
+    },
+    {
+      "id": "reconsider",
+      "speaker": "Flamefur",
+      "text": "Honestly? That's wise. Fire magic isn't for everyone, and there's no shame in choosing a different path. But if you change your mind - if you feel that spark within you - the flames will be waiting. We don't turn away those with true potential.",
+      "options": [
+        {
+          "text": "Thank you for understanding.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Wait - I do feel that spark. I want to try.",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "begin_training",
+      "speaker": "Flamefur",
+      "text": "Then let the flames bear witness to your commitment. From this moment, you walk the path of fire. Feel its warmth, respect its fury, and channel its power. May your flames burn bright and true, young ember.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "training_complete"
+    },
+    {
+      "id": "training_complete",
+      "speaker": "Flamefur",
+      "text": "Your training begins now. Practice, meditate on fire's nature, and return when you're ready for the next lesson. Remember: the flame that burns within you is stronger than any flame that burns before you.",
+      "options": [
+        {
+          "text": "Thank you, Flamefur. I won't disappoint you.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Flamefur",
+      "text": "Walk your path, seeker. May you find the strength you seek, whatever form it takes.",
+      "options": [
+        {
+          "text": "Farewell.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}
