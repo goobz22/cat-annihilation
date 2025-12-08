@@ -1,0 +1,48 @@
+{
+  "graphics": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "shadows": {
+      "enabled": true,
+      "resolution": 2048,
+      "quality": "high"
+    },
+    "vsync": true,
+    "fov": 90.0,
+    "antialiasing": 4,
+    "textureQuality": "ultra",
+    "renderDistance": 1000.0
+  },
+  "audio": {
+    "masterVolume": 0.8,
+    "musicVolume": 0.6,
+    "sfxVolume": 1.0,
+    "voiceVolume": 0.9,
+    "outputDevice": "default"
+  },
+  "gameplay": {
+    "difficulty": "normal",
+    "mouseSensitivity": 0.5,
+    "invertY": false,
+    "autoSave": true,
+    "autoSaveInterval": 300
+  },
+  "engine": {
+    "maxFPS": 144,
+    "threadCount": 8,
+    "cullingDistance": 500.0,
+    "lodLevels": 4
+  },
+  "vulkan": {
+    "enableValidation": false,
+    "preferredGPU": 0,
+    "maxFramesInFlight": 2
+  },
+  "cuda": {
+    "enablePhysics": true,
+    "particleCount": 100000,
+    "blockSize": 256
+  }
+}
