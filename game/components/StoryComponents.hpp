@@ -125,10 +125,10 @@ struct QuestGiverComponent {
 
 /**
  * Elemental Affinity Component
- * Entities with elemental powers
+ * Entities with elemental powers (clan-based elements)
  */
 struct ElementalAffinityComponent {
-    ElementType primaryElement;
+    ClanElementType primaryElement = ClanElementType::Shadow;
     float elementalPower = 1.0f;      // Multiplier for elemental damage
     float elementalResistance = 0.0f; // Resistance to same element (0.0 to 1.0)
 
@@ -141,18 +141,18 @@ struct ElementalAffinityComponent {
     /**
      * Apply elemental effect
      */
-    void applyElementalEffect(ElementType element, float duration) {
+    void applyElementalEffect(ClanElementType element, float duration) {
         switch (element) {
-            case ElementType::Fire:
+            case ClanElementType::Fire:
                 burnDuration = std::max(burnDuration, duration);
                 break;
-            case ElementType::Ice:
+            case ClanElementType::Ice:
                 freezeDuration = std::max(freezeDuration, duration);
                 break;
-            case ElementType::Lightning:
+            case ClanElementType::Lightning:
                 shockDuration = std::max(shockDuration, duration);
                 break;
-            case ElementType::Shadow:
+            case ClanElementType::Shadow:
                 shadowDuration = std::max(shadowDuration, duration);
                 break;
         }
@@ -196,7 +196,7 @@ struct ElementalAffinityComponent {
     /**
      * Calculate damage reduction from resistance
      */
-    float getResistanceMultiplier(ElementType attackElement) const {
+    float getResistanceMultiplier(ClanElementType attackElement) const {
         if (attackElement == primaryElement) {
             return 1.0f - elementalResistance;
         }

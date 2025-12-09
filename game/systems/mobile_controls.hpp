@@ -21,6 +21,8 @@ namespace Engine::UI {
 
 namespace Game {
 
+using Engine::u32;
+
 /**
  * @brief Type of touch control element
  */

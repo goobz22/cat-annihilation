@@ -26,7 +26,7 @@ inline std::vector<Quest> getAllQuests() {
                      "the canine hordes threaten our territory. Prove yourself worthy.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 1;
-        q.requiredClan = Clan::Shadow;
+        q.requiredClan = Clan::MistClan;
         q.questGiverId = "shadow_elder_nyx";
 
         QuestObjective obj1;
@@ -60,7 +60,7 @@ inline std::vector<Quest> getAllQuests() {
                      "and your enemies will never see you coming.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 3;
-        q.requiredClan = Clan::Shadow;
+        q.requiredClan = Clan::MistClan;
         q.prerequisites = {"shadow_001_awakening"};
         q.questGiverId = "shadow_master_umbra";
 
@@ -96,7 +96,7 @@ inline std::vector<Quest> getAllQuests() {
                      "stopped before it spreads its influence further.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 5;
-        q.requiredClan = Clan::Shadow;
+        q.requiredClan = Clan::MistClan;
         q.prerequisites = {"shadow_002_stealth"};
         q.questGiverId = "shadow_elder_nyx";
 
@@ -132,7 +132,7 @@ inline std::vector<Quest> getAllQuests() {
                      "warriors and prepare for the final confrontation.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 8;
-        q.requiredClan = Clan::Shadow;
+        q.requiredClan = Clan::MistClan;
         q.prerequisites = {"shadow_003_dark_alpha"};
         q.questGiverId = "shadow_elder_nyx";
 
@@ -174,7 +174,7 @@ inline std::vector<Quest> getAllQuests() {
                      "the true power of the Shadow Clan!";
         q.type = QuestType::MainStory;
         q.requiredLevel = 10;
-        q.requiredClan = Clan::Shadow;
+        q.requiredClan = Clan::MistClan;
         q.prerequisites = {"shadow_004_united"};
         q.questGiverId = "shadow_elder_nyx";
 
@@ -214,7 +214,7 @@ inline std::vector<Quest> getAllQuests() {
                      "what it takes to stand among legends.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 1;
-        q.requiredClan = Clan::Warrior;
+        q.requiredClan = Clan::StormClan;
         q.questGiverId = "warrior_chief_rex";
 
         QuestObjective obj1;
@@ -248,7 +248,7 @@ inline std::vector<Quest> getAllQuests() {
                      "Train under Master Fang to learn this devastating art.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 3;
-        q.requiredClan = Clan::Warrior;
+        q.requiredClan = Clan::StormClan;
         q.prerequisites = {"warrior_001_trial"};
         q.questGiverId = "warrior_master_fang";
 
@@ -283,7 +283,7 @@ inline std::vector<Quest> getAllQuests() {
                      "unstoppable. But beware - the berserker's path is dangerous.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 5;
-        q.requiredClan = Clan::Warrior;
+        q.requiredClan = Clan::StormClan;
         q.prerequisites = {"warrior_002_iron_paw"};
         q.questGiverId = "warrior_chief_rex";
 
@@ -319,7 +319,7 @@ inline std::vector<Quest> getAllQuests() {
                      "Rally the warriors and show no mercy!";
         q.type = QuestType::MainStory;
         q.requiredLevel = 8;
-        q.requiredClan = Clan::Warrior;
+        q.requiredClan = Clan::StormClan;
         q.prerequisites = {"warrior_003_berserker"};
         q.questGiverId = "warrior_chief_rex";
 
@@ -355,7 +355,7 @@ inline std::vector<Quest> getAllQuests() {
                      "Face the ultimate challenge and earn eternal glory!";
         q.type = QuestType::MainStory;
         q.requiredLevel = 10;
-        q.requiredClan = Clan::Warrior;
+        q.requiredClan = Clan::StormClan;
         q.prerequisites = {"warrior_004_crimson"};
         q.questGiverId = "warrior_chief_rex";
 
@@ -395,7 +395,7 @@ inline std::vector<Quest> getAllQuests() {
                      "and eliminate your targets with skill.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 1;
-        q.requiredClan = Clan::Hunter;
+        q.requiredClan = Clan::EmberClan;
         q.questGiverId = "hunter_elder_talon";
 
         QuestObjective obj1;
@@ -429,7 +429,7 @@ inline std::vector<Quest> getAllQuests() {
                      "and your arrows will always find their mark.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 3;
-        q.requiredClan = Clan::Hunter;
+        q.requiredClan = Clan::EmberClan;
         q.prerequisites = {"hunter_001_first_hunt"};
         q.questGiverId = "hunter_master_keen";
 
@@ -465,7 +465,7 @@ inline std::vector<Quest> getAllQuests() {
                      "hunter can track and defeat this primal terror.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 5;
-        q.requiredClan = Clan::Hunter;
+        q.requiredClan = Clan::EmberClan;
         q.prerequisites = {"hunter_002_eagle_eye"};
         q.questGiverId = "hunter_elder_talon";
 
@@ -502,7 +502,7 @@ inline std::vector<Quest> getAllQuests() {
                      "prepare for the great hunt.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 8;
-        q.requiredClan = Clan::Hunter;
+        q.requiredClan = Clan::EmberClan;
         q.prerequisites = {"hunter_003_primal"};
         q.questGiverId = "hunter_elder_talon";
 
@@ -544,7 +544,7 @@ inline std::vector<Quest> getAllQuests() {
                      "shall be tracked down and eliminated. None shall escape!";
         q.type = QuestType::MainStory;
         q.requiredLevel = 10;
-        q.requiredClan = Clan::Hunter;
+        q.requiredClan = Clan::EmberClan;
         q.prerequisites = {"hunter_004_pack"};
         q.questGiverId = "hunter_elder_talon";
 
@@ -584,7 +584,7 @@ inline std::vector<Quest> getAllQuests() {
                      "You possess the gift - now you must learn to control it.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 1;
-        q.requiredClan = Clan::Mystic;
+        q.requiredClan = Clan::FrostClan;
         q.questGiverId = "mystic_oracle_luna";
 
         QuestObjective obj1;
@@ -618,7 +618,7 @@ inline std::vector<Quest> getAllQuests() {
                      "texts and unlock abilities beyond mortal comprehension.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 3;
-        q.requiredClan = Clan::Mystic;
+        q.requiredClan = Clan::FrostClan;
         q.prerequisites = {"mystic_001_awakening"};
         q.questGiverId = "mystic_sage_wisdom";
 
@@ -654,7 +654,7 @@ inline std::vector<Quest> getAllQuests() {
                      "Prove you can wield these forces and bend them to your will.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 5;
-        q.requiredClan = Clan::Mystic;
+        q.requiredClan = Clan::FrostClan;
         q.prerequisites = {"mystic_002_arcane"};
         q.questGiverId = "mystic_oracle_luna";
 
@@ -690,7 +690,7 @@ inline std::vector<Quest> getAllQuests() {
                      "and channel energies beyond imagination.";
         q.type = QuestType::MainStory;
         q.requiredLevel = 8;
-        q.requiredClan = Clan::Mystic;
+        q.requiredClan = Clan::FrostClan;
         q.prerequisites = {"mystic_003_elemental"};
         q.questGiverId = "mystic_oracle_luna";
 
@@ -733,7 +733,7 @@ inline std::vector<Quest> getAllQuests() {
                      "Transcend mortal limitations and achieve Arcane Ascension!";
         q.type = QuestType::MainStory;
         q.requiredLevel = 10;
-        q.requiredClan = Clan::Mystic;
+        q.requiredClan = Clan::FrostClan;
         q.prerequisites = {"mystic_004_circle"};
         q.questGiverId = "mystic_oracle_luna";
 

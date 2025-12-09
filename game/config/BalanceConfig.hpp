@@ -253,7 +253,7 @@ constexpr uint32_t getEnemyCountForWave(uint32_t waveNumber) {
 /**
  * @brief Calculate scaling multiplier for a given wave
  */
-constexpr float getScalingMultiplier(uint32_t waveNumber, float scalingPerWave) {
+inline float getScalingMultiplier(uint32_t waveNumber, float scalingPerWave) {
     float multiplier = std::pow(scalingPerWave, static_cast<float>(waveNumber - 1));
     return std::min(multiplier, Waves::MAX_SCALING_MULTIPLIER);
 }

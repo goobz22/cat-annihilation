@@ -1,6 +1,7 @@
 #include "Terrain.hpp"
 #include "../../engine/cuda/CudaError.hpp"
 #include "../../engine/math/Math.hpp"
+#include "../../engine/core/Logger.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
@@ -79,7 +80,8 @@ Terrain::Terrain(Terrain&& other) noexcept
 
 Terrain& Terrain::operator=(Terrain&& other) noexcept {
     if (this != &other) {
-        m_cudaContext = other.m_cudaContext;
+        // Note: m_cudaContext is a reference and can't be reassigned
+        // Both objects must share the same CUDA context for move assignment
         m_params = std::move(other.m_params);
         m_gpuHeightmap = std::move(other.m_gpuHeightmap);
         m_gpuNormals = std::move(other.m_gpuNormals);
@@ -105,54 +107,105 @@ void Terrain::generate() {
     const int resolution = m_params.resolution;
     const int vertexCount = resolution * resolution;
 
+    Engine::Logger::info("Terrain: Starting generation (resolution={}, vertices={})", resolution, vertexCount);
+
     // Allocate GPU buffers
+    Engine::Logger::info("Terrain: Allocating GPU buffers...");
     m_gpuHeightmap = CatEngine::CUDA::CudaBuffer<float>(vertexCount);
+    Engine::Logger::info("Terrain: Heightmap buffer allocated ({} floats)", vertexCount);
     m_gpuNormals = CatEngine::CUDA::CudaBuffer<float>(vertexCount * 3);
+    Engine::Logger::info("Terrain: Normals buffer allocated ({} floats)", vertexCount * 3);
     m_gpuSplatmap = CatEngine::CUDA::CudaBuffer<float>(vertexCount * 4);
+    Engine::Logger::info("Terrain: Splatmap buffer allocated ({} floats)", vertexCount * 4);
 
     // Initialize permutation table with seed
-    initializePermutationTable(m_params.seed);
+    Engine::Logger::info("Terrain: Initializing permutation table (seed={})...", m_params.seed);
+    try {
+        initializePermutationTable(m_params.seed);
+        Engine::Logger::info("Terrain: Permutation table initialized successfully");
+    } catch (const std::exception& e) {
+        Engine::Logger::error("Terrain: Failed to initialize permutation table: {}", e.what());
+        throw;
+    }
+
+    // Get device pointers for kernel launches
+    // Note: Use .get() instead of .data() for Device memory type
+    float* d_heightmap = m_gpuHeightmap.get();
+    float* d_normals = m_gpuNormals.get();
+    float* d_splatmap = m_gpuSplatmap.get();
+
+    Engine::Logger::info("Terrain: Device pointers - heightmap={}, normals={}, splatmap={}",
+                         static_cast<void*>(d_heightmap),
+                         static_cast<void*>(d_normals),
+                         static_cast<void*>(d_splatmap));
 
     // Generate heightmap
-    launchGenerateHeightmap(
-        m_gpuHeightmap.data(),
-        resolution,
-        m_params.size,
-        m_params.heightScale,
-        m_params.frequency,
-        m_params.amplitude,
-        m_params.octaves,
-        m_params.persistence,
-        m_params.lacunarity,
-        nullptr  // Use default stream
-    );
+    Engine::Logger::info("Terrain: Launching heightmap kernel (resolution={}, size={}, heightScale={}, freq={}, amp={}, octaves={})...",
+                         resolution, m_params.size, m_params.heightScale,
+                         m_params.frequency, m_params.amplitude, m_params.octaves);
+    try {
+        launchGenerateHeightmap(
+            d_heightmap,
+            resolution,
+            m_params.size,
+            m_params.heightScale,
+            m_params.frequency,
+            m_params.amplitude,
+            m_params.octaves,
+            m_params.persistence,
+            m_params.lacunarity,
+            nullptr  // Use default stream
+        );
+        Engine::Logger::info("Terrain: Heightmap kernel launched successfully");
+    } catch (const std::exception& e) {
+        Engine::Logger::error("Terrain: Heightmap kernel failed: {}", e.what());
+        throw;
+    }
 
     // Generate normals from heightmap
-    launchGenerateNormals(
-        m_gpuNormals.data(),
-        m_gpuHeightmap.data(),
-        resolution,
-        m_params.size,
-        nullptr
-    );
+    Engine::Logger::info("Terrain: Launching normals kernel...");
+    try {
+        launchGenerateNormals(
+            d_normals,
+            d_heightmap,
+            resolution,
+            m_params.size,
+            nullptr
+        );
+        Engine::Logger::info("Terrain: Normals kernel launched successfully");
+    } catch (const std::exception& e) {
+        Engine::Logger::error("Terrain: Normals kernel failed: {}", e.what());
+        throw;
+    }
 
     // Generate texture blend weights
-    launchGenerateSplatmap(
-        m_gpuSplatmap.data(),
-        m_gpuNormals.data(),
-        m_gpuHeightmap.data(),
-        resolution,
-        m_params.grassSlopeThreshold,
-        m_params.dirtSlopeThreshold,
-        m_params.rockHeightThreshold,
-        nullptr
-    );
+    Engine::Logger::info("Terrain: Launching splatmap kernel (grassThresh={}, dirtThresh={}, rockHeight={})...",
+                         m_params.grassSlopeThreshold, m_params.dirtSlopeThreshold, m_params.rockHeightThreshold);
+    try {
+        launchGenerateSplatmap(
+            d_splatmap,
+            d_normals,
+            d_heightmap,
+            resolution,
+            m_params.grassSlopeThreshold,
+            m_params.dirtSlopeThreshold,
+            m_params.rockHeightThreshold,
+            nullptr
+        );
+        Engine::Logger::info("Terrain: Splatmap kernel launched successfully");
+    } catch (const std::exception& e) {
+        Engine::Logger::error("Terrain: Splatmap kernel failed: {}", e.what());
+        throw;
+    }
 
     // Synchronize to ensure all kernels complete
+    Engine::Logger::info("Terrain: Synchronizing CUDA...");
     m_cudaContext.synchronize();
+    Engine::Logger::info("Terrain: CUDA synchronized");
 
     m_generated = true;
     m_downloaded = false;
+    Engine::Logger::info("Terrain: Generation complete");
 }
 
 void Terrain::downloadFromGpu() {

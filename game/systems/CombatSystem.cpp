@@ -118,8 +118,8 @@ float CombatSystem::getBlockStamina(CatEngine::Entity entity) const {
 }
 
 void CombatSystem::updateBlockStates(float dt) {
-    ecs_->forEach<BlockComponent>([dt](CatEngine::Entity entity, BlockComponent& block) {
-        block.state.update(dt);
+    ecs_->forEach<BlockComponent>([dt](CatEngine::Entity entity, BlockComponent* block) {
+        block->state.update(dt);
     });
 }
 
@@ -180,14 +180,14 @@ float CombatSystem::getDodgeCooldownProgress(CatEngine::Entity entity) const {
 
 void CombatSystem::updateDodgeStates(float dt) {
     ecs_->forEach<DodgeComponent, Engine::Transform>(
-        [dt](CatEngine::Entity entity, DodgeComponent& dodge, Engine::Transform& transform) {
+        [dt](CatEngine::Entity entity, DodgeComponent* dodge, Engine::Transform* transform) {
             // Apply dodge movement
-            if (dodge.state.isDodging) {
-                Engine::vec3 velocity = dodge.state.getDodgeVelocity();
-                transform.position += velocity * dt;
+            if (dodge->state.isDodging) {
+                Engine::vec3 velocity = dodge->state.getDodgeVelocity();
+                transform->position += velocity * dt;
             }
 
-            dodge.state.update(dt);
+            dodge->state.update(dt);
         }
     );
 }
@@ -240,8 +240,8 @@ float CombatSystem::getCurrentDamageMultiplier(CatEngine::Entity entity) const {
 }
 
 void CombatSystem::updateComboStates(float dt) {
-    ecs_->forEach<ComboComponent>([dt](CatEngine::Entity entity, ComboComponent& combo) {
-        combo.state.update(dt);
+    ecs_->forEach<ComboComponent>([dt](CatEngine::Entity entity, ComboComponent* combo) {
+        combo->state.update(dt);
     });
 }
 
@@ -371,12 +371,12 @@ std::vector<StatusEffect> CombatSystem::getActiveEffects(CatEngine::Entity targe
 
 void CombatSystem::processStatusEffects(float dt) {
     ecs_->forEach<StatusEffectsComponent, HealthComponent>(
-        [this, dt](CatEngine::Entity entity, StatusEffectsComponent& status, HealthComponent& health) {
+        [this, dt](CatEngine::Entity entity, StatusEffectsComponent* status, HealthComponent* health) {
             // Update all effects
-            status.update(dt);
+            status->update(dt);
 
             // Process ticks (DOT/HOT)
-            for (auto& effect : status.effects) {
+            for (auto& effect : status->effects) {
                 if (effect.shouldTick()) {
                     float value = effect.getEffectiveValue();
 
@@ -391,7 +391,7 @@ void CombatSystem::processStatusEffects(float dt) {
 
                         case StatusEffectType::Regenerating:
                             // Apply healing
-                            health.heal(value);
+                            health->heal(value);
                             break;
 
                         default:
@@ -440,20 +440,20 @@ CatEngine::Entity CombatSystem::spawnProjectile(
 void CombatSystem::processMeleeAttacks() {
     // Query all entities with combat and transform components
     ecs_->forEach<CombatComponent, Engine::Transform>(
-        [this](CatEngine::Entity attacker, CombatComponent& combat, Engine::Transform& transform) {
+        [this](CatEngine::Entity attacker, CombatComponent* combat, Engine::Transform* transform) {
             // Skip if not a melee weapon
-            if (!combat.isMeleeWeapon()) {
+            if (!combat->isMeleeWeapon()) {
                 return;
             }
 
             // Skip if attack not in progress or cooldown active
-            if (combat.attackCooldown <= 0.0f) {
+            if (combat->attackCooldown <= 0.0f) {
                 return; // No active attack
             }
 
             // Check if this is the first frame of the attack (cooldown just started)
-            float cooldownDuration = combat.getCooldownDuration();
-            if (combat.attackCooldown < cooldownDuration - 0.016f) {
+            float cooldownDuration = combat->getCooldownDuration();
+            if (combat->attackCooldown < cooldownDuration - 0.016f) {
                 return; // Attack already processed in previous frames
             }
 
@@ -468,10 +468,10 @@ void CombatSystem::processMeleeAttacks() {
 
             // Find all potential targets
             ecs_->forEach<HealthComponent, Engine::Transform>(
-                [this, attacker, &combat, &transform, damageMultiplier](
+                [this, attacker, combat, transform, damageMultiplier](
                     CatEngine::Entity target,
-                    HealthComponent& targetHealth,
-                    Engine::Transform& targetTransform
+                    HealthComponent* targetHealth,
+                    Engine::Transform* targetTransform
                 ) {
                     // Don't attack self
                     if (attacker == target) {
@@ -484,12 +484,12 @@ void CombatSystem::processMeleeAttacks() {
                     }
 
                     // Check if target is in range
-                    if (!checkMeleeHit(transform.position, targetTransform.position, combat.attackRange)) {
+                    if (!checkMeleeHit(transform->position, targetTransform->position, combat->attackRange)) {
                         return;
                     }
 
                     // Calculate final damage
-                    float baseDamage = combat.getEffectiveDamage() * damageMultiplier;
+                    float baseDamage = combat->getEffectiveDamage() * damageMultiplier;
 
                     // Check for block
                     float finalDamage = baseDamage;
@@ -509,7 +509,7 @@ void CombatSystem::processMeleeAttacks() {
                     }
 
                     // Apply damage
-                    applyDamage(attacker, target, finalDamage, targetTransform.position);
+                    applyDamage(attacker, target, finalDamage, targetTransform->position);
 
                     // Enhanced hit info
                     if (onHitCallback_) {
@@ -518,8 +518,8 @@ void CombatSystem::processMeleeAttacks() {
                         hitInfo.target = target;
                         hitInfo.damage = baseDamage;
                         hitInfo.finalDamage = finalDamage;
-                        hitInfo.hitPosition = targetTransform.position;
-                        hitInfo.hitDirection = (targetTransform.position - transform.position).normalized();
+                        hitInfo.hitPosition = targetTransform->position;
+                        hitInfo.hitDirection = (targetTransform->position - transform->position).normalized();
                         hitInfo.wasBlocked = wasBlocked;
                         hitInfo.wasPerfectBlock = wasPerfectBlock;
                         hitInfo.comboStep = getComboStep(attacker);
@@ -535,16 +535,16 @@ void CombatSystem::processMeleeAttacks() {
 void CombatSystem::processProjectileAttacks() {
     // Query all entities with combat and transform components
     ecs_->forEach<CombatComponent, Engine::Transform>(
-        [this](CatEngine::Entity attacker, CombatComponent& combat, Engine::Transform& transform) {
+        [this](CatEngine::Entity attacker, CombatComponent* combat, Engine::Transform* transform) {
             // Skip if not a ranged weapon
-            if (!combat.isRangedWeapon()) {
+            if (!combat->isRangedWeapon()) {
                 return;
             }
 
             // Check if attack just started (first frame of cooldown)
-            float cooldownDuration = combat.getCooldownDuration();
-            if (combat.attackCooldown <= 0.0f ||
-                combat.attackCooldown < cooldownDuration - 0.016f) {
+            float cooldownDuration = combat->getCooldownDuration();
+            if (combat->attackCooldown <= 0.0f ||
+                combat->attackCooldown < cooldownDuration - 0.016f) {
                 return; // No active attack or attack already processed
             }
 
@@ -555,11 +555,11 @@ void CombatSystem::processProjectileAttacks() {
             }
 
             // Calculate spawn position (in front of attacker)
-            Engine::vec3 forward = transform.forward();
-            Engine::vec3 spawnPosition = transform.position + forward * 2.0f + Engine::vec3(0.0f, 1.0f, 0.0f);
+            Engine::vec3 forward = transform->forward();
+            Engine::vec3 spawnPosition = transform->position + forward * 2.0f + Engine::vec3(0.0f, 1.0f, 0.0f);
 
             // Apply combo multiplier
-            float damage = combat.getEffectiveDamage() * getCurrentDamageMultiplier(attacker);
+            float damage = combat->getEffectiveDamage() * getCurrentDamageMultiplier(attacker);
 
             // Spawn projectile
             spawnProjectile(attacker, spawnPosition, forward, damage);
@@ -589,8 +589,8 @@ void CombatSystem::updateProjectiles(float dt) {
         ecs_->forEach<HealthComponent, Engine::Transform>(
             [this, &projectile, &hit](
                 CatEngine::Entity target,
-                HealthComponent& health,
-                Engine::Transform& transform
+                HealthComponent* health,
+                Engine::Transform* transform
             ) {
                 // Don't hit owner
                 if (projectile.owner == target) {
@@ -608,7 +608,7 @@ void CombatSystem::updateProjectiles(float dt) {
                 }
 
                 // Check collision
-                if (checkProjectileHit(projectile.position, transform.position, projectileHitRadius_)) {
+                if (checkProjectileHit(projectile.position, transform->position, projectileHitRadius_)) {
                     // Check for block
                     float finalDamage = projectile.damage;
                     bool wasBlocked = false;
@@ -722,7 +722,7 @@ void CombatSystem::applyDamage(
     }
 
     // Check if target died
-    if (health->isDead()) {
+    if (health->isDead) {
         if (onKillCallback_) {
             onKillCallback_(attacker, target);
         }

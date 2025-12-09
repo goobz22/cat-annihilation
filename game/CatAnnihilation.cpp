@@ -4,6 +4,8 @@
 #include "config/GameplayConfig.hpp"
 #include "../engine/core/Logger.hpp"
 #include "../engine/math/Vector.hpp"
+#include "../engine/cuda/particles/ParticleEmitter.hpp"
+#include <iostream>
 
 namespace CatGame {
 
@@ -40,31 +42,41 @@ bool CatAnnihilation::initialize() {
 
     Engine::Logger::info("Initializing Cat Annihilation game...");
 
-    // Step 1: Initialize physics world
-    physicsWorld_ = std::make_unique<CatEngine::PhysicsWorld>();
-    physicsWorld_->Initialize();
-    Engine::Logger::info("Physics world initialized");
+    // Step 1: Initialize CUDA context
+    cudaContext_ = std::make_shared<CatEngine::CUDA::CudaContext>();
+    Engine::Logger::info("CUDA context initialized");
 
-    // Step 2: Initialize particle system
-    particleSystem_ = std::make_unique<CatEngine::ParticleSystem>();
-    particleSystem_->Initialize(10000); // Max 10,000 particles
+    // Step 2: Initialize physics world
+    // Increase maxBodies to handle terrain + forest trees (default was 10000)
+    constexpr int MAX_PHYSICS_BODIES = 20000;
+    constexpr int MAX_CONTACTS = 100000;
+    physicsWorld_ = std::make_unique<CatEngine::Physics::PhysicsWorld>(*cudaContext_, MAX_PHYSICS_BODIES, MAX_CONTACTS);
+    physicsWorld_->setGravity(Engine::vec3(0.0F, -9.81F, 0.0F));
+    Engine::Logger::info("Physics world initialized (maxBodies=" + std::to_string(MAX_PHYSICS_BODIES) + ", maxContacts=" + std::to_string(MAX_CONTACTS) + ")");
+
+    // Step 3: Initialize particle system
+    CatEngine::CUDA::ParticleSystem::Config particleConfig;
+    particleConfig.maxParticles = 100000;
+    particleConfig.enableSorting = true;
+    particleConfig.enableCompaction = true;
+    particleSystem_ = std::make_shared<CatEngine::CUDA::ParticleSystem>(*cudaContext_, particleConfig);
     Engine::Logger::info("Particle system initialized");
 
-    // Step 3: Initialize game systems (in dependency order)
+    // Step 4: Initialize game systems (in dependency order)
     initializeSystems();
 
-    // Step 4: Initialize UI
+    // Step 5: Initialize UI
     initializeUI();
 
-    // Step 5: Load game data and assets
+    // Step 6: Load game data and assets
     loadGameData();
     loadAssets();
 
-    // Step 6: Setup event handlers
+    // Step 7: Setup event handlers
     setupEventHandlers();
     connectSystemEvents();
 
-    // Step 7: Set initial state
+    // Step 8: Set initial state
     setState(GameState::MainMenu);
     setGameMode(GameMode::Menu);
 
@@ -91,7 +103,7 @@ void CatAnnihilation::initializeSystems() {
     dayNightSystem_->initialize();
     dayNightSystem_->setDayLength(GameplayConfig::DayNight::DAY_LENGTH_SECONDS);
 
-    magicSystem_ = std::make_unique<ElementalMagicSystem>(35);
+    magicSystem_ = std::make_unique<ElementalMagicSystem>(particleSystem_, 35);
     magicSystem_->init(&ecs_);
 
     levelingSystem_ = std::make_unique<LevelingSystem>();
@@ -107,80 +119,115 @@ void CatAnnihilation::initializeSystems() {
     npcSystem_->init(&ecs_);
 
     dialogSystem_ = std::make_unique<DialogSystem>();
-    dialogSystem_->initialize();
+    dialogSystem_->init(&ecs_);
 
     merchantSystem_ = std::make_unique<MerchantSystem>();
-    merchantSystem_->initialize();
+    merchantSystem_->init(&ecs_);
 
     customizationSystem_ = std::make_unique<CatCustomizationSystem>();
     customizationSystem_->initialize();
 
-    mobileControls_ = std::make_unique<MobileControlsSystem>();
-    mobileControls_->initialize();
+    mobileControls_ = std::make_unique<Game::MobileControlsSystem>();
 
     Engine::Logger::info("Advanced gameplay systems initialized");
 
     // Initialize game world
-    gameWorld_ = std::make_unique<GameWorld>();
+    gameWorld_ = std::make_unique<GameWorld>(*cudaContext_, *physicsWorld_);
     gameWorld_->initialize();
 
     // Initialize game audio
-    gameAudio_ = std::make_unique<GameAudio>(*audioEngine_);
+    gameAudio_ = std::make_unique<Game::GameAudio>(*audioEngine_);
     if (!gameAudio_->initialize("assets/audio/")) {
         Engine::Logger::warn("Failed to load some game audio assets");
     }
 
+    // Initialize save system
+    saveSystem_ = std::make_unique<Engine::SaveSystem>();
+    saveSystem_->initialize();
+
+    // Create death particle emitter for reuse
+    createDeathParticleEmitter();
+
     Engine::Logger::info("All game systems initialized");
+}
+
+void CatAnnihilation::createDeathParticleEmitter() {
+    // Create a reusable death effect emitter
+    CatEngine::CUDA::ParticleEmitter deathEmitter;
+    deathEmitter.enabled = false;  // Disabled by default, triggered on death
+    deathEmitter.shape = CatEngine::CUDA::EmissionShape::Sphere;
+    deathEmitter.mode = CatEngine::CUDA::EmissionMode::OneShot;
+    deathEmitter.shapeParams.sphereRadius = 0.5F;
+    deathEmitter.shapeParams.sphereEmitFromShell = true;
+    deathEmitter.burstEnabled = true;
+    deathEmitter.burstCount = 50;
+
+    // Particle properties for death effect
+    deathEmitter.initialProperties.velocityMin = Engine::vec3(-3.0F, 1.0F, -3.0F);
+    deathEmitter.initialProperties.velocityMax = Engine::vec3(3.0F, 5.0F, 3.0F);
+    deathEmitter.initialProperties.lifetimeMin = 0.5F;
+    deathEmitter.initialProperties.lifetimeMax = 1.5F;
+    deathEmitter.initialProperties.sizeMin = 0.05F;
+    deathEmitter.initialProperties.sizeMax = 0.15F;
+    deathEmitter.initialProperties.colorBase = Engine::vec4(1.0F, 0.3F, 0.1F, 1.0F);      // Orange-red base
+    deathEmitter.initialProperties.colorVariation = Engine::vec4(0.2F, 0.1F, 0.05F, 0.0F); // Slight variation
+    deathEmitter.fadeOutAlpha = true;  // Fade out over lifetime
+    deathEmitter.scaleOverLifetime = true;
+    deathEmitter.endScale = 0.0F;      // Shrink to nothing
+
+    if (particleSystem_ != nullptr) {
+        deathEmitterId_ = particleSystem_->addEmitter(deathEmitter);
+    }
 }
 
 void CatAnnihilation::initializeUI() {
     Engine::Logger::info("Initializing UI systems...");
 
     // Create main UI container
-    gameUI_ = std::make_unique<GameUI>(*input_, *gameAudio_);
+    gameUI_ = std::make_unique<Game::GameUI>(*input_, *gameAudio_);
     if (!gameUI_->initialize()) {
         Engine::Logger::error("Failed to initialize game UI");
         return;
     }
 
     // Create individual UI components
-    hud_ = std::make_unique<HUD>();
+    hud_ = std::make_unique<Game::HUD>(*input_, *gameAudio_);
     hud_->initialize();
 
-    mainMenu_ = std::make_unique<MainMenu>();
+    mainMenu_ = std::make_unique<Game::MainMenu>(*input_, *gameAudio_);
     mainMenu_->initialize();
 
-    pauseMenu_ = std::make_unique<PauseMenu>();
+    pauseMenu_ = std::make_unique<Game::PauseMenu>(*input_, *gameAudio_);
     pauseMenu_->initialize();
 
     // Setup UI callbacks
-    mainMenu_->setStartGameCallback([this]() {
-        startNewGame(false); // Start arcade mode
-    });
+    if (mainMenu_ != nullptr) {
+        mainMenu_->setStartGameCallback([this]() {
+            startNewGame(false); // Start arcade mode
+        });
 
-    mainMenu_->setStartStoryCallback([this]() {
-        startNewGame(true); // Start story mode
-    });
+        mainMenu_->setContinueCallback([this]() {
+            continueGame();
+        });
 
-    mainMenu_->setContinueCallback([this]() {
-        continueGame();
-    });
+        mainMenu_->setQuitCallback([]() {
+            // Handled by main loop
+        });
+    }
 
-    mainMenu_->setQuitCallback([this]() {
-        // Handled by main loop
-    });
+    if (pauseMenu_ != nullptr) {
+        pauseMenu_->setResumeCallback([this]() {
+            unpause();
+        });
 
-    pauseMenu_->setResumeCallback([this]() {
-        unpause();
-    });
+        pauseMenu_->setMainMenuCallback([this]() {
+            quitToMenu();
+        });
 
-    pauseMenu_->setMainMenuCallback([this]() {
-        quitToMenu();
-    });
-
-    pauseMenu_->setQuitCallback([this]() {
-        // Handled by main loop
-    });
+        pauseMenu_->setQuitCallback([]() {
+            // Handled by main loop
+        });
+    }
 
     Engine::Logger::info("UI systems initialized");
 }
@@ -189,19 +236,18 @@ void CatAnnihilation::loadGameData() {
     Engine::Logger::info("Loading game data...");
 
     // Load quest data
-    if (questSystem_) {
-        questSystem_->loadQuestData("assets/data/quests.json");
+    if (questSystem_ != nullptr) {
+        questSystem_->loadQuestsFromFile("assets/data/quests.json");
     }
 
     // Load NPC data
-    if (npcSystem_) {
-        npcSystem_->loadNPCData("assets/data/npcs.json");
+    if (npcSystem_ != nullptr) {
+        npcSystem_->loadNPCsFromFile("assets/npcs/npcs.json");
     }
 
     // Load spell definitions
-    if (magicSystem_) {
-        magicSystem_->loadSpellDefinitions("assets/data/spells.json");
-    }
+    // Note: ElementalMagicSystem::loadSpellDefinitions() is private and called internally during init()
+    // No explicit call needed here - spell definitions are loaded as part of magicSystem_->init()
 
     Engine::Logger::info("Game data loaded");
 }
@@ -210,18 +256,11 @@ void CatAnnihilation::loadAssets() {
     Engine::Logger::info("Loading game assets...");
 
     // Load audio
-    if (gameAudio_) {
-        gameAudio_->loadMusicTrack("menu", "assets/audio/music/menu.ogg");
-        gameAudio_->loadMusicTrack("gameplay", "assets/audio/music/gameplay.ogg");
-        gameAudio_->loadMusicTrack("combat", "assets/audio/music/combat.ogg");
-        gameAudio_->loadMusicTrack("victory", "assets/audio/music/victory.ogg");
-        gameAudio_->loadMusicTrack("gameover", "assets/audio/music/gameover.ogg");
-    }
+    // Note: Audio files are loaded in GameAudio::initialize()
+    // No need to load music tracks here
 
     // Load world assets
-    if (gameWorld_) {
-        gameWorld_->loadAssets();
-    }
+    // Note: GameWorld loads assets internally during initialize() - no separate loadAssets() call needed
 
     Engine::Logger::info("Assets loaded");
 }
@@ -230,16 +269,14 @@ void CatAnnihilation::connectSystemEvents() {
     Engine::Logger::info("Connecting system events...");
 
     // Connect combat system events to quest system
-    if (combatSystem_ && questSystem_) {
-        combatSystem_->setOnKillCallback([this](CatEngine::Entity killer, CatEngine::Entity killed) {
+    if (combatSystem_ != nullptr && questSystem_ != nullptr) {
+        combatSystem_->setOnKillCallback([](CatEngine::Entity /*killer*/, CatEngine::Entity /*killed*/) {
             // This will be handled by event bus
         });
     }
 
     // Connect wave system to quest system
-    if (waveSystem_) {
-        // Wave completion events will be published to event bus
-    }
+    // Wave completion events will be published to event bus
 
     Engine::Logger::info("System events connected");
 }
@@ -292,29 +329,19 @@ void CatAnnihilation::shutdown() {
     Engine::Logger::info("Shutting down Cat Annihilation game...");
 
     // Shutdown UI
-    if (gameUI_) gameUI_->shutdown();
-    if (hud_) hud_->shutdown();
-    if (mainMenu_) mainMenu_->shutdown();
-    if (pauseMenu_) pauseMenu_->shutdown();
+    if (gameUI_ != nullptr) { gameUI_->shutdown(); }
+    if (hud_ != nullptr) { hud_->shutdown(); }
+    if (mainMenu_ != nullptr) { mainMenu_->shutdown(); }
+    if (pauseMenu_ != nullptr) { pauseMenu_->shutdown(); }
 
     // Shutdown game systems
-    if (gameAudio_) gameAudio_->shutdown();
-    if (gameWorld_) gameWorld_->shutdown();
-    if (customizationSystem_) customizationSystem_->shutdown();
-    if (merchantSystem_) merchantSystem_->shutdown();
-    if (dialogSystem_) dialogSystem_->shutdown();
-    if (npcSystem_) npcSystem_->shutdown();
-    if (storyModeSystem_) storyModeSystem_->shutdown();
-    if (questSystem_) questSystem_->shutdown();
-    if (levelingSystem_) levelingSystem_->shutdown();
-    if (magicSystem_) magicSystem_->shutdown();
-    if (dayNightSystem_) dayNightSystem_->shutdown();
+    if (gameAudio_ != nullptr) { gameAudio_->shutdown(); }
+    // Note: GameWorld, MerchantSystem, DialogSystem, NPCSystem, StoryModeSystem, QuestSystem,
+    // LevelingSystem, MagicSystem, and DayNightCycleSystem are cleaned up by their destructors
+    // when their unique_ptrs are released. The System base class does not define a shutdown() method.
+    if (customizationSystem_ != nullptr) { customizationSystem_->shutdown(); }
 
-    // Clear particle system
-    if (particleSystem_) particleSystem_->Shutdown();
-
-    // Clear physics world
-    if (physicsWorld_) physicsWorld_->Shutdown();
+    // Note: ParticleSystem and PhysicsWorld cleanup is handled by their destructors (RAII pattern)
 
     // Clean up ECS (this will clean up all ECS systems and entities)
     ecs_.clear();
@@ -373,7 +400,7 @@ void CatAnnihilation::update(float dt) {
     updateUI(dt);
 
     // Always update audio
-    if (gameAudio_) {
+    if (gameAudio_ != nullptr) {
         gameAudio_->update(dt);
     }
 }
@@ -383,18 +410,18 @@ void CatAnnihilation::updateSystems(float dt) {
     handleInput();
 
     // 2. Day/night cycle
-    if (dayNightSystem_) {
+    if (dayNightSystem_ != nullptr) {
         dayNightSystem_->update(dt);
     }
 
     // 3. Dialog system (can pause other systems)
-    if (dialogSystem_ && dialogSystem_->isActive()) {
+    if (dialogSystem_ != nullptr && dialogSystem_->isInDialog()) {
         dialogSystem_->update(dt);
         return; // Don't update other systems during dialog
     }
 
     // 4. NPC updates
-    if (npcSystem_) {
+    if (npcSystem_ != nullptr) {
         npcSystem_->update(dt);
     }
 
@@ -402,37 +429,37 @@ void CatAnnihilation::updateSystems(float dt) {
     ecs_.update(dt);
 
     // 6. Quest progress checks
-    if (questSystem_) {
+    if (questSystem_ != nullptr) {
         questSystem_->update(dt);
     }
 
     // 7. Story mode progression
-    if (storyModeSystem_ && isStoryMode_) {
+    if (storyModeSystem_ != nullptr && isStoryMode_) {
         storyModeSystem_->update(dt);
     }
 
     // 8. Magic system
-    if (magicSystem_) {
+    if (magicSystem_ != nullptr) {
         magicSystem_->update(dt);
     }
 
     // 9. Leveling/XP
-    if (levelingSystem_) {
+    if (levelingSystem_ != nullptr) {
         levelingSystem_->update(dt);
     }
 
     // 10. Physics step
-    if (physicsWorld_) {
-        physicsWorld_->Update(dt);
+    if (physicsWorld_ != nullptr) {
+        physicsWorld_->step(dt);
     }
 
     // 11. Particle updates
-    if (particleSystem_) {
-        particleSystem_->Update(dt);
+    if (particleSystem_ != nullptr) {
+        particleSystem_->update(dt);
     }
 
     // 12. World updates
-    if (gameWorld_) {
+    if (gameWorld_ != nullptr) {
         gameWorld_->update(dt);
     }
 
@@ -441,25 +468,25 @@ void CatAnnihilation::updateSystems(float dt) {
 }
 
 void CatAnnihilation::updateUI(float dt) {
-    if (gameUI_) {
+    if (gameUI_ != nullptr) {
         gameUI_->update(dt);
     }
 
     // Update HUD if playing
-    if (currentState_ == GameState::Playing && hud_) {
+    if (currentState_ == GameState::Playing && hud_ != nullptr) {
         hud_->update(dt);
 
         // Update HUD with player stats
         if (ecs_.isAlive(playerEntity_)) {
             // Get player health component
-            auto healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
-            if (healthComp) {
+            auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
+            if (healthComp != nullptr) {
                 hud_->setHealth(healthComp->currentHealth, healthComp->maxHealth);
             }
 
             // Update other HUD elements
             hud_->setWave(waveNumber_);
-            hud_->setEnemiesKilled(enemiesKilled_);
+            hud_->setScore(enemiesKilled_); // Use score to display enemies killed
         }
     }
 }
@@ -496,38 +523,135 @@ void CatAnnihilation::handleInput() {
 // ============================================================================
 
 void CatAnnihilation::render() {
-    if (!initialized_ || !renderer_) {
+    static int renderCallCount = 0;
+    renderCallCount++;
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] called, count=" << renderCallCount << "\n";
+        std::cout.flush();
+    }
+
+    if (!initialized_ || renderer_ == nullptr) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] not initialized or no renderer\n";
+            std::cout.flush();
+        }
         return;
     }
 
     // Render game world
-    if (gameWorld_ && (currentState_ == GameState::Playing || currentState_ == GameState::Paused)) {
-        gameWorld_->render(*renderer_);
-    }
+    // Note: World geometry and entities are rendered by the Renderer using scene graph data.
+    // GameWorld provides terrain/collision data, not direct rendering calls.
 
     // Render particles
-    if (particleSystem_) {
-        particleSystem_->Render();
+    // Note: ParticleSystem provides GPU buffer pointers via getRenderData() for the Renderer
+    // to draw particles using compute shader output. No direct Render() call needed.
+
+    // Get UIPass for 2D rendering
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] getting UIPass...\n";
+        std::cout.flush();
+    }
+    auto* uiPass = renderer_->GetUIPass();
+    if (uiPass == nullptr) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] UIPass is null, returning\n";
+            std::cout.flush();
+        }
+        return;
     }
 
+    // Get screen dimensions
+    uint32_t screenWidth = renderer_->GetWidth();
+    uint32_t screenHeight = renderer_->GetHeight();
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] screen " << screenWidth << "x" << screenHeight << "\n";
+        std::cout.flush();
+    }
+
+    // Begin UI frame - MUST be called before any DrawQuad/DrawText calls
+    uiPass->BeginFrame();
+
     // Render UI
-    if (gameUI_) {
-        gameUI_->render(*renderer_);
+    if (gameUI_ != nullptr) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] rendering gameUI_...\n";
+            std::cout.flush();
+        }
+        gameUI_->render(*uiPass, screenWidth, screenHeight);
     }
 
     // Render HUD
-    if (hud_ && currentState_ == GameState::Playing) {
-        hud_->render(*renderer_);
+    if (hud_ != nullptr && currentState_ == GameState::Playing) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] rendering HUD...\n";
+            std::cout.flush();
+        }
+        hud_->render(*uiPass, screenWidth, screenHeight);
     }
 
     // Render menu
-    if (mainMenu_ && currentState_ == GameState::MainMenu) {
-        mainMenu_->render(*renderer_);
+    if (mainMenu_ != nullptr && currentState_ == GameState::MainMenu) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] rendering mainMenu_... state=" << static_cast<int>(currentState_) << "\n";
+            std::cout.flush();
+        }
+        mainMenu_->render(*uiPass, screenWidth, screenHeight);
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] mainMenu_->render() DONE\n";
+            std::cout.flush();
+        }
     }
 
     // Render pause menu
-    if (pauseMenu_ && currentState_ == GameState::Paused) {
-        pauseMenu_->render(*renderer_);
+    if (pauseMenu_ != nullptr && currentState_ == GameState::Paused) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] rendering pauseMenu_...\n";
+            std::cout.flush();
+        }
+        pauseMenu_->render(*uiPass, screenWidth, screenHeight);
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] pauseMenu_->render() DONE\n";
+            std::cout.flush();
+        }
+    }
+
+    // End UI frame - batches and sorts draw commands
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] calling uiPass->EndFrame()...\n";
+        std::cout.flush();
+    }
+    uiPass->EndFrame();
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] uiPass->EndFrame() DONE\n";
+        std::cout.flush();
+    }
+
+    // Execute UI draw commands on the current command buffer
+    auto* cmdBuffer = renderer_->GetCommandBuffer();
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] cmdBuffer=" << cmdBuffer << "\n";
+        std::cout.flush();
+    }
+    if (cmdBuffer != nullptr) {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] calling uiPass->Execute()...\n";
+            std::cout.flush();
+        }
+        uiPass->Execute(cmdBuffer, renderer_->GetFrameIndex());
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] uiPass->Execute() DONE\n";
+            std::cout.flush();
+        }
+    } else {
+        if (renderCallCount <= 5) {
+            std::cout << "[CatAnnihilation::render] WARNING: cmdBuffer is NULL!\n";
+            std::cout.flush();
+        }
+    }
+
+    if (renderCallCount <= 5) {
+        std::cout << "[CatAnnihilation::render] complete\n";
+        std::cout.flush();
     }
 }
 
@@ -535,27 +659,26 @@ void CatAnnihilation::render() {
 // State Updates
 // ============================================================================
 
-void CatAnnihilation::updateMainMenu(float dt) {
+void CatAnnihilation::updateMainMenu(float /*dt*/) {
     // Check for start game input
     if (input_->isKeyPressed(Engine::Input::Key::Enter) ||
         input_->isKeyPressed(Engine::Input::Key::Space)) {
         startNewGame();
     }
-
-    (void)dt;
 }
 
 void CatAnnihilation::updatePlaying(float dt) {
     // Update all game systems
     updateSystems(dt);
 
-    // Check victory conditions
-    if (waveSystem_) {
-        // TODO: Check if player reached final wave
+    // Note: This is an endless wave game - victory is triggered by story mode completion
+    // or by reaching a specific objective, not by completing all waves
+    if (isStoryMode_ && storyModeSystem_ != nullptr && storyModeSystem_->isStoryComplete()) {
+        setState(GameState::Victory);
     }
 }
 
-void CatAnnihilation::updatePaused(float dt) {
+void CatAnnihilation::updatePaused(float /*dt*/) {
     // Check for restart input
     if (input_->isKeyPressed(Engine::Input::Key::R)) {
         restart();
@@ -565,11 +688,9 @@ void CatAnnihilation::updatePaused(float dt) {
     if (input_->isKeyPressed(Engine::Input::Key::Q)) {
         quitToMenu();
     }
-
-    (void)dt;
 }
 
-void CatAnnihilation::updateGameOver(float dt) {
+void CatAnnihilation::updateGameOver(float /*dt*/) {
     // Check for restart input
     if (input_->isKeyPressed(Engine::Input::Key::R) ||
         input_->isKeyPressed(Engine::Input::Key::Enter) ||
@@ -582,11 +703,9 @@ void CatAnnihilation::updateGameOver(float dt) {
         input_->isKeyPressed(Engine::Input::Key::Q)) {
         quitToMenu();
     }
-
-    (void)dt;
 }
 
-void CatAnnihilation::updateVictory(float dt) {
+void CatAnnihilation::updateVictory(float /*dt*/) {
     // Check for continue/restart input
     if (input_->isKeyPressed(Engine::Input::Key::Enter) ||
         input_->isKeyPressed(Engine::Input::Key::Space)) {
@@ -598,8 +717,6 @@ void CatAnnihilation::updateVictory(float dt) {
         input_->isKeyPressed(Engine::Input::Key::Q)) {
         quitToMenu();
     }
-
-    (void)dt;
 }
 
 // ============================================================================
@@ -636,8 +753,8 @@ void CatAnnihilation::setGameMode(GameMode newMode) {
 void CatAnnihilation::onStateEnter(GameState state) {
     switch (state) {
         case GameState::MainMenu:
-            if (gameAudio_) {
-                gameAudio_->playMusic("menu", true);
+            if (gameAudio_ != nullptr) {
+                gameAudio_->playMenuMusic();
             }
             break;
 
@@ -648,17 +765,17 @@ void CatAnnihilation::onStateEnter(GameState state) {
             }
 
             // Enable player controls
-            if (playerControlSystem_) {
+            if (playerControlSystem_ != nullptr) {
                 playerControlSystem_->setControlEnabled(true);
             }
 
             // Start gameplay music
-            if (gameAudio_) {
-                gameAudio_->playMusic("gameplay", true);
+            if (gameAudio_ != nullptr) {
+                gameAudio_->playGameplayMusic();
             }
 
             // Resume time
-            if (dayNightSystem_) {
+            if (dayNightSystem_ != nullptr) {
                 dayNightSystem_->resumeTime();
             }
 
@@ -667,12 +784,12 @@ void CatAnnihilation::onStateEnter(GameState state) {
 
         case GameState::Paused:
             // Disable player controls
-            if (playerControlSystem_) {
+            if (playerControlSystem_ != nullptr) {
                 playerControlSystem_->setControlEnabled(false);
             }
 
             // Pause time
-            if (dayNightSystem_) {
+            if (dayNightSystem_ != nullptr) {
                 dayNightSystem_->pauseTime();
             }
 
@@ -681,13 +798,13 @@ void CatAnnihilation::onStateEnter(GameState state) {
 
         case GameState::GameOver:
             // Disable player controls
-            if (playerControlSystem_) {
+            if (playerControlSystem_ != nullptr) {
                 playerControlSystem_->setControlEnabled(false);
             }
 
             // Play game over music
-            if (gameAudio_) {
-                gameAudio_->playMusic("gameover", false);
+            if (gameAudio_ != nullptr) {
+                gameAudio_->playDefeatMusic();
             }
 
             setGameMode(GameMode::GameOver);
@@ -695,13 +812,13 @@ void CatAnnihilation::onStateEnter(GameState state) {
 
         case GameState::Victory:
             // Disable player controls
-            if (playerControlSystem_) {
+            if (playerControlSystem_ != nullptr) {
                 playerControlSystem_->setControlEnabled(false);
             }
 
             // Play victory music
-            if (gameAudio_) {
-                gameAudio_->playMusic("victory", false);
+            if (gameAudio_ != nullptr) {
+                gameAudio_->playVictoryMusic();
             }
 
             setGameMode(GameMode::Victory);
@@ -709,8 +826,7 @@ void CatAnnihilation::onStateEnter(GameState state) {
     }
 }
 
-void CatAnnihilation::onStateExit(GameState state) {
-    (void)state;
+void CatAnnihilation::onStateExit(GameState /*state*/) {
     // Cleanup for previous state if needed
 }
 
@@ -741,21 +857,13 @@ void CatAnnihilation::restart() {
     ecs_.clearEntities();
 
     // Reset game statistics
-    gameTime_ = 0.0f;
+    gameTime_ = 0.0F;
     enemiesKilled_ = 0;
     waveNumber_ = 0;
 
-    // Reset systems
-    if (waveSystem_) {
-        waveSystem_->reset();
-    }
-
-    if (questSystem_) {
-        questSystem_->reset();
-    }
-
-    if (dayNightSystem_) {
-        dayNightSystem_->setTimeOfDay(0.5f); // Noon
+    // Reset day/night cycle to noon
+    if (dayNightSystem_ != nullptr) {
+        dayNightSystem_->setTimeOfDay(0.5F);
     }
 
     // Recreate player
@@ -770,7 +878,7 @@ void CatAnnihilation::startNewGame(bool storyMode) {
 
     isStoryMode_ = storyMode;
 
-    if (storyMode && storyModeSystem_) {
+    if (storyMode && storyModeSystem_ != nullptr) {
         // Start story mode with default clan
         storyModeSystem_->startStoryMode(Clan::MistClan);
     }
@@ -780,8 +888,28 @@ void CatAnnihilation::startNewGame(bool storyMode) {
 
 void CatAnnihilation::continueGame() {
     Engine::Logger::info("Continuing from last save...");
-    // TODO: Load most recent save
-    loadGame(0);
+
+    // Find the most recent save by checking all slots
+    int mostRecentSlot = -1;
+    uint64_t mostRecentTime = 0;
+
+    for (int i = 0; i < 10; ++i) {
+        if (saveSystem_ != nullptr && saveSystem_->doesSaveExist(i)) {
+            auto header = saveSystem_->getSaveHeader(i);
+            if (header.timestamp > mostRecentTime) {
+                mostRecentTime = header.timestamp;
+                mostRecentSlot = i;
+            }
+        }
+    }
+
+    if (mostRecentSlot >= 0) {
+        loadGame(mostRecentSlot);
+    } else {
+        // No saves found, start new game
+        Engine::Logger::warn("No save files found, starting new game");
+        startNewGame(false);
+    }
 }
 
 void CatAnnihilation::quitToMenu() {
@@ -791,7 +919,7 @@ void CatAnnihilation::quitToMenu() {
     ecs_.clearEntities();
 
     // Reset statistics
-    gameTime_ = 0.0f;
+    gameTime_ = 0.0F;
     enemiesKilled_ = 0;
     waveNumber_ = 0;
     isStoryMode_ = false;
@@ -807,34 +935,157 @@ void CatAnnihilation::quitToMenu() {
 bool CatAnnihilation::saveGame(int slotIndex) {
     Engine::Logger::info("Saving game to slot " + std::to_string(slotIndex) + "...");
 
-    // TODO: Implement save system
-    // Save player state, quest progress, inventory, etc.
+    if (saveSystem_ == nullptr) {
+        Engine::Logger::error("Save system not initialized");
+        return false;
+    }
 
-    currentSaveSlot_ = slotIndex;
+    // Build save game data from current game state
+    Engine::SaveGameData saveData;
 
-    // Publish save event
-    GameSavedEvent event("slot_" + std::to_string(slotIndex));
-    event.playtime = totalPlayTime_;
-    event.playerLevel = levelingSystem_ ? levelingSystem_->getPlayerLevel() : 1;
-    event.wasAutoSave = false;
-    eventBus_.publish(event);
+    // Player stats
+    if (levelingSystem_ != nullptr) {
+        saveData.stats.level = levelingSystem_->getLevel();
+        saveData.stats.experience = levelingSystem_->getXP();
+        saveData.stats.experienceToNextLevel = levelingSystem_->getXPToNextLevel();
+    }
 
-    Engine::Logger::info("Game saved successfully");
-    return true;
+    // Player health from entity
+    if (ecs_.isAlive(playerEntity_)) {
+        auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
+        if (healthComp != nullptr) {
+            saveData.stats.currentHealth = healthComp->currentHealth;
+            saveData.stats.maxHealth = healthComp->maxHealth;
+        }
+
+        // Player position
+        auto* transform = ecs_.getComponent<Engine::Transform>(playerEntity_);
+        if (transform != nullptr) {
+            saveData.position = transform->position;
+            saveData.rotation = transform->rotation;
+        }
+    }
+
+    // Quest progress
+    if (questSystem_ != nullptr) {
+        saveData.activeQuests = questSystem_->getActiveQuestIds();
+        saveData.completedQuests = questSystem_->getCompletedQuestIds();
+    }
+
+    // Story mode state
+    if (storyModeSystem_ != nullptr && isStoryMode_) {
+        saveData.storyState.currentChapter = storyModeSystem_->getCurrentChapterNumber();
+        saveData.storyState.currentMission = storyModeSystem_->getCurrentMission();
+    }
+
+    // World state
+    if (dayNightSystem_ != nullptr) {
+        // getCurrentTime() returns 0.0-1.0, convert to 0-24 hours for save format
+        saveData.timeOfDay = dayNightSystem_->getCurrentTime() * 24.0F;
+        saveData.currentDay = dayNightSystem_->getCurrentDay();
+    }
+
+    // Currency from merchant system
+    if (merchantSystem_ != nullptr) {
+        saveData.currency = merchantSystem_->getPlayerCurrency();
+    }
+
+    // Set the data and save
+    saveSystem_->setCurrentSaveData(saveData);
+    bool success = saveSystem_->saveGame(slotIndex);
+
+    if (success) {
+        currentSaveSlot_ = slotIndex;
+
+        // Publish save event
+        GameSavedEvent event("slot_" + std::to_string(slotIndex));
+        event.playtime = totalPlayTime_;
+        event.playerLevel = levelingSystem_ != nullptr ? levelingSystem_->getLevel() : 1;
+        event.wasAutoSave = false;
+        eventBus_.publish(event);
+
+        Engine::Logger::info("Game saved successfully");
+    } else {
+        Engine::Logger::error("Failed to save game");
+    }
+
+    return success;
 }
 
 bool CatAnnihilation::loadGame(int slotIndex) {
     Engine::Logger::info("Loading game from slot " + std::to_string(slotIndex) + "...");
 
-    // TODO: Implement load system
-    // Load player state, quest progress, inventory, etc.
+    if (saveSystem_ == nullptr) {
+        Engine::Logger::error("Save system not initialized");
+        return false;
+    }
+
+    // Load the save data
+    if (!saveSystem_->loadGame(slotIndex)) {
+        Engine::Logger::error("Failed to load save file from slot " + std::to_string(slotIndex));
+        return false;
+    }
+
+    const Engine::SaveGameData& saveData = saveSystem_->getLoadedSaveData();
+
+    // Clear existing entities and recreate player
+    ecs_.clearEntities();
+    createPlayer();
+
+    // Restore player stats
+    if (levelingSystem_ != nullptr) {
+        levelingSystem_->setLevel(saveData.stats.level);
+        levelingSystem_->setXP(saveData.stats.experience);
+    }
+
+    // Restore player health
+    if (ecs_.isAlive(playerEntity_)) {
+        auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
+        if (healthComp != nullptr) {
+            healthComp->maxHealth = saveData.stats.maxHealth;
+            healthComp->currentHealth = saveData.stats.currentHealth;
+        }
+
+        // Restore player position
+        auto* transform = ecs_.getComponent<Engine::Transform>(playerEntity_);
+        if (transform != nullptr) {
+            transform->position = saveData.position;
+            transform->rotation = saveData.rotation;
+        }
+    }
+
+    // Restore quest progress
+    if (questSystem_ != nullptr) {
+        questSystem_->loadQuestState(saveData.activeQuests, saveData.completedQuests);
+    }
+
+    // Restore story mode state
+    if (storyModeSystem_ != nullptr) {
+        isStoryMode_ = saveData.storyState.currentChapter > 0;
+        if (isStoryMode_) {
+            storyModeSystem_->setChapter(saveData.storyState.currentChapter);
+            storyModeSystem_->setMission(saveData.storyState.currentMission);
+        }
+    }
+
+    // Restore world state
+    if (dayNightSystem_ != nullptr) {
+        // Convert from 0-24 hours to 0.0-1.0 format
+        dayNightSystem_->setTimeOfDay(saveData.timeOfDay / 24.0F);
+        dayNightSystem_->setCurrentDay(saveData.currentDay);
+    }
+
+    // Restore currency
+    if (merchantSystem_ != nullptr) {
+        merchantSystem_->setPlayerCurrency(saveData.currency);
+    }
 
     currentSaveSlot_ = slotIndex;
 
     // Publish load event
     GameLoadedEvent event("slot_" + std::to_string(slotIndex));
     event.playtime = totalPlayTime_;
-    event.playerLevel = levelingSystem_ ? levelingSystem_->getPlayerLevel() : 1;
+    event.playerLevel = levelingSystem_ != nullptr ? levelingSystem_->getLevel() : 1;
     eventBus_.publish(event);
 
     setState(GameState::Playing);
@@ -849,15 +1100,29 @@ bool CatAnnihilation::loadGame(int slotIndex) {
 
 void CatAnnihilation::createPlayer() {
     // Create player cat entity at spawn position
-    Engine::vec3 spawnPosition(0.0f, 0.0f, 0.0f);
+    Engine::vec3 spawnPosition(0.0F, 0.0F, 0.0F);
     playerEntity_ = CatEntity::create(ecs_, spawnPosition);
 
     // Set player entity in control system
-    if (playerControlSystem_) {
+    if (playerControlSystem_ != nullptr) {
         playerControlSystem_->setPlayerEntity(playerEntity_);
     }
 
     Engine::Logger::info("Player entity created");
+}
+
+void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position) {
+    if (particleSystem_ == nullptr) {
+        return;
+    }
+
+    // Get the death emitter and update its position
+    CatEngine::CUDA::ParticleEmitter* emitter = particleSystem_->getEmitter(deathEmitterId_);
+    if (emitter != nullptr) {
+        emitter->position = position;
+        particleSystem_->updateEmitter(deathEmitterId_, *emitter);
+        particleSystem_->triggerBurst(deathEmitterId_);
+    }
 }
 
 // ============================================================================
@@ -869,23 +1134,23 @@ void CatAnnihilation::onEnemyKilled(const EnemyKilledEvent& event) {
     enemiesKilled_++;
 
     // Award XP to killer
-    if (levelingSystem_ && event.killer == playerEntity_) {
-        levelingSystem_->addExperience(event.xpReward);
+    if (levelingSystem_ != nullptr && event.killer == playerEntity_) {
+        levelingSystem_->addXP(event.xpReward);
     }
 
     // Update quest progress
-    if (questSystem_) {
-        questSystem_->onEnemyKilled(event.enemyType, 1);
+    if (questSystem_ != nullptr) {
+        questSystem_->onEnemyKilled(event.enemyType);
     }
 
     // Update story mode progress
-    if (storyModeSystem_ && isStoryMode_) {
+    if (storyModeSystem_ != nullptr && isStoryMode_) {
         storyModeSystem_->addExperience(event.xpReward);
     }
 
     // Play kill sound
-    if (gameAudio_) {
-        gameAudio_->playSoundEffect("enemy_death", event.position);
+    if (gameAudio_ != nullptr) {
+        gameAudio_->playEnemyDeath({event.position.x, event.position.y, event.position.z});
     }
 
     Engine::Logger::debug("Enemy killed: " + event.enemyType + " (+" + std::to_string(event.xpReward) + " XP)");
@@ -893,26 +1158,29 @@ void CatAnnihilation::onEnemyKilled(const EnemyKilledEvent& event) {
 
 void CatAnnihilation::onQuestCompleted(const QuestCompletedEvent& event) {
     // Award XP
-    if (levelingSystem_) {
-        levelingSystem_->addExperience(event.xpReward);
+    if (levelingSystem_ != nullptr) {
+        levelingSystem_->addXP(event.xpReward);
     }
 
-    // Award currency
-    // TODO: Add currency to player inventory
+    // Award currency via merchant system
+    if (merchantSystem_ != nullptr) {
+        merchantSystem_->addCurrency(event.currencyReward);
+        Engine::Logger::debug("Awarded " + std::to_string(event.currencyReward) + " currency");
+    }
 
     // Update story progress if in story mode
-    if (storyModeSystem_ && isStoryMode_ && event.wasMainQuest) {
-        // Advance story
+    if (storyModeSystem_ != nullptr && isStoryMode_ && event.wasMainQuest) {
+        storyModeSystem_->advanceStory();
     }
 
     // Play quest complete sound
-    if (gameAudio_) {
-        gameAudio_->playSoundEffect("quest_complete");
+    if (gameAudio_ != nullptr) {
+        gameAudio_->playSound2D("quest_complete", 1.0F);
     }
 
     // Show UI notification
-    if (hud_) {
-        hud_->showNotification("Quest Complete: " + event.questName);
+    if (hud_ != nullptr) {
+        hud_->showNotification("Quest Complete: " + event.questName, "success", 4.0F);
     }
 
     Engine::Logger::info("Quest completed: " + event.questName + " (+" + std::to_string(event.xpReward) + " XP)");
@@ -921,21 +1189,21 @@ void CatAnnihilation::onQuestCompleted(const QuestCompletedEvent& event) {
 void CatAnnihilation::onLevelUp(const LevelUpEvent& event) {
     // Update player stats
     if (ecs_.isAlive(playerEntity_)) {
-        auto healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
-        if (healthComp) {
+        auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
+        if (healthComp != nullptr) {
             healthComp->maxHealth += GameplayConfig::Player::HEALTH_PER_LEVEL;
             healthComp->currentHealth = healthComp->maxHealth; // Full heal on level up
         }
     }
 
     // Play level up sound
-    if (gameAudio_) {
-        gameAudio_->playSoundEffect("level_up");
+    if (gameAudio_ != nullptr) {
+        gameAudio_->playLevelUp();
     }
 
     // Show UI notification
-    if (hud_) {
-        hud_->showNotification("Level Up! Level " + std::to_string(event.newLevel));
+    if (hud_ != nullptr) {
+        hud_->showNotification("Level Up! Level " + std::to_string(event.newLevel), "success", 3.0F);
     }
 
     Engine::Logger::info("Level up! New level: " + std::to_string(event.newLevel));
@@ -943,56 +1211,65 @@ void CatAnnihilation::onLevelUp(const LevelUpEvent& event) {
 
 void CatAnnihilation::onDamage(const DamageEvent& event) {
     // Update HUD damage indicator
-    if (hud_ && event.target == playerEntity_) {
-        hud_->showDamageIndicator(event.amount);
+    if (hud_ != nullptr && event.target == playerEntity_) {
+        // Direction from damage source to player (2D normalized for HUD)
+        std::array<float, 2> damageDir = {0.0F, 1.0F}; // Default direction
+        hud_->showDamageIndicator(damageDir, event.amount / 100.0F);
     }
 
     // Play damage sound
-    if (gameAudio_) {
+    if (gameAudio_ != nullptr) {
         if (event.target == playerEntity_) {
-            gameAudio_->playSoundEffect("player_hurt");
+            gameAudio_->playPlayerHurt();
         } else {
-            gameAudio_->playSoundEffect("enemy_hurt", event.hitPosition);
+            gameAudio_->playEnemyHit({event.hitPosition.x, event.hitPosition.y, event.hitPosition.z});
         }
     }
 
     // Show damage number
-    if (hud_) {
-        hud_->spawnDamageNumber(event.hitPosition, event.amount, event.wasCritical);
+    if (hud_ != nullptr) {
+        std::array<float, 2> screenPos = {event.hitPosition.x, event.hitPosition.y};
+        hud_->showDamageNumber(event.amount, screenPos, event.wasCritical);
     }
 }
 
 void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
+    // Get entity position for particle effects
+    Engine::vec3 deathPosition(0.0F, 0.0F, 0.0F);
+    if (ecs_.isAlive(event.entity)) {
+        auto* transform = ecs_.getComponent<Engine::Transform>(event.entity);
+        if (transform != nullptr) {
+            deathPosition = transform->position;
+        }
+    }
+
     // Check if player died
     if (event.entity == playerEntity_) {
         Engine::Logger::info("Player died!");
         setState(GameState::GameOver);
-    } else {
-        // Enemy death - already handled by EnemyKilledEvent
     }
 
-    // Spawn death particles
-    if (particleSystem_) {
-        // TODO: Spawn death effect particles
-    }
+    // Spawn death particles at entity position
+    spawnDeathParticles(deathPosition);
 }
 
 void CatAnnihilation::onWaveComplete(const WaveCompleteEvent& event) {
     waveNumber_ = event.waveNumber;
 
     // Award XP
-    if (levelingSystem_) {
-        levelingSystem_->addExperience(event.xpReward);
+    if (levelingSystem_ != nullptr) {
+        levelingSystem_->addXP(event.xpReward);
     }
 
     // Play wave complete sound
-    if (gameAudio_) {
-        gameAudio_->playSoundEffect("wave_complete");
+    if (gameAudio_ != nullptr) {
+        gameAudio_->playWaveComplete();
     }
 
-    // Show UI notification
-    if (hud_) {
-        hud_->showWaveComplete(event.waveNumber, event.xpReward);
+    // Update HUD with new wave info
+    if (hud_ != nullptr) {
+        hud_->setWave(event.waveNumber + 1); // Show next wave number
+        hud_->showNotification("Wave " + std::to_string(event.waveNumber) + " Complete!", "info", 3.0F);
     }
 
     Engine::Logger::info("Wave " + std::to_string(event.waveNumber) + " complete! (+" + std::to_string(event.xpReward) + " XP)");

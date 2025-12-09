@@ -83,7 +83,7 @@ void Forest::generateWithPoissonDisk() {
     std::uniform_real_distribution<float> radiusDist(minDist, 2.0f * minDist);
     std::uniform_real_distribution<float> zeroOne(0.0f, 1.0f);
     std::uniform_real_distribution<float> scaleDist(m_params.minScale, m_params.maxScale);
-    std::uniform_int_distribution<uint8_t> varDist(0, 255);
+    std::uniform_int_distribution<int> varDist(0, 255);
 
     // Start with initial random point
     Engine::vec3 initialPos(posDist(m_rng), 0.0f, posDist(m_rng));
@@ -202,7 +202,7 @@ void Forest::generateSimple() {
     std::uniform_real_distribution<float> angleDist(0.0f, 2.0f * Engine::Math::PI);
     std::uniform_real_distribution<float> zeroOne(0.0f, 1.0f);
     std::uniform_real_distribution<float> scaleDist(m_params.minScale, m_params.maxScale);
-    std::uniform_int_distribution<uint8_t> varDist(0, 255);
+    std::uniform_int_distribution<int> varDist(0, 255);
 
     for (int i = 0; i < targetCount * 3; i++) {
         if (static_cast<int>(m_instances.size()) >= targetCount) {

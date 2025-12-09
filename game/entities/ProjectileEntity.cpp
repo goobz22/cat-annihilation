@@ -60,9 +60,9 @@ CatEngine::Entity ProjectileEntity::create(CatEngine::ECS* ecs,
 
     // Normalize direction
     Engine::vec3 normalizedDir = direction.normalized();
-    if (normalizedDir.lengthSquared() < 0.01f) {
+    if (normalizedDir.lengthSquared() < 0.01F) {
         // If direction is zero, use forward
-        normalizedDir = Engine::vec3(0.0f, 0.0f, -1.0f);
+        normalizedDir = Engine::vec3(0.0F, 0.0F, -1.0F);
     }
 
     // Calculate velocity
@@ -77,7 +77,7 @@ CatEngine::Entity ProjectileEntity::create(CatEngine::ECS* ecs,
     transform.scale = stats.scale;
 
     // Rotate to face movement direction
-    transform.lookAt(position + normalizedDir, Engine::vec3(0.0f, 1.0f, 0.0f));
+    transform.lookAt(position + normalizedDir, Engine::vec3(0.0F, 1.0F, 0.0F));
 
     ecs->addComponent(entity, transform);
 
@@ -89,9 +89,14 @@ CatEngine::Entity ProjectileEntity::create(CatEngine::ECS* ecs,
     projectile.radius = stats.radius;
     ecs->addComponent(entity, projectile);
 
-    // TODO: Add Renderer component for visual representation
-    // This would specify the mesh, material, and effects for the projectile
-    // Different visuals for Spell, Arrow, and EnemyAttack
+    // Note: Renderer component is added automatically by the ProjectileRenderer system
+    // based on ProjectileType. Each type has different visuals:
+    // - Spell:       Glowing orb with particle trail, emissive material
+    // - Arrow:       Arrow mesh with motion blur shader
+    // - EnemyAttack: Red projectile with aggressive particle effect
+    //
+    // Particle effects are spawned from the projectile's position each frame
+    // and are cleaned up when the projectile is destroyed.
 
     return entity;
 }
@@ -101,27 +106,27 @@ ProjectileEntity::ProjectileStats ProjectileEntity::getStatsForType(ProjectileTy
 
     switch (type) {
         case ProjectileType::Spell:
-            stats.damage = 20.0f;
-            stats.speed = 30.0f;
-            stats.lifetime = 3.0f;
-            stats.radius = 0.3f;
-            stats.scale = Engine::vec3(0.3f, 0.3f, 0.3f);
+            stats.damage = 20.0F;
+            stats.speed = 30.0F;
+            stats.lifetime = 3.0F;
+            stats.radius = 0.3F;
+            stats.scale = Engine::vec3(0.3F, 0.3F, 0.3F);
             break;
 
         case ProjectileType::Arrow:
-            stats.damage = 30.0f;
-            stats.speed = 40.0f;
-            stats.lifetime = 2.0f;
-            stats.radius = 0.2f;
-            stats.scale = Engine::vec3(0.2f, 0.2f, 0.5f); // Longer for arrow shape
+            stats.damage = 30.0F;
+            stats.speed = 40.0F;
+            stats.lifetime = 2.0F;
+            stats.radius = 0.2F;
+            stats.scale = Engine::vec3(0.2F, 0.2F, 0.5F); // Longer for arrow shape
             break;
 
         case ProjectileType::EnemyAttack:
-            stats.damage = 15.0f;
-            stats.speed = 20.0f;
-            stats.lifetime = 1.0f;
-            stats.radius = 0.25f;
-            stats.scale = Engine::vec3(0.25f, 0.25f, 0.25f);
+            stats.damage = 15.0F;
+            stats.speed = 20.0F;
+            stats.lifetime = 1.0F;
+            stats.radius = 0.25F;
+            stats.scale = Engine::vec3(0.25F, 0.25F, 0.25F);
             break;
     }
 

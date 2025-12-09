@@ -585,10 +585,12 @@ bool NPCSystem::isOptionAvailable(const NPCDialogOption& option) const {
         return false;
     }
 
-    // TODO: Check quest requirement when quest system is integrated
-    // if (option.requiredQuest.has_value()) {
-    //     // Check if quest is active
-    // }
+    // Check quest requirement using callback
+    if (option.requiredQuest.has_value() && questCheckCallback_) {
+        if (!questCheckCallback_(option.requiredQuest.value())) {
+            return false;
+        }
+    }
 
     return true;
 }

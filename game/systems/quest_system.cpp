@@ -1,6 +1,7 @@
 #include "quest_system.hpp"
 #include "quest_data.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../third_party/nlohmann/json.hpp"
 #include <algorithm>
 #include <sstream>
 #include <fstream>
@@ -45,12 +46,87 @@ void QuestSystem::setPlayerInfo(int level, Clan clan) {
 }
 
 void QuestSystem::loadQuestsFromFile(const std::string& path) {
-    // TODO: Implement JSON parsing for quest loading
-    // For now, we'll use the hardcoded quest data
     Engine::Logger::info("QuestSystem", "Loading quests from file: %s", path.c_str());
 
-    // This would parse JSON and populate quests_
-    // For now, using loadQuestsFromData() instead
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        Engine::Logger::warn("QuestSystem", "Failed to open quest file: %s, using default quests", path.c_str());
+        loadQuestsFromData();
+        return;
+    }
+
+    try {
+        nlohmann::json questsJson = nlohmann::json::parse(file);
+
+        for (const auto& questJson : questsJson["quests"]) {
+            Quest quest;
+            quest.id = questJson.value("id", "");
+            quest.title = questJson.value("title", "");
+            quest.description = questJson.value("description", "");
+            quest.loreText = questJson.value("lore", "");
+            quest.requiredLevel = questJson.value("requiredLevel", 1);
+            quest.canRepeat = questJson.value("repeatable", false);
+            quest.timeLimit = questJson.value("timeLimit", 0.0F);
+            quest.questGiverId = questJson.value("questGiver", "");
+            quest.turnInNpcId = questJson.value("turnInNpc", "");
+
+            // Parse quest type
+            std::string typeStr = questJson.value("type", "main");
+            if (typeStr == "main") quest.type = QuestType::MainStory;
+            else if (typeStr == "side") quest.type = QuestType::SideQuest;
+            else if (typeStr == "daily") quest.type = QuestType::Daily;
+            else if (typeStr == "bounty") quest.type = QuestType::Bounty;
+            else if (typeStr == "clan") quest.type = QuestType::ClanMission;
+            else quest.type = QuestType::SideQuest;
+
+            // Parse objectives
+            if (questJson.contains("objectives")) {
+                for (const auto& objJson : questJson["objectives"]) {
+                    QuestObjective obj;
+                    obj.description = objJson.value("description", "");
+                    obj.targetId = objJson.value("targetId", "");
+                    obj.requiredCount = objJson.value("count", 1);
+                    obj.currentCount = 0;
+                    obj.completed = false;
+
+                    std::string objType = objJson.value("type", "kill");
+                    if (objType == "kill") obj.type = ObjectiveType::Kill;
+                    else if (objType == "collect") obj.type = ObjectiveType::Collect;
+                    else if (objType == "explore") obj.type = ObjectiveType::Explore;
+                    else if (objType == "talk") obj.type = ObjectiveType::Talk;
+                    else if (objType == "survive") obj.type = ObjectiveType::Survive;
+                    else if (objType == "defend") obj.type = ObjectiveType::Defend;
+                    else if (objType == "escort") obj.type = ObjectiveType::Escort;
+                    else obj.type = ObjectiveType::Kill;
+
+                    quest.objectives.push_back(obj);
+                }
+            }
+
+            // Parse rewards
+            if (questJson.contains("rewards")) {
+                const auto& rewardsJson = questJson["rewards"];
+                quest.rewards.xp = rewardsJson.value("xp", 0);
+                quest.rewards.currency = rewardsJson.value("currency", 0);
+            }
+
+            // Parse prerequisites
+            if (questJson.contains("prerequisites")) {
+                for (const auto& prereq : questJson["prerequisites"]) {
+                    quest.prerequisites.push_back(prereq.get<std::string>());
+                }
+            }
+
+            if (!quest.id.empty()) {
+                quests_[quest.id] = std::move(quest);
+            }
+        }
+
+        Engine::Logger::info("QuestSystem", "Loaded %zu quests from JSON file", quests_.size());
+    } catch (const nlohmann::json::exception& e) {
+        Engine::Logger::error("QuestSystem", "Failed to parse quest file: %s", e.what());
+        loadQuestsFromData();
+    }
 }
 
 void QuestSystem::loadQuestsFromData() {
@@ -460,12 +536,15 @@ void QuestSystem::grantRewards(const QuestReward& rewards) {
         Engine::Logger::info("QuestSystem", "Territory unlocked: %s", rewards.territoryUnlock.value().c_str());
     }
 
-    // TODO: Integrate with actual player systems
-    // - PlayerSystem::addXP(rewards.xp)
-    // - InventorySystem::addCurrency(rewards.currency)
-    // - InventorySystem::addItems(rewards.items)
-    // - AbilitySystem::unlockAbility(rewards.abilityUnlock)
-    // - TerritorySystem::unlockTerritory(rewards.territoryUnlock)
+    // Delegate reward granting to the game layer via callback
+    // The CatAnnihilation class registers a callback that integrates with:
+    // - LevelingSystem for XP rewards
+    // - MerchantSystem for currency rewards
+    // - InventorySystem for item rewards
+    // - StoryModeSystem for ability and territory unlocks
+    if (onRewardGranted_) {
+        onRewardGranted_(rewards);
+    }
 }
 
 void QuestSystem::notifyQuestActivated(const Quest& quest) {
@@ -500,6 +579,37 @@ bool QuestSystem::checkPrerequisites(const Quest& quest) const {
         }
     }
     return true;
+}
+
+void QuestSystem::loadQuestState(const std::vector<std::string>& activeIds,
+                                  const std::vector<std::string>& completedIds) {
+    // Clear current quest state
+    activeQuestIds_.clear();
+    completedQuestIds_ = completedIds;
+
+    // Reset all quest states first
+    for (auto& [id, quest] : quests_) {
+        quest.isActive = false;
+        quest.isCompleted = false;
+        quest.isFailed = false;
+    }
+
+    // Mark completed quests
+    for (const auto& id : completedIds) {
+        auto it = quests_.find(id);
+        if (it != quests_.end()) {
+            it->second.isCompleted = true;
+        }
+    }
+
+    // Reactivate active quests
+    for (const auto& id : activeIds) {
+        auto it = quests_.find(id);
+        if (it != quests_.end()) {
+            it->second.isActive = true;
+            activeQuestIds_.push_back(id);
+        }
+    }
 }
 
 } // namespace CatGame

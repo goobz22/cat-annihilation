@@ -40,7 +40,7 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
-        if (arg == "--help" || arg == "-h") {
+        if (arg == "--help") {
             args.showHelp = true;
         } else if (arg == "--fullscreen" || arg == "-f") {
             args.fullscreen = true;
@@ -140,13 +140,13 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Create RHI and Renderer
     // ========================================================================
-    CatEngine::RHI::VulkanRHI::Config rhiConfig;
-    rhiConfig.enableValidation = cmdArgs.enableValidation;
-    rhiConfig.applicationName = "Cat Annihilation";
-    rhiConfig.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    CatEngine::RHI::RHIDesc rhiDesc;
+    rhiDesc.enableValidation = cmdArgs.enableValidation;
+    rhiDesc.applicationName = "Cat Annihilation";
+    rhiDesc.applicationVersion = 1;
 
-    auto rhi = std::make_unique<CatEngine::RHI::VulkanRHI>(rhiConfig);
-    if (!rhi->Initialize(window.getHandle())) {
+    auto rhi = std::make_unique<CatEngine::RHI::VulkanRHI>();
+    if (!rhi->Initialize(rhiDesc)) {
         Engine::Logger::error("Failed to initialize Vulkan RHI");
         return 1;
     }
@@ -158,9 +158,10 @@ int main(int argc, char* argv[]) {
     rendererConfig.enableVSync = gameConfig.graphics.vsync;
     rendererConfig.enableValidation = cmdArgs.enableValidation;
     rendererConfig.maxFramesInFlight = 2;
+    rendererConfig.windowHandle = &window;  // Pass window pointer for Vulkan surface creation
 
     auto renderer = std::make_unique<CatEngine::Renderer::Renderer>(rendererConfig);
-    if (!renderer->Initialize(rhi->GetDevice())) {
+    if (!renderer->Initialize(rhi.get())) {
         Engine::Logger::error("Failed to initialize renderer");
         return 1;
     }
@@ -169,11 +170,19 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Initialize CUDA Context
     // ========================================================================
-    CatEngine::CudaContext cudaContext;
-    if (!cudaContext.initialize()) {
-        Engine::Logger::warn("Failed to initialize CUDA context - GPU acceleration disabled");
-    } else {
+    std::cout << "[main] Creating CUDA context..." << std::endl;
+    std::unique_ptr<CatEngine::CUDA::CudaContext> cudaContext;
+    try {
+        cudaContext.reset(new CatEngine::CUDA::CudaContext());
+        std::cout << "[main] CUDA context created" << std::endl;
         Engine::Logger::info("CUDA context initialized successfully");
+    } catch (const CatEngine::CUDA::CudaException& e) {
+        std::cerr << "[main] CUDA initialization failed: " << e.what() << std::endl;
+        Engine::Logger::warn("CUDA initialization failed, continuing without GPU acceleration");
+        // Continue without CUDA - it's not critical for basic functionality
+    } catch (const std::exception& e) {
+        std::cerr << "[main] Exception during CUDA init: " << e.what() << std::endl;
+        Engine::Logger::warn("CUDA initialization failed, continuing without GPU acceleration");
     }
 
     // ========================================================================
@@ -187,9 +196,9 @@ int main(int argc, char* argv[]) {
     Engine::Logger::info("Audio engine initialized");
 
     // Apply audio settings from config
-    audioEngine->setMasterVolume(gameConfig.audio.masterVolume);
+    audioEngine->getMixer().setMasterVolume(gameConfig.audio.masterVolume);
     if (gameConfig.audio.masterMuted) {
-        audioEngine->setMasterVolume(0.0f);
+        audioEngine->getMixer().setMasterMuted(true);
     }
 
     // ========================================================================
@@ -219,8 +228,10 @@ int main(int argc, char* argv[]) {
     // Main Game Loop
     // ========================================================================
     Engine::Logger::info("Entering main loop...");
+    std::cout << "[main] About to enter main loop" << std::endl;
 
-    Engine::Timer timer;
+    CatEngine::Timer timer;
+    timer.Start();
     float deltaTime = 0.0f;
     float fpsTimer = 0.0f;
     uint32_t frameCount = 0;
@@ -229,52 +240,85 @@ int main(int argc, char* argv[]) {
     bool running = true;
 
     while (running && !window.shouldClose()) {
-        // Start frame timing
-        timer.reset();
+        // Log first few frames for debugging
+        if (frameCount < 5) {
+            std::cout << "[main] Frame " << frameCount << " starting..." << std::endl;
+        }
+
+        // Update timer and get delta time
+        deltaTime = static_cast<float>(timer.Update());
+
+        if (frameCount < 5) {
+            std::cout << "[main] Frame " << frameCount << " - polling events..." << std::endl;
+        }
 
         // Poll events
         window.pollEvents();
 
+        if (frameCount < 5) {
+            std::cout << "[main] Frame " << frameCount << " - updating input..." << std::endl;
+        }
+
         // Update input
         input.update();
+
+        if (frameCount < 5) {
+            std::cout << "[main] Frame " << frameCount << " - updating game..." << std::endl;
+        }
 
         // Update game
         game->update(deltaTime);
 
+        if (frameCount < 5) {
+            std::cout << "[main] Frame " << frameCount << " - checking window minimized..." << std::endl;
+        }
+
         // Render
         if (!window.isMinimized()) {
+            if (frameCount < 5) {
+                std::cout << "[main] Frame " << frameCount << " - calling BeginFrame..." << std::endl;
+            }
+
             if (renderer->BeginFrame()) {
+                if (frameCount < 5) {
+                    std::cout << "[main] Frame " << frameCount << " - BeginFrame succeeded, calling game->render()..." << std::endl;
+                }
+
                 // Render game (world, entities, effects)
                 game->render();
 
+                if (frameCount < 5) {
+                    std::cout << "[main] Frame " << frameCount << " - game->render() done, calling EndFrame..." << std::endl;
+                    std::cout.flush();
+                }
+
                 renderer->EndFrame();
+
+                if (frameCount < 5) {
+                    std::cout << "[main] Frame " << frameCount << " - EndFrame done" << std::endl;
+                    std::cout.flush();
+                }
+            } else {
+                if (frameCount < 5) {
+                    std::cout << "[main] Frame " << frameCount << " - BeginFrame returned false" << std::endl;
+                }
             }
         }
-
-        // Frame timing
-        deltaTime = timer.getElapsedSeconds();
 
         // Calculate FPS
         fpsTimer += deltaTime;
         frameCount++;
         if (fpsTimer >= 1.0f) {
-            currentFPS = frameCount / fpsTimer;
+            currentFPS = static_cast<float>(frameCount) / fpsTimer;
             if (gameConfig.graphics.showFPS) {
                 Engine::Logger::info("FPS: " + std::to_string(static_cast<int>(currentFPS)));
             }
+            std::cout << "[main] FPS: " << static_cast<int>(currentFPS) << std::endl;
             frameCount = 0;
             fpsTimer = 0.0f;
         }
 
-        // Cap framerate if needed
-        if (gameConfig.graphics.maxFPS > 0) {
-            float targetFrameTime = 1.0f / gameConfig.graphics.maxFPS;
-            float actualFrameTime = timer.getElapsedSeconds();
-            if (actualFrameTime < targetFrameTime) {
-                // Sleep for remaining time (platform-specific implementation needed)
-                // For now, just busy-wait or skip
-            }
-        }
+        // Cap framerate if needed (FPS limiting handled by VSync for now)
     }
 
     // ========================================================================
@@ -301,8 +345,7 @@ int main(int argc, char* argv[]) {
     rhi->Shutdown();
     rhi.reset();
 
-    // Cleanup CUDA
-    cudaContext.cleanup();
+    // CUDA context cleanup happens automatically in destructor
 
     Engine::Logger::info("===========================================");
     Engine::Logger::info("  CAT ANNIHILATION - Shutdown Complete");

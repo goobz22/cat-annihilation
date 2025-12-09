@@ -18,10 +18,23 @@ namespace CatGame {
 struct HealthComponent {
     float currentHealth = 100.0f;
     float maxHealth = 100.0f;
+    float shield = 0.0f;               // Shield absorbs damage before health
+    float maxShield = 0.0f;
 
     // Invincibility frames
     float invincibilityTimer = 0.0f;
     float invincibilityDuration = 0.5f;  // Default 0.5 seconds after taking damage
+
+    // Regeneration
+    bool canRegenerate = false;        // Whether health regenerates over time
+    float regenerationRate = 0.0f;     // Health per second when regenerating
+    float regenerationDelay = 3.0f;    // Seconds after damage before regen starts
+    float timeSinceLastDamage = 0.0f;  // Time since last damage was taken
+
+    // Death state
+    bool isDead = false;               // Whether entity has died
+    float deathTimer = 0.0f;           // Time since death
+    float deathAnimationDuration = 1.0f; // How long death animation lasts
 
     // Callbacks
     std::function<void(float)> onDamage = nullptr;     // Called when damage is taken (amount)
@@ -53,7 +66,8 @@ struct HealthComponent {
         }
 
         // Check for death
-        if (isDead() && onDeath) {
+        if (currentHealth <= 0.0f && onDeath) {
+            isDead = true;
             onDeath();
         }
 
@@ -73,11 +87,19 @@ struct HealthComponent {
     }
 
     /**
-     * Check if entity is dead
+     * Check if entity is dead (based on health value)
      * @return true if health is 0 or less
      */
-    bool isDead() const {
-        return currentHealth <= 0.0f;
+    bool checkIsDead() const {
+        return currentHealth <= 0.0f || isDead;
+    }
+
+    /**
+     * Check if entity is alive
+     * @return true if entity is not dead
+     */
+    bool isAlive() const {
+        return !checkIsDead();
     }
 
     /**

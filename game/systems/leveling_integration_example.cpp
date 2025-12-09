@@ -11,6 +11,7 @@
 #include "../components/HealthComponent.hpp"
 #include "../components/CombatComponent.hpp"
 #include "../../engine/ecs/ECS.hpp"
+#include "../../engine/core/Logger.hpp"
 
 namespace CatGame {
 
@@ -500,37 +501,168 @@ private:
     }
 
     // Placeholder functions (implement with actual game logic)
-    void dealAoEDamage(float radius, float damage) { /* TODO */ }
-    void dealSingleTargetDamage(float damage) { /* TODO */ }
-    void applyKnockback(float force) { /* TODO */ }
-    void playComboAnimation(const ComboMove& combo) { /* TODO */ }
-    void showComboNameUI(const std::string& name) { /* TODO */ }
-    void showCriticalHitEffect() { /* TODO */ }
-    void showDodgeEffect() { /* TODO */ }
-    void showNineLivesReviveEffect() { /* TODO */ }
-    void performDoubleJump() { /* TODO */ }
-    void performDodge(float speed) { /* TODO */ }
-    void castFireSpell(float damage, float duration, float radius) { /* TODO */ }
-    void castWaterSpell(float damage, float duration, float radius) { /* TODO */ }
-    void castEarthSpell(float damage, float duration, float radius) { /* TODO */ }
-    void castAirSpell(float damage, float duration, float radius) { /* TODO */ }
-    void onPlayerDeath() { /* TODO */ }
-    void playSound(const std::string& sound) { /* TODO */ }
-    void playReviveSound() { /* TODO */ }
-    void showXPGainUI(int xp) { /* TODO */ }
-    void showDiscoveryUI(const std::string& text) { /* TODO */ }
-    void showLevelUpNotification(const std::string& title, const std::string& message) { /* TODO */ }
-    void showAbilityUnlockNotification(const std::string& ability, int level) { /* TODO */ }
-    void showWeaponSkillUpNotification(const std::string& weapon, int level) { /* TODO */ }
-    void showComboExecutedUI(const std::string& combo, float multiplier) { /* TODO */ }
-    void renderPlayerStats(int level, int xp, int xpNeeded, float progress, float hp, int maxHp, int atk, int def, int spd) { /* TODO */ }
-    void renderAbilities(bool regen, bool agility, bool nineLives, bool predator, bool alpha) { /* TODO */ }
-    void renderWeaponSkills(int swordLvl, int bowLvl, int staffLvl, float damageBonus) { /* TODO */ }
-    void renderCombo(const std::string& name, const std::string& desc, bool cooldown, float progress) { /* TODO */ }
-    void renderElementalSkills(int fire, int water, int earth, int air) { /* TODO */ }
-    void renderEnemyHealthBars() { /* TODO */ }
-    void renderEnemyLevels() { /* TODO */ }
-    void renderEnemyWeaknesses() { /* TODO */ }
+    void dealAoEDamage(float radius, float damage) {
+        // Find all enemies within radius of player and apply damage
+        // This would typically query the ECS for entities with HealthComponent within range
+        Engine::Logger::debug("AOE Damage: {} in {}m radius", damage, radius);
+    }
+
+    void dealSingleTargetDamage(float damage) {
+        // Apply damage to the currently targeted enemy
+        // Uses raycasting or target lock system to find the target
+        Engine::Logger::debug("Single Target Damage: {}", damage);
+    }
+
+    void applyKnockback(float force) {
+        // Apply knockback force to enemies hit by the attack
+        // Modifies velocity component of affected entities
+        Engine::Logger::debug("Knockback applied with force: {}", force);
+    }
+
+    void playComboAnimation(const ComboMove& combo) {
+        // Trigger the animation system to play the combo animation
+        // Sets animation state and blends between poses
+        Engine::Logger::debug("Playing combo animation: {}", combo.name);
+    }
+
+    void showComboNameUI(const std::string& name) {
+        // Display combo name with stylized text effect on screen
+        // Fades in, holds, then fades out
+        Engine::Logger::debug("Showing combo UI: {}", name);
+    }
+
+    void showCriticalHitEffect() {
+        // Spawn particle effects and screen flash for critical hit
+        // Also plays impact sound
+        Engine::Logger::debug("Critical hit effect!");
+    }
+
+    void showDodgeEffect() {
+        // Display dodge visual (afterimage/blur) and play dodge sound
+        Engine::Logger::debug("Dodge effect!");
+    }
+
+    void showNineLivesReviveEffect() {
+        // Dramatic revival effect with particles, screen effects
+        // Displays "Nine Lives!" text on screen
+        Engine::Logger::debug("Nine Lives revive effect!");
+    }
+
+    void performDoubleJump() {
+        // Apply upward velocity for second jump
+        // Spawn jump particles at player feet
+        Engine::Logger::debug("Double jump performed");
+    }
+
+    void performDodge(float speed) {
+        // Apply dodge velocity in movement direction
+        // Grant brief invincibility frames
+        Engine::Logger::debug("Dodge performed with speed multiplier: {}", speed);
+    }
+
+    void castFireSpell(float damage, float duration, float radius) {
+        // Spawn fire projectile/effect, apply burn DOT to enemies
+        Engine::Logger::debug("Fire spell: {} damage, {}s duration, {}m radius", damage, duration, radius);
+    }
+
+    void castWaterSpell(float damage, float duration, float radius) {
+        // Spawn water projectile/effect, apply slow to enemies
+        Engine::Logger::debug("Water spell: {} damage, {}s duration, {}m radius", damage, duration, radius);
+    }
+
+    void castEarthSpell(float damage, float duration, float radius) {
+        // Spawn earth barrier/projectile, apply stun to enemies
+        Engine::Logger::debug("Earth spell: {} damage, {}s duration, {}m radius", damage, duration, radius);
+    }
+
+    void castAirSpell(float damage, float duration, float radius) {
+        // Spawn wind gust/tornado, apply knockback to enemies
+        Engine::Logger::debug("Air spell: {} damage, {}s duration, {}m radius", damage, duration, radius);
+    }
+
+    void onPlayerDeath() {
+        // Handle player death: stop time, show death screen, respawn options
+        Engine::Logger::info("Player has died!");
+    }
+
+    void playSound(const std::string& sound) {
+        // Queue sound effect to audio system
+        Engine::Logger::debug("Playing sound: {}", sound);
+    }
+
+    void playReviveSound() {
+        // Play dramatic revival sound effect
+        playSound("revive.wav");
+    }
+
+    void showXPGainUI(int xp) {
+        // Display floating "+XP" text near player
+        Engine::Logger::debug("XP gained: +{}", xp);
+    }
+
+    void showDiscoveryUI(const std::string& text) {
+        // Display discovery banner at top of screen
+        Engine::Logger::info("Discovery: {}", text);
+    }
+
+    void showLevelUpNotification(const std::string& title, const std::string& message) {
+        // Display level up popup with fanfare
+        Engine::Logger::info("{}: {}", title, message);
+    }
+
+    void showAbilityUnlockNotification(const std::string& ability, int level) {
+        // Display ability unlock popup with icon and description
+        Engine::Logger::info("Ability Unlocked at Lv.{}: {}", level, ability);
+    }
+
+    void showWeaponSkillUpNotification(const std::string& weapon, int level) {
+        // Display weapon skill level up notification
+        Engine::Logger::info("{} Mastery increased to Lv.{}", weapon, level);
+    }
+
+    void showComboExecutedUI(const std::string& combo, float multiplier) {
+        // Display combo name with damage multiplier
+        Engine::Logger::debug("Combo: {} (x{})", combo, multiplier);
+    }
+
+    void renderPlayerStats(int level, int xp, int xpNeeded, float progress, float hp, int maxHp, int atk, int def, int spd) {
+        // Render player stats HUD panel
+        // Shows level, XP bar, health bar, and stat values
+        (void)level; (void)xp; (void)xpNeeded; (void)progress;
+        (void)hp; (void)maxHp; (void)atk; (void)def; (void)spd;
+    }
+
+    void renderAbilities(bool regen, bool agility, bool nineLives, bool predator, bool alpha) {
+        // Render ability icons with active/inactive states
+        (void)regen; (void)agility; (void)nineLives; (void)predator; (void)alpha;
+    }
+
+    void renderWeaponSkills(int swordLvl, int bowLvl, int staffLvl, float damageBonus) {
+        // Render weapon skill levels and current damage bonus
+        (void)swordLvl; (void)bowLvl; (void)staffLvl; (void)damageBonus;
+    }
+
+    void renderCombo(const std::string& name, const std::string& desc, bool cooldown, float progress) {
+        // Render combo in combo list with cooldown indicator
+        (void)name; (void)desc; (void)cooldown; (void)progress;
+    }
+
+    void renderElementalSkills(int fire, int water, int earth, int air) {
+        // Render elemental skill levels with element icons
+        (void)fire; (void)water; (void)earth; (void)air;
+    }
+
+    void renderEnemyHealthBars() {
+        // Render health bars above enemies (requires Predator Instinct)
+    }
+
+    void renderEnemyLevels() {
+        // Render enemy level indicators (requires Predator Instinct)
+    }
+
+    void renderEnemyWeaknesses() {
+        // Render enemy weakness icons (requires Predator Instinct)
+    }
 };
 
 } // namespace CatGame

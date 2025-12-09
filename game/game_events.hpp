@@ -216,7 +216,7 @@ struct TerritoryChangeEvent {
 struct TimeOfDayChangeEvent {
     float previousTime;  // 0.0-1.0
     float currentTime;
-    bool isNow Night;
+    bool isNowNight;
     bool wasDawn;
     bool wasDusk;
     int dayNumber;

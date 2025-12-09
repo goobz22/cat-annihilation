@@ -2,6 +2,7 @@
 
 #include "../../engine/ecs/System.hpp"
 #include "../../engine/ecs/ECS.hpp"
+#include "../../engine/math/Vector.hpp"
 #include "../components/EnemyComponent.hpp"
 
 namespace CatGame {

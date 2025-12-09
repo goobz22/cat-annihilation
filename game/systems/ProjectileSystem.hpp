@@ -3,6 +3,7 @@
 #include "../../engine/ecs/System.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../components/ProjectileComponent.hpp"
+#include <functional>
 
 namespace CatGame {
 
@@ -12,13 +13,24 @@ namespace CatGame {
  */
 class ProjectileSystem : public CatEngine::System {
 public:
+    using HitEffectCallback = std::function<void(const Engine::vec3& position, ProjectileType type)>;
+
     explicit ProjectileSystem(int priority = 50);
     ~ProjectileSystem() override = default;
 
     void update(float dt) override;
     const char* getName() const override { return "ProjectileSystem"; }
 
+    /**
+     * Set callback for spawning hit effects
+     * Called when a projectile hits a target
+     */
+    void setOnHitEffect(const HitEffectCallback& callback) { onHitEffect_ = callback; }
+
 private:
+    // Callback for hit effects
+    HitEffectCallback onHitEffect_;
+
     /**
      * Update individual projectile
      */

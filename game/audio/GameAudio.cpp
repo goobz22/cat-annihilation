@@ -149,7 +149,7 @@ void GameAudio::crossFadeMusic(const std::string& trackName, float duration) {
     }
 
     newMusic->setLooping(true);
-    newMusic->setSourceRelative(true); // 2D sound
+    newMusic->setRelativeToListener(true); // 2D sound
     newMusic->setPosition({0, 0, 0});
 
     // Start cross-fade
@@ -276,7 +276,7 @@ void GameAudio::playAmbientWind(float volume) {
         m_ambientWind = m_audioEngine.createSource(SoundNames::AMBIENT_WIND);
         if (m_ambientWind) {
             m_ambientWind->setLooping(true);
-            m_ambientWind->setSourceRelative(true);
+            m_ambientWind->setRelativeToListener(true);
             m_ambientWind->setPosition({0, 0, 0});
             m_ambientWind->setGain(volume);
 
@@ -338,27 +338,27 @@ bool GameAudio::loadAllSounds() {
     success &= loadSound(SoundNames::SWORD_SWING, "sfx/sword_swing.wav");
     success &= loadSound(SoundNames::PROJECTILE_FIRE, "sfx/projectile_fire.wav");
     success &= loadSound(SoundNames::PROJECTILE_HIT, "sfx/projectile_hit.wav");
-    success &= loadSound(SoundNames::ENEMY_HIT, "sfx/enemy_hit.wav");
+    success &= loadSound(SoundNames::ENEMY_HIT, "sfx/enemy_hurt.wav");
     success &= loadSound(SoundNames::ENEMY_DEATH, "sfx/enemy_death.wav");
     success &= loadSound(SoundNames::PLAYER_HURT, "sfx/player_hurt.wav");
     success &= loadSound(SoundNames::PLAYER_DEATH, "sfx/player_death.wav");
 
-    // UI sounds
-    success &= loadSound(SoundNames::MENU_CLICK, "ui/menu_click.wav");
-    success &= loadSound(SoundNames::MENU_HOVER, "ui/menu_hover.wav");
-    success &= loadSound(SoundNames::WAVE_COMPLETE, "ui/wave_complete.wav");
-    success &= loadSound(SoundNames::WAVE_START, "ui/wave_start.wav");
-    success &= loadSound(SoundNames::LEVEL_UP, "ui/level_up.wav");
-    success &= loadSound(SoundNames::ERROR, "ui/error.wav");
+    // UI sounds (located in sfx folder)
+    success &= loadSound(SoundNames::MENU_CLICK, "sfx/menu_click.wav");
+    success &= loadSound(SoundNames::MENU_HOVER, "sfx/menu_hover.wav");
+    success &= loadSound(SoundNames::WAVE_COMPLETE, "sfx/wave_complete.wav");
+    success &= loadSound(SoundNames::WAVE_START, "sfx/wave_complete.wav");  // Use wave_complete as fallback
+    success &= loadSound(SoundNames::LEVEL_UP, "sfx/pickup.wav");  // Use pickup as fallback for level_up
+    success &= loadSound(SoundNames::ERROR, "sfx/menu_click.wav");  // Use menu_click as fallback for error
 
-    // Music tracks
-    success &= loadSound(SoundNames::MUSIC_MENU, "music/menu_theme.ogg");
-    success &= loadSound(SoundNames::MUSIC_GAMEPLAY, "music/gameplay_theme.ogg");
-    success &= loadSound(SoundNames::MUSIC_VICTORY, "music/victory.ogg");
-    success &= loadSound(SoundNames::MUSIC_DEFEAT, "music/defeat.ogg");
+    // Music tracks (actual .wav files with correct names)
+    success &= loadSound(SoundNames::MUSIC_MENU, "music/menu_music.wav");
+    success &= loadSound(SoundNames::MUSIC_GAMEPLAY, "music/gameplay_music.wav");
+    success &= loadSound(SoundNames::MUSIC_VICTORY, "music/victory_sting.wav");
+    success &= loadSound(SoundNames::MUSIC_DEFEAT, "music/defeat_sting.wav");
 
-    // Ambient sounds
-    success &= loadSound(SoundNames::AMBIENT_WIND, "ambient/wind_loop.ogg");
+    // Ambient sounds (use footstep loop as wind fallback until proper ambient is added)
+    success &= loadSound(SoundNames::AMBIENT_WIND, "sfx/footstep.wav");
 
     if (!success) {
         Engine::Logger::warn("Some audio files failed to load (this is OK for development)");

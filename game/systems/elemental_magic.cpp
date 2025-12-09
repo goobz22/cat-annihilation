@@ -122,7 +122,7 @@ bool ElementalMagicSystem::castSpell(Entity caster, const std::string& spellId,
         castProjectileSpell(caster, spell, targetPos);
     }
 
-    LOG_DEBUG("Entity {} cast spell: {}", caster, spell->name);
+    LOG_DEBUG("Entity {} cast spell: {}", caster.id, spell->name);
     return true;
 }
 
@@ -345,7 +345,7 @@ void ElementalMagicSystem::updateElementalEffects(float dt) {
                 effect.nextTick = effect.tickInterval;
 
                 LOG_DEBUG("Entity {} taking {} DOT damage from {}",
-                         entity, effect.damagePerTick,
+                         entity.id, effect.damagePerTick,
                          getElementName(effect.element));
             }
         }
@@ -408,7 +408,7 @@ void ElementalMagicSystem::applySpellDamage(const ActiveSpell& spell,
 
     // Apply damage (placeholder - would modify health component)
     LOG_DEBUG("Spell {} hit entity {} for {} damage",
-             spell.spell->name, target, baseDamage);
+             spell.spell->name, target.id, baseDamage);
 
     // Apply DOT if applicable
     if (spell.spell->dotDamage > 0) {
@@ -443,7 +443,7 @@ void ElementalMagicSystem::addElementalXP(Entity entity, ElementType element, in
         skill.xpToNextLevel = skill.level * 100;  // Scaling XP requirement
 
         LOG_INFO("Entity {} leveled up {} to level {}!",
-                entity, getElementName(element), skill.level);
+                entity.id, getElementName(element), skill.level);
 
         // Unlock new spells at this level
         auto spells = SpellDefinitions::getSpellsForElement(element);

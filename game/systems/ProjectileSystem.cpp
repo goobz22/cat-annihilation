@@ -21,10 +21,10 @@ void ProjectileSystem::update(float dt) {
     std::vector<CatEngine::Entity> toDestroy;
 
     for (auto [entity, projectile, transform] : query.view()) {
-        updateProjectile(entity, projectile, dt);
+        updateProjectile(entity, *projectile, dt);
 
         // Check if projectile should be destroyed
-        if (projectile.isExpired()) {
+        if (projectile->isExpired()) {
             toDestroy.push_back(entity);
         }
     }
@@ -105,13 +105,13 @@ bool ProjectileSystem::checkEnemyCollision(CatEngine::Entity projectileEntity,
         }
 
         // Skip if enemy is already dead
-        if (!health.isAlive()) {
+        if (health->checkIsDead()) {
             continue;
         }
 
         // Check collision
         float enemyRadius = 0.5f; // Enemy collision radius
-        if (checkSphereCollision(position, projectile.radius, transform.position, enemyRadius)) {
+        if (checkSphereCollision(position, projectile.radius, transform->position, enemyRadius)) {
             // Apply damage
             applyDamage(enemyEntity, projectile.damage);
             return true;
@@ -140,13 +140,13 @@ bool ProjectileSystem::checkPlayerCollision(CatEngine::Entity projectileEntity,
         }
 
         // Skip if already dead
-        if (!health.isAlive()) {
+        if (health->checkIsDead()) {
             continue;
         }
 
         // Check collision
         float playerRadius = 0.5f; // Player collision radius
-        if (checkSphereCollision(position, projectile.radius, transform.position, playerRadius)) {
+        if (checkSphereCollision(position, projectile.radius, transform->position, playerRadius)) {
             // Apply damage
             applyDamage(entity, projectile.damage);
             return true;
@@ -176,9 +176,12 @@ void ProjectileSystem::applyDamage(CatEngine::Entity target, float damage) {
 }
 
 void ProjectileSystem::spawnHitEffect(const Engine::vec3& position, ProjectileType type) {
-    // TODO: Spawn particle effect or visual feedback
-    // This would create a particle system entity at the hit position
-    // For now, this is a placeholder
+    // Delegate to callback for particle effect spawning
+    // The game layer (CatAnnihilation) registers a callback that interfaces with
+    // the ParticleSystem to spawn appropriate effects based on projectile type
+    if (onHitEffect_) {
+        onHitEffect_(position, type);
+    }
 }
 
 bool ProjectileSystem::checkSphereCollision(const Engine::vec3& pos1, float radius1,

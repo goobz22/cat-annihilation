@@ -3,6 +3,7 @@
 #include "../../engine/ecs/System.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/math/Vector.hpp"
+#include "story_mode.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -11,16 +12,6 @@
 #include <memory>
 
 namespace CatGame {
-
-/**
- * Cat Clans - Each clan has unique quests and abilities
- */
-enum class Clan {
-    Shadow,     // Stealth and agility focused
-    Warrior,    // Strength and combat focused
-    Hunter,     // Ranged combat and tracking focused
-    Mystic      // Special abilities and magic focused
-};
 
 /**
  * Quest type categorization
@@ -280,10 +271,13 @@ public:
     /**
      * Callbacks
      */
-    void setOnQuestActivated(QuestCallback callback) { onQuestActivated_ = callback; }
-    void setOnQuestCompleted(QuestCallback callback) { onQuestCompleted_ = callback; }
-    void setOnQuestFailed(QuestCallback callback) { onQuestFailed_ = callback; }
-    void setOnObjectiveCompleted(ObjectiveCallback callback) { onObjectiveCompleted_ = callback; }
+    using RewardCallback = std::function<void(const QuestReward&)>;
+
+    void setOnQuestActivated(const QuestCallback& callback) { onQuestActivated_ = callback; }
+    void setOnQuestCompleted(const QuestCallback& callback) { onQuestCompleted_ = callback; }
+    void setOnQuestFailed(const QuestCallback& callback) { onQuestFailed_ = callback; }
+    void setOnObjectiveCompleted(const ObjectiveCallback& callback) { onObjectiveCompleted_ = callback; }
+    void setOnRewardGranted(const RewardCallback& callback) { onRewardGranted_ = callback; }
 
     /**
      * Statistics
@@ -291,6 +285,18 @@ public:
     int getTotalQuestsCompleted() const { return totalQuestsCompleted_; }
     int getTotalXPEarned() const { return totalXPEarned_; }
     int getTotalCurrencyEarned() const { return totalCurrencyEarned_; }
+
+    /**
+     * Save/Load helpers - get quest IDs for serialization
+     */
+    [[nodiscard]] const std::vector<std::string>& getActiveQuestIds() const { return activeQuestIds_; }
+    [[nodiscard]] const std::vector<std::string>& getCompletedQuestIds() const { return completedQuestIds_; }
+
+    /**
+     * Load quest state from save data
+     */
+    void loadQuestState(const std::vector<std::string>& activeIds,
+                        const std::vector<std::string>& completedIds);
 
 private:
     /**
@@ -333,7 +339,7 @@ private:
 
     // Player information
     int playerLevel_ = 1;
-    Clan playerClan_ = Clan::Shadow;
+    Clan playerClan_ = Clan::MistClan;
 
     // System configuration
     int maxActiveQuests_ = 5;
@@ -348,6 +354,7 @@ private:
     QuestCallback onQuestCompleted_;
     QuestCallback onQuestFailed_;
     ObjectiveCallback onObjectiveCompleted_;
+    RewardCallback onRewardGranted_;
 
     // System state
     bool initialized_ = false;
@@ -362,10 +369,10 @@ namespace QuestHelpers {
      */
     inline std::string clanToString(Clan clan) {
         switch (clan) {
-            case Clan::Shadow: return "Shadow";
-            case Clan::Warrior: return "Warrior";
-            case Clan::Hunter: return "Hunter";
-            case Clan::Mystic: return "Mystic";
+            case Clan::MistClan: return "MistClan";
+            case Clan::StormClan: return "StormClan";
+            case Clan::EmberClan: return "EmberClan";
+            case Clan::FrostClan: return "FrostClan";
             default: return "Unknown";
         }
     }
@@ -374,10 +381,10 @@ namespace QuestHelpers {
      * Convert string to clan
      */
     inline std::optional<Clan> stringToClan(const std::string& str) {
-        if (str == "Shadow") return Clan::Shadow;
-        if (str == "Warrior") return Clan::Warrior;
-        if (str == "Hunter") return Clan::Hunter;
-        if (str == "Mystic") return Clan::Mystic;
+        if (str == "MistClan") return Clan::MistClan;
+        if (str == "StormClan") return Clan::StormClan;
+        if (str == "EmberClan") return Clan::EmberClan;
+        if (str == "FrostClan") return Clan::FrostClan;
         return std::nullopt;
     }
 

@@ -6,6 +6,7 @@
 #include <cmath>
 
 using json = nlohmann::json;
+using Logger = CatEngine::Logger;
 
 namespace CatGame {
 

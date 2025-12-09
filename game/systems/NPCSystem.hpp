@@ -4,6 +4,7 @@
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/ecs/Entity.hpp"
 #include "../../engine/math/Vector.hpp"
+#include "story_mode.hpp"  // For Clan enum
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -17,16 +18,8 @@ namespace CatGame {
 class DialogSystem;
 class MerchantSystem;
 
-/**
- * Cat clan enumeration
- */
-enum class Clan {
-    None,
-    MistClan,     // Stealth and agility focused
-    StormClan,    // Speed and lightning focused
-    EmberClan,    // Fire magic focused
-    FrostClan     // Ice magic focused
-};
+// Clan enum is now defined in story_mode.hpp
+// Values: MistClan, StormClan, EmberClan, FrostClan
 
 /**
  * NPC type enumeration
@@ -216,6 +209,12 @@ public:
      */
     void setMerchantSystem(std::shared_ptr<MerchantSystem> merchantSystem) { merchantSystem_ = merchantSystem; }
 
+    /**
+     * Set quest check callback for dialog option requirements
+     */
+    using QuestCheckCallback = std::function<bool(const std::string& questId)>;
+    void setQuestCheckCallback(const QuestCheckCallback& callback) { questCheckCallback_ = callback; }
+
 private:
     /**
      * Update auto-advance dialog
@@ -262,6 +261,7 @@ private:
     InteractionCallback onInteractionStart_;
     DialogEndCallback onInteractionEnd_;
     InteractionCallback onDialogAdvance_;
+    QuestCheckCallback questCheckCallback_;
 };
 
 /**

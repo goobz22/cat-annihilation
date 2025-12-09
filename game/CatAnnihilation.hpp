@@ -30,6 +30,7 @@
 #include "audio/GameAudio.hpp"
 #include "world/GameWorld.hpp"
 #include "game_events.hpp"
+#include "../engine/core/save_system.hpp"
 #include <memory>
 
 namespace CatGame {
@@ -274,6 +275,16 @@ private:
      */
     void createPlayer();
 
+    /**
+     * Create and configure the death particle emitter
+     */
+    void createDeathParticleEmitter();
+
+    /**
+     * Spawn death effect particles at position
+     */
+    void spawnDeathParticles(const Engine::vec3& position);
+
     // ========================================================================
     // Update Logic
     // ========================================================================
@@ -338,9 +349,12 @@ private:
     CatEngine::AudioEngine* audioEngine_;
     GameEventBus eventBus_;
 
+    // CUDA context (shared between physics and particles)
+    std::shared_ptr<CatEngine::CUDA::CudaContext> cudaContext_;
+
     // Physics and particles
-    std::unique_ptr<CatEngine::PhysicsWorld> physicsWorld_;
-    std::unique_ptr<CatEngine::ParticleSystem> particleSystem_;
+    std::unique_ptr<CatEngine::Physics::PhysicsWorld> physicsWorld_;
+    std::shared_ptr<CatEngine::CUDA::ParticleSystem> particleSystem_;
 
     // ========================================================================
     // Game Systems (in update order)
@@ -364,23 +378,24 @@ private:
     std::unique_ptr<NPCSystem> npcSystem_;
     std::unique_ptr<DialogSystem> dialogSystem_;
     std::unique_ptr<MerchantSystem> merchantSystem_;
-    std::unique_ptr<MobileControlsSystem> mobileControls_;
+    std::unique_ptr<Game::MobileControlsSystem> mobileControls_;
 
     // ========================================================================
     // World and Audio
     // ========================================================================
 
     std::unique_ptr<GameWorld> gameWorld_;
-    std::unique_ptr<GameAudio> gameAudio_;
+    std::unique_ptr<Game::GameAudio> gameAudio_;
+    std::unique_ptr<Engine::SaveSystem> saveSystem_;
 
     // ========================================================================
     // UI Systems
     // ========================================================================
 
-    std::unique_ptr<HUD> hud_;
-    std::unique_ptr<MainMenu> mainMenu_;
-    std::unique_ptr<PauseMenu> pauseMenu_;
-    std::unique_ptr<GameUI> gameUI_;
+    std::unique_ptr<Game::HUD> hud_;
+    std::unique_ptr<Game::MainMenu> mainMenu_;
+    std::unique_ptr<Game::PauseMenu> pauseMenu_;
+    std::unique_ptr<Game::GameUI> gameUI_;
 
     // ========================================================================
     // Game State
@@ -394,11 +409,14 @@ private:
     bool isStoryMode_ = false;
 
     // Game statistics
-    float gameTime_ = 0.0f;
-    float totalPlayTime_ = 0.0f;
+    float gameTime_ = 0.0F;
+    float totalPlayTime_ = 0.0F;
     int enemiesKilled_ = 0;
     int waveNumber_ = 0;
     int currentSaveSlot_ = -1;
+
+    // Particle effects
+    uint32_t deathEmitterId_ = 0;
 
     // Initialization flag
     bool initialized_ = false;

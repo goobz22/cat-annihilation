@@ -105,6 +105,11 @@ public:
     void advanceDay();
 
     /**
+     * Set current day number (for save loading)
+     */
+    void setCurrentDay(int day);
+
+    /**
      * Set time scale multiplier (2.0 = 2x speed, 0.5 = half speed)
      */
     void setTimeScale(float scale);

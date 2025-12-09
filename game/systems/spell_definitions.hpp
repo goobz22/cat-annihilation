@@ -64,6 +64,9 @@ const ElementalSpell TIDAL_WAVE {
     .particleEffect = "tidal_wave",
     .soundEffect = "water_wave",
     .requiredLevel = 5,
+    // Optional fields (must be in struct declaration order)
+    .duration = 0.0f,
+    .healAmount = 0.0f,
     .knockbackForce = 15.0f
 };
 
@@ -94,8 +97,13 @@ const ElementalSpell TSUNAMI {
     .particleEffect = "tsunami",
     .soundEffect = "water_ultimate",
     .requiredLevel = 10,
-    .isUltimate = true,
-    .knockbackForce = 25.0f
+    .duration = 0.0f,
+    .healAmount = 0.0f,
+    .knockbackForce = 25.0f,
+    .speedMultiplier = 1.0f,
+    .defenseMultiplier = 1.0f,
+    .dotDamage = 0.0f,
+    .isUltimate = true
 };
 
 // ============================================================================
@@ -160,6 +168,10 @@ const ElementalSpell TORNADO {
     .soundEffect = "air_tornado",
     .requiredLevel = 7,
     .duration = 5.0f,
+    .healAmount = 0.0f,
+    .knockbackForce = 0.0f,
+    .speedMultiplier = 1.0f,
+    .defenseMultiplier = 1.0f,
     .dotDamage = 8.0f  // Additional DOT while in tornado
 };
 
@@ -175,9 +187,13 @@ const ElementalSpell STORM_CALL {
     .particleEffect = "storm_call",
     .soundEffect = "air_ultimate",
     .requiredLevel = 10,
-    .isUltimate = true,
     .duration = 8.0f,
-    .dotDamage = 15.0f  // Continuous lightning strikes
+    .healAmount = 0.0f,
+    .knockbackForce = 0.0f,
+    .speedMultiplier = 1.0f,
+    .defenseMultiplier = 1.0f,
+    .dotDamage = 15.0f,  // Continuous lightning strikes
+    .isUltimate = true
 };
 
 // ============================================================================
@@ -257,8 +273,13 @@ const ElementalSpell METEOR_STRIKE {
     .particleEffect = "meteor",
     .soundEffect = "earth_ultimate",
     .requiredLevel = 10,
-    .isUltimate = true,
-    .duration = 2.0f  // Stun duration
+    .duration = 2.0f,  // Stun duration
+    .healAmount = 0.0f,
+    .knockbackForce = 0.0f,
+    .speedMultiplier = 1.0f,
+    .defenseMultiplier = 1.0f,
+    .dotDamage = 0.0f,
+    .isUltimate = true
 };
 
 // ============================================================================
@@ -338,9 +359,13 @@ const ElementalSpell APOCALYPSE {
     .particleEffect = "apocalypse",
     .soundEffect = "fire_ultimate",
     .requiredLevel = 10,
-    .isUltimate = true,
     .duration = 10.0f,
-    .dotDamage = 20.0f  // Massive ongoing burn
+    .healAmount = 0.0f,
+    .knockbackForce = 0.0f,
+    .speedMultiplier = 1.0f,
+    .defenseMultiplier = 1.0f,
+    .dotDamage = 20.0f,  // Massive ongoing burn
+    .isUltimate = true
 };
 
 // ============================================================================

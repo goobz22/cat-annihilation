@@ -1,6 +1,7 @@
 #include "WaveSystem.hpp"
 #include "../components/EnemyComponent.hpp"
 #include "../components/HealthComponent.hpp"
+#include "../components/MovementComponent.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Math.hpp"
 #include <cmath>

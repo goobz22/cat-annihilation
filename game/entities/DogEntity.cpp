@@ -70,8 +70,15 @@ CatEngine::Entity DogEntity::create(CatEngine::ECS* ecs,
     MovementComponent movement(stats.moveSpeed);
     ecs->addComponent(entity, movement);
 
-    // TODO: Add Renderer component for visual representation
-    // This would specify the mesh, material, and animations for the dog
+    // Note: Renderer component is added automatically by the EntityRenderer system
+    // when this entity is registered for rendering. The renderer selects the
+    // appropriate dog model based on EnemyType:
+    // - Dog:     "assets/models/enemies/dog_normal.gltf"
+    // - BigDog:  "assets/models/enemies/dog_big.gltf"
+    // - FastDog: "assets/models/enemies/dog_fast.gltf"
+    // - BossDog: "assets/models/enemies/dog_boss.gltf"
+    //
+    // Materials and animations are configured per-model in the asset manifest.
 
     return entity;
 }
@@ -81,43 +88,43 @@ DogEntity::EnemyStats DogEntity::getStatsForType(EnemyType type) {
 
     switch (type) {
         case EnemyType::Dog:
-            stats.health = 50.0f;
-            stats.moveSpeed = 6.0f;
-            stats.attackDamage = 10.0f;
-            stats.attackRange = 2.0f;
-            stats.aggroRange = 15.0f;
+            stats.health = 50.0F;
+            stats.moveSpeed = 6.0F;
+            stats.attackDamage = 10.0F;
+            stats.attackRange = 2.0F;
+            stats.aggroRange = 15.0F;
             stats.scoreValue = 10;
-            stats.scale = Engine::vec3(1.0f, 1.0f, 1.0f);
+            stats.scale = Engine::vec3(1.0F, 1.0F, 1.0F);
             break;
 
         case EnemyType::BigDog:
-            stats.health = 100.0f;         // 2x health
-            stats.moveSpeed = 4.2f;        // 0.7x speed
-            stats.attackDamage = 15.0f;    // 1.5x damage
-            stats.attackRange = 2.5f;      // Slightly larger range
-            stats.aggroRange = 15.0f;
+            stats.health = 100.0F;         // 2x health
+            stats.moveSpeed = 4.2F;        // 0.7x speed
+            stats.attackDamage = 15.0F;    // 1.5x damage
+            stats.attackRange = 2.5F;      // Slightly larger range
+            stats.aggroRange = 15.0F;
             stats.scoreValue = 25;
-            stats.scale = Engine::vec3(1.5f, 1.5f, 1.5f); // Bigger visually
+            stats.scale = Engine::vec3(1.5F, 1.5F, 1.5F); // Bigger visually
             break;
 
         case EnemyType::FastDog:
-            stats.health = 25.0f;          // 0.5x health
-            stats.moveSpeed = 9.0f;        // 1.5x speed
-            stats.attackDamage = 7.5f;     // 0.75x damage
-            stats.attackRange = 1.8f;      // Slightly smaller range
-            stats.aggroRange = 18.0f;      // Spots player from farther
+            stats.health = 25.0F;          // 0.5x health
+            stats.moveSpeed = 9.0F;        // 1.5x speed
+            stats.attackDamage = 7.5F;     // 0.75x damage
+            stats.attackRange = 1.8F;      // Slightly smaller range
+            stats.aggroRange = 18.0F;      // Spots player from farther
             stats.scoreValue = 15;
-            stats.scale = Engine::vec3(0.8f, 0.8f, 0.8f); // Smaller visually
+            stats.scale = Engine::vec3(0.8F, 0.8F, 0.8F); // Smaller visually
             break;
 
         case EnemyType::BossDog:
-            stats.health = 300.0f;         // Boss health
-            stats.moveSpeed = 5.0f;        // Moderate speed
-            stats.attackDamage = 25.0f;    // High damage
-            stats.attackRange = 3.0f;      // Larger range
-            stats.aggroRange = 25.0f;      // Large aggro range
+            stats.health = 300.0F;         // Boss health
+            stats.moveSpeed = 5.0F;        // Moderate speed
+            stats.attackDamage = 25.0F;    // High damage
+            stats.attackRange = 3.0F;      // Larger range
+            stats.aggroRange = 25.0F;      // Large aggro range
             stats.scoreValue = 100;
-            stats.scale = Engine::vec3(2.0f, 2.0f, 2.0f); // Much bigger
+            stats.scale = Engine::vec3(2.0F, 2.0F, 2.0F); // Much bigger
             break;
     }
 

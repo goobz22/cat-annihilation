@@ -1,6 +1,7 @@
 #include "GameWorld.hpp"
 #include "../../engine/cuda/physics/Collider.hpp"
 #include "../../engine/math/Math.hpp"
+#include "../../engine/core/Logger.hpp"
 #include <algorithm>
 
 namespace CatGame {
@@ -56,8 +57,8 @@ GameWorld::GameWorld(GameWorld&& other) noexcept
 GameWorld& GameWorld::operator=(GameWorld&& other) noexcept {
     if (this != &other) {
         m_config = std::move(other.m_config);
-        m_cudaContext = other.m_cudaContext;
-        m_physicsWorld = other.m_physicsWorld;
+        // Note: m_cudaContext and m_physicsWorld are references and cannot be reassigned
+        // Both GameWorld instances should share the same CUDA context and physics world
         m_terrain = std::move(other.m_terrain);
         m_forest = std::move(other.m_forest);
         m_environment = std::move(other.m_environment);
@@ -78,11 +79,18 @@ void GameWorld::initialize() {
         return;
     }
 
+    Engine::Logger::info("GameWorld: Starting initialization...");
+
     // Generate terrain
+    Engine::Logger::info("GameWorld: Generating terrain (resolution={}, size={})...",
+                        m_config.terrainResolution, m_config.worldSize);
     m_terrain->generate();
+    Engine::Logger::info("GameWorld: Terrain generated, downloading from GPU...");
     m_terrain->downloadFromGpu();
+    Engine::Logger::info("GameWorld: Terrain download complete");
 
     // Create forest (needs terrain to be generated first)
+    Engine::Logger::info("GameWorld: Creating forest...");
     Forest::Params forestParams;
     forestParams.density = m_config.forestDensity;
     forestParams.minDistance = m_config.minTreeDistance;
@@ -90,14 +98,19 @@ void GameWorld::initialize() {
 
     m_forest = std::make_unique<Forest>(m_terrain.get(), forestParams);
     m_forest->generate();
+    Engine::Logger::info("GameWorld: Forest generated");
 
     // Setup physics colliders for terrain
+    Engine::Logger::info("GameWorld: Setting up physics colliders...");
     setupPhysicsColliders();
+    Engine::Logger::info("GameWorld: Physics colliders set up");
 
     // Adjust spawn point to terrain height
+    Engine::Logger::info("GameWorld: Adjusting spawn point...");
     adjustSpawnPoint();
 
     m_initialized = true;
+    Engine::Logger::info("GameWorld: Initialization complete");
 }
 
 void GameWorld::setupPhysicsColliders() {
@@ -106,28 +119,57 @@ void GameWorld::setupPhysicsColliders() {
     // you would create a heightfield collider from the terrain data.
 
     // For now, we'll add a simple ground plane as a placeholder
+    // Using a large flat box as ground approximation since there's no plane collider
     using namespace CatEngine::Physics;
 
+    Engine::Logger::info("GameWorld: Creating ground plane collider...");
+
     RigidBody groundPlane;
-    groundPlane.position = Engine::vec3(0.0f, 0.0f, 0.0f);
+    groundPlane.position = Engine::vec3(0.0f, -0.5f, 0.0f);
     groundPlane.mass = 0.0f;  // Static body (infinite mass)
-    groundPlane.collider = Collider::makePlane(Engine::vec3(0.0f, 1.0f, 0.0f), 0.0f);
-    groundPlane.isStatic = true;
+    groundPlane.collider = Collider::Box(Engine::vec3(1000.0f, 0.5f, 1000.0f));  // Large flat box
+    groundPlane.flags = RigidBodyFlags::Static;
 
+    Engine::Logger::info("GameWorld: Adding ground plane to physics world...");
     m_physicsWorld.addRigidBody(groundPlane);
+    Engine::Logger::info("GameWorld: Ground plane added successfully");
 
-    // TODO: Add heightfield collider when available in physics engine
-    // This would allow entities to follow the terrain contours properly
+    // Heightfield collider implementation:
+    // When the physics engine supports heightfield colliders, replace the ground plane with:
+    // 1. Extract height data from terrain: m_terrain->getHeightData()
+    // 2. Create heightfield collider with terrain dimensions and resolution
+    // 3. This allows entities to follow terrain contours accurately
+    //
+    // Example implementation (requires HeightfieldCollider in physics engine):
+    // if (m_terrain) {
+    //     const auto& heightData = m_terrain->getHeightData();
+    //     HeightfieldParams params;
+    //     params.rows = m_config.terrainResolution;
+    //     params.cols = m_config.terrainResolution;
+    //     params.rowScale = m_config.worldSize / params.rows;
+    //     params.colScale = m_config.worldSize / params.cols;
+    //     params.heightScale = m_config.terrainHeightScale;
+    //     params.heightData = heightData.data();
+    //
+    //     RigidBody terrainBody;
+    //     terrainBody.position = Engine::vec3(0.0f, 0.0f, 0.0f);
+    //     terrainBody.mass = 0.0f;  // Static
+    //     terrainBody.collider = Collider::Heightfield(params);
+    //     terrainBody.flags = RigidBodyFlags::Static;
+    //     m_physicsWorld.addRigidBody(terrainBody);
+    // }
 
     // Add tree colliders
     if (m_forest) {
         const auto& trees = m_forest->getInstances();
+        Engine::Logger::info("GameWorld: Adding {} tree colliders...", trees.size());
 
+        int treeCount = 0;
         for (const auto& tree : trees) {
             RigidBody treeBody;
             treeBody.position = tree.position;
             treeBody.mass = 0.0f;  // Static
-            treeBody.isStatic = true;
+            treeBody.flags = RigidBodyFlags::Static;
 
             // Create cylinder collider for tree trunk
             float radius = 0.5f * tree.scale;
@@ -151,11 +193,17 @@ void GameWorld::setupPhysicsColliders() {
             }
 
             // Using sphere collider as cylinder approximation
-            // (assuming Collider::makeSphere exists)
-            treeBody.collider = Collider::makeSphere(radius);
+            treeBody.collider = Collider::Sphere(radius);
 
             m_physicsWorld.addRigidBody(treeBody);
+            treeCount++;
+
+            // Log progress every 100 trees
+            if (treeCount % 100 == 0) {
+                Engine::Logger::info("GameWorld: Added {} tree colliders...", treeCount);
+            }
         }
+        Engine::Logger::info("GameWorld: All {} tree colliders added", treeCount);
     }
 }
 

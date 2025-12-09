@@ -23,12 +23,12 @@ void EnemyAISystem::update(float dt) {
         // Skip dead enemies (cleanup is handled by HealthSystem)
         auto* health = ecs_->getComponent<HealthComponent>(entity);
         if (health && !health->isAlive()) {
-            if (enemy.state != AIState::Dead) {
-                transitionToState(enemy, AIState::Dead);
+            if (enemy->state != AIState::Dead) {
+                transitionToState(*enemy, AIState::Dead);
             }
         }
 
-        updateEnemyAI(entity, enemy, dt);
+        updateEnemyAI(entity, *enemy, dt);
     }
 }
 

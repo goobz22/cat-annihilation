@@ -236,7 +236,7 @@ void DayNightCycleSystem::updateSun() {
     // 0.75 (6pm) = west horizon
     // 1.0 (midnight) = below horizon (south)
 
-    float angle = state_.currentTime * 2.0f * Engine::PI;
+    float angle = state_.currentTime * 2.0f * Engine::Math::PI;
 
     // Sun position (rotates around X axis, moves in YZ plane)
     float sunHeight = std::sin(angle);
@@ -247,7 +247,7 @@ void DayNightCycleSystem::updateSun() {
         -sunHeight,       // Up-Down (negative because pointing down when high)
         0.0f              // North-South
     );
-    state_.sunDirection = Engine::normalize(state_.sunDirection);
+    state_.sunDirection = state_.sunDirection.normalized();
 
     // Sun color changes based on angle
     if (state_.currentTime < 0.2f) {
@@ -430,6 +430,12 @@ float DayNightCycleSystem::smoothCurve(float t) const {
     // Smoothstep function for smoother transitions
     t = std::clamp(t, 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
+}
+
+void DayNightCycleSystem::setCurrentDay(int day) {
+    state_.currentDay = day;
+    // Update moon phase based on day (28-day lunar cycle)
+    state_.moonPhase = static_cast<float>(day % 28) / 28.0f;
 }
 
 } // namespace CatGame

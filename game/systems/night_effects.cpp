@@ -7,6 +7,9 @@
 
 namespace CatGame {
 
+// Static Perlin noise generator for flickering
+static Engine::Noise::Perlin s_perlin;
+
 // Component for tracking position
 struct Transform {
     Engine::vec3 position;
@@ -33,20 +36,17 @@ NightEffectsSystem::NightEffectsSystem(DayNightCycleSystem* dayCycle, int priori
 void NightEffectsSystem::init(CatEngine::ECS* ecs) {
     CatEngine::System::init(ecs);
 
-    // Register components
-    ecs_->registerComponent<NightLightSource>();
-    ecs_->registerComponent<NocturnalEnemy>();
-    ecs_->registerComponent<PlayerVisibility>();
+    // Components are auto-registered when first used via addComponent/emplaceComponent
 
     activeLightSources_.clear();
     nocturnalEnemies_.clear();
     glowSticks_.clear();
 
-    lastFrameWasNight_ = dayCycle_->isNight();
+    lastFrameWasNight_ = dayCycle_ != nullptr && dayCycle_->isNight();
 }
 
 void NightEffectsSystem::update(float dt) {
-    if (!dayCycle_) {
+    if (dayCycle_ == nullptr) {
         return;
     }
 
@@ -139,8 +139,10 @@ void NightEffectsSystem::givePlayerFlashlight(CatEngine::Entity player) {
 
 void NightEffectsSystem::togglePlayerLight(CatEngine::Entity player) {
     if (ecs_->hasComponent<NightLightSource>(player)) {
-        auto& light = ecs_->getComponent<NightLightSource>(player);
-        light.isActive = !light.isActive;
+        auto* light = ecs_->getComponent<NightLightSource>(player);
+        if (light != nullptr) {
+            light->isActive = !light->isActive;
+        }
     }
 }
 
@@ -158,9 +160,9 @@ CatEngine::Entity NightEffectsSystem::throwGlowStick(const Engine::vec3& positio
     Velocity vel;
     vel.linear = velocity;
     vel.angular = Engine::vec3(
-        (rand() % 1000 / 1000.0f) * 10.0f - 5.0f,
-        (rand() % 1000 / 1000.0f) * 10.0f - 5.0f,
-        (rand() % 1000 / 1000.0f) * 10.0f - 5.0f
+        static_cast<float>(rand() % 1000) / 1000.0f * 10.0f - 5.0f,
+        static_cast<float>(rand() % 1000) / 1000.0f * 10.0f - 5.0f,
+        static_cast<float>(rand() % 1000) / 1000.0f * 10.0f - 5.0f
     );
     ecs_->addComponent(entity, vel);
 
@@ -203,8 +205,11 @@ float NightEffectsSystem::getEnemyVisionRange(CatEngine::Entity enemy) const {
         return dayCycle_->isNight() ? 15.0f : 25.0f;
     }
 
-    const auto& nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
-    return dayCycle_->isNight() ? nocturnal.nightVisionRange : nocturnal.dayVisionRange;
+    const auto* nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
+    if (nocturnal == nullptr) {
+        return 15.0f;
+    }
+    return dayCycle_->isNight() ? nocturnal->nightVisionRange : nocturnal->dayVisionRange;
 }
 
 float NightEffectsSystem::getEnemyAggressionMultiplier(CatEngine::Entity enemy) const {
@@ -216,8 +221,11 @@ float NightEffectsSystem::getEnemyAggressionMultiplier(CatEngine::Entity enemy) 
         return 0.5f;  // Nocturnal enemies are less aggressive during day
     }
 
-    const auto& nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
-    return 1.0f + nocturnal.aggressionBonus;
+    const auto* nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
+    if (nocturnal == nullptr) {
+        return 1.0f;
+    }
+    return 1.0f + nocturnal->aggressionBonus;
 }
 
 bool NightEffectsSystem::shouldDespawnEnemy(CatEngine::Entity enemy) const {
@@ -225,8 +233,11 @@ bool NightEffectsSystem::shouldDespawnEnemy(CatEngine::Entity enemy) const {
         return false;
     }
 
-    const auto& nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
-    return nocturnal.despawnAtDawn && !dayCycle_->isNight();
+    const auto* nocturnal = ecs_->getComponent<NocturnalEnemy>(enemy);
+    if (nocturnal == nullptr) {
+        return false;
+    }
+    return nocturnal->despawnAtDawn && !dayCycle_->isNight();
 }
 
 // ============================================================================
@@ -248,8 +259,11 @@ float NightEffectsSystem::getPlayerVisibility(CatEngine::Entity player) const {
         return 1.0f;
     }
 
-    const auto& visibility = ecs_->getComponent<PlayerVisibility>(player);
-    return visibility.currentVisibility;
+    const auto* visibility = ecs_->getComponent<PlayerVisibility>(player);
+    if (visibility == nullptr) {
+        return 1.0f;
+    }
+    return visibility->currentVisibility;
 }
 
 float NightEffectsSystem::getPlayerDetectionRange(CatEngine::Entity player) const {
@@ -257,13 +271,17 @@ float NightEffectsSystem::getPlayerDetectionRange(CatEngine::Entity player) cons
         return dayCycle_->isNight() ? 12.0f : 25.0f;
     }
 
-    const auto& visibility = ecs_->getComponent<PlayerVisibility>(player);
+    const auto* visibility = ecs_->getComponent<PlayerVisibility>(player);
+    if (visibility == nullptr) {
+        return dayCycle_->isNight() ? 12.0f : 25.0f;
+    }
+
     float baseRange = dayCycle_->isNight() ?
-        visibility.detectionRangeNight :
-        visibility.detectionRangeDay;
+        visibility->detectionRangeNight :
+        visibility->detectionRangeDay;
 
     // Visibility affects detection range
-    return baseRange * visibility.currentVisibility;
+    return baseRange * visibility->currentVisibility;
 }
 
 bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* distanceToSafeZone) const {
@@ -271,7 +289,11 @@ bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* dis
         return false;
     }
 
-    const auto& playerTransform = ecs_->getComponent<Transform>(player);
+    const auto* playerTransform = ecs_->getComponent<Transform>(player);
+    if (playerTransform == nullptr) {
+        return false;
+    }
+
     float nearestDistance = std::numeric_limits<float>::max();
     bool inSafeZone = false;
 
@@ -281,8 +303,8 @@ bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* dis
             continue;
         }
 
-        const auto& light = ecs_->getComponent<NightLightSource>(lightEntity);
-        if (light.type != LightSourceType::Campfire || !light.isSafeZone) {
+        const auto* light = ecs_->getComponent<NightLightSource>(lightEntity);
+        if (light == nullptr || light->type != LightSourceType::Campfire || !light->isSafeZone) {
             continue;
         }
 
@@ -290,10 +312,15 @@ bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* dis
             continue;
         }
 
-        const auto& lightTransform = ecs_->getComponent<Transform>(lightEntity);
-        float distance = Engine::length(playerTransform.position - lightTransform.position);
+        const auto* lightTransform = ecs_->getComponent<Transform>(lightEntity);
+        if (lightTransform == nullptr) {
+            continue;
+        }
 
-        if (distance < light.radius) {
+        Engine::vec3 diff = playerTransform->position - lightTransform->position;
+        float distance = diff.length();
+
+        if (distance < light->radius) {
             inSafeZone = true;
         }
 
@@ -302,7 +329,7 @@ bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* dis
         }
     }
 
-    if (distanceToSafeZone) {
+    if (distanceToSafeZone != nullptr) {
         *distanceToSafeZone = nearestDistance;
     }
 
@@ -314,7 +341,7 @@ bool NightEffectsSystem::isPlayerInSafeZone(CatEngine::Entity player, float* dis
 // ============================================================================
 
 CatEngine::Entity NightEffectsSystem::getNearestLightSource(const Engine::vec3& position, float maxDistance) const {
-    CatEngine::Entity nearest = CatEngine::Entity::null();
+    CatEngine::Entity nearest = CatEngine::NULL_ENTITY;
     float nearestDistance = maxDistance;
 
     for (const auto& lightEntity : activeLightSources_) {
@@ -322,8 +349,13 @@ CatEngine::Entity NightEffectsSystem::getNearestLightSource(const Engine::vec3& 
             continue;
         }
 
-        const auto& transform = ecs_->getComponent<Transform>(lightEntity);
-        float distance = Engine::length(position - transform.position);
+        const auto* transform = ecs_->getComponent<Transform>(lightEntity);
+        if (transform == nullptr) {
+            continue;
+        }
+
+        Engine::vec3 diff = position - transform->position;
+        float distance = diff.length();
 
         if (distance < nearestDistance) {
             nearestDistance = distance;
@@ -353,18 +385,23 @@ float NightEffectsSystem::getIlluminationAt(const Engine::vec3& position) const 
             continue;
         }
 
-        const auto& light = ecs_->getComponent<NightLightSource>(lightEntity);
-        if (!light.isActive) {
+        const auto* light = ecs_->getComponent<NightLightSource>(lightEntity);
+        if (light == nullptr || !light->isActive) {
             continue;
         }
 
-        const auto& transform = ecs_->getComponent<Transform>(lightEntity);
-        float distance = Engine::length(position - transform.position);
+        const auto* transform = ecs_->getComponent<Transform>(lightEntity);
+        if (transform == nullptr) {
+            continue;
+        }
 
-        if (distance < light.radius) {
-            float attenuation = 1.0f - (distance / light.radius);
+        Engine::vec3 diff = position - transform->position;
+        float distance = diff.length();
+
+        if (distance < light->radius) {
+            float attenuation = 1.0f - (distance / light->radius);
             attenuation = attenuation * attenuation;  // Square falloff
-            totalIllumination += light.intensity * attenuation;
+            totalIllumination += light->intensity * attenuation;
         }
     }
 
@@ -375,21 +412,25 @@ float NightEffectsSystem::getIlluminationAt(const Engine::vec3& position) const 
 // Update Methods
 // ============================================================================
 
-void NightEffectsSystem::updateLightFlickering(float dt) {
+void NightEffectsSystem::updateLightFlickering(float /*dt*/) {
     for (const auto& lightEntity : activeLightSources_) {
         if (!ecs_->hasComponent<NightLightSource>(lightEntity)) {
             continue;
         }
 
-        auto& light = ecs_->getComponent<NightLightSource>(lightEntity);
+        auto* light = ecs_->getComponent<NightLightSource>(lightEntity);
+        if (light == nullptr) {
+            continue;
+        }
 
-        if (light.flickerAmount > 0.0f && light.isActive) {
-            // Use noise for flickering
-            float noise = Engine::Noise::perlin1D(timeAccumulator_ * light.flickerSpeed);
-            float flicker = 1.0f + (noise * light.flickerAmount);
+        if (light->flickerAmount > 0.0f && light->isActive) {
+            // Use Perlin noise for flickering
+            float noise = s_perlin.noise(timeAccumulator_ * light->flickerSpeed);
+            float flicker = 1.0f + (noise * light->flickerAmount);
 
             // Apply flicker to intensity (stored in a per-frame variable, not modifying base)
             // This would need a separate "current intensity" field in production
+            (void)flicker; // Suppress unused warning for now
         }
     }
 }
@@ -398,37 +439,34 @@ void NightEffectsSystem::updatePlayerVisibility(float dt) {
     // Find player entities with visibility component
     auto query = ecs_->query<PlayerVisibility, Transform>();
 
-    for (auto entity : query) {
-        auto& visibility = ecs_->getComponent<PlayerVisibility>(entity);
-        const auto& transform = ecs_->getComponent<Transform>(entity);
-
+    for (auto [entity, visibility, transform] : query.view()) {
         // Base visibility affected by time of day
-        visibility.baseVisibility = dayCycle_->isNight() ? 0.3f : 1.0f;
+        visibility->baseVisibility = dayCycle_->isNight() ? 0.3f : 1.0f;
 
         // Light source modifier
-        visibility.lightSourceModifier = calculateLightModifier(transform.position);
+        visibility->lightSourceModifier = calculateLightModifier(transform->position);
 
         // Movement modifier
-        visibility.movementModifier = calculateMovementModifier(entity, dt);
+        visibility->movementModifier = calculateMovementModifier(entity, dt);
 
         // Calculate total visibility
-        visibility.currentVisibility = visibility.baseVisibility +
-                                      visibility.lightSourceModifier +
-                                      visibility.movementModifier;
+        visibility->currentVisibility = visibility->baseVisibility +
+                                      visibility->lightSourceModifier +
+                                      visibility->movementModifier;
 
         // Apply stealth bonus from day/night cycle
-        visibility.currentVisibility *= (1.0f - dayCycle_->getStealthBonus());
+        visibility->currentVisibility *= (1.0f - dayCycle_->getStealthBonus());
 
         // Clamp to [0, 1]
-        visibility.currentVisibility = std::clamp(visibility.currentVisibility, 0.0f, 1.0f);
+        visibility->currentVisibility = std::clamp(visibility->currentVisibility, 0.0f, 1.0f);
     }
 }
 
-void NightEffectsSystem::updateNocturnalEnemies(float dt) {
+void NightEffectsSystem::updateNocturnalEnemies(float /*dt*/) {
     // Nocturnal enemies get more aggressive at night
     // This would integrate with the AI system in production
     for (const auto& enemy : nocturnalEnemies_) {
-        if (!ecs_->isEntityAlive(enemy)) {
+        if (!ecs_->isAlive(enemy)) {
             continue;
         }
 
@@ -437,6 +475,7 @@ void NightEffectsSystem::updateNocturnalEnemies(float dt) {
 
         // This would be passed to the AI system
         // ai->setAggressionMultiplier(enemy, aggression);
+        (void)aggression; // Suppress unused warning for now
     }
 }
 
@@ -444,7 +483,7 @@ void NightEffectsSystem::despawnNocturnalEnemies() {
     std::vector<CatEngine::Entity> toRemove;
 
     for (const auto& enemy : nocturnalEnemies_) {
-        if (!ecs_->isEntityAlive(enemy)) {
+        if (!ecs_->isAlive(enemy)) {
             continue;
         }
 
@@ -468,31 +507,35 @@ void NightEffectsSystem::updateGlowSticks(float dt) {
     std::vector<CatEngine::Entity> toRemove;
 
     for (const auto& glowStick : glowSticks_) {
-        if (!ecs_->isEntityAlive(glowStick) ||
+        if (!ecs_->isAlive(glowStick) ||
             !ecs_->hasComponent<Transform>(glowStick) ||
             !ecs_->hasComponent<Velocity>(glowStick)) {
             toRemove.push_back(glowStick);
             continue;
         }
 
-        auto& transform = ecs_->getComponent<Transform>(glowStick);
-        auto& velocity = ecs_->getComponent<Velocity>(glowStick);
+        auto* transform = ecs_->getComponent<Transform>(glowStick);
+        auto* velocity = ecs_->getComponent<Velocity>(glowStick);
+        if (transform == nullptr || velocity == nullptr) {
+            toRemove.push_back(glowStick);
+            continue;
+        }
 
         // Apply gravity
-        velocity.linear.y += -9.81f * dt;
+        velocity->linear.y += -9.81f * dt;
 
         // Update position
-        transform.position += velocity.linear * dt;
+        transform->position = transform->position + velocity->linear * dt;
 
         // Update rotation
-        transform.rotation += velocity.angular * dt;
+        transform->rotation = transform->rotation + velocity->angular * dt;
 
         // Ground collision (simplified)
-        if (transform.position.y <= 0.0f) {
-            transform.position.y = 0.0f;
-            velocity.linear.y = 0.0f;
-            velocity.linear *= 0.3f;  // Friction
-            velocity.angular *= 0.5f;
+        if (transform->position.y <= 0.0f) {
+            transform->position.y = 0.0f;
+            velocity->linear.y = 0.0f;
+            velocity->linear = velocity->linear * 0.3f;  // Friction
+            velocity->angular = velocity->angular * 0.5f;
         }
     }
 
@@ -520,24 +563,29 @@ float NightEffectsSystem::calculateLightModifier(const Engine::vec3& position) c
             continue;
         }
 
-        const auto& light = ecs_->getComponent<NightLightSource>(lightEntity);
-        if (!light.isActive) {
+        const auto* light = ecs_->getComponent<NightLightSource>(lightEntity);
+        if (light == nullptr || !light->isActive) {
             continue;
         }
 
-        const auto& transform = ecs_->getComponent<Transform>(lightEntity);
-        float distance = Engine::length(position - transform.position);
+        const auto* transform = ecs_->getComponent<Transform>(lightEntity);
+        if (transform == nullptr) {
+            continue;
+        }
 
-        if (distance < light.radius) {
-            float attenuation = 1.0f - (distance / light.radius);
-            modifier += light.intensity * attenuation * 0.3f;  // Scale to reasonable range
+        Engine::vec3 diff = position - transform->position;
+        float distance = diff.length();
+
+        if (distance < light->radius) {
+            float attenuation = 1.0f - (distance / light->radius);
+            modifier += light->intensity * attenuation * 0.3f;  // Scale to reasonable range
         }
     }
 
     return std::min(modifier, 0.7f);  // Cap at 0.7 additional visibility
 }
 
-float NightEffectsSystem::calculateMovementModifier(CatEngine::Entity entity, float dt) const {
+float NightEffectsSystem::calculateMovementModifier(CatEngine::Entity /*entity*/, float /*dt*/) const {
     // In production, this would track velocity/movement
     // For now, return a placeholder
     return 0.0f;

@@ -1,6 +1,7 @@
 #include "../../engine/cuda/CudaError.hpp"
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdio>
 
 namespace CatGame {
 namespace TerrainKernels {
@@ -314,6 +315,8 @@ __global__ void generateSplatmapKernel(
 void initializePermutationTable(uint32_t seed) {
     using namespace TerrainKernels;
 
+    printf("[CUDA] initializePermutationTable: Starting with seed=%u\n", seed);
+
     // Standard permutation table
     static const int permutation[256] = {
         151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,
@@ -338,6 +341,7 @@ void initializePermutationTable(uint32_t seed) {
 
     // Optionally shuffle with seed
     if (seed != 0) {
+        printf("[CUDA] initializePermutationTable: Shuffling with seed\n");
         uint32_t state = seed;
         for (int i = 255; i > 0; i--) {
             state = state * 1664525u + 1013904223u;
@@ -349,7 +353,9 @@ void initializePermutationTable(uint32_t seed) {
         }
     }
 
+    printf("[CUDA] initializePermutationTable: Copying to device symbol (size=%zu bytes)\n", sizeof(perm));
     CUDA_CHECK(cudaMemcpyToSymbol(d_perm, perm, sizeof(perm)));
+    printf("[CUDA] initializePermutationTable: Complete\n");
 }
 
 // Launch heightmap generation
@@ -367,11 +373,29 @@ void launchGenerateHeightmap(
 ) {
     using namespace TerrainKernels;
 
+    printf("[CUDA] launchGenerateHeightmap: Starting\n");
+    printf("[CUDA]   d_heightmap=%p, resolution=%d, size=%.2f\n",
+           static_cast<void*>(d_heightmap), resolution, size);
+    printf("[CUDA]   heightScale=%.2f, frequency=%.4f, amplitude=%.2f\n",
+           heightScale, frequency, amplitude);
+    printf("[CUDA]   octaves=%d, persistence=%.2f, lacunarity=%.2f\n",
+           octaves, persistence, lacunarity);
+
+    if (d_heightmap == nullptr) {
+        printf("[CUDA] ERROR: d_heightmap is null!\n");
+        return;
+    }
+
     dim3 blockSize(16, 16);
     dim3 gridSize(
         (resolution + blockSize.x - 1) / blockSize.x,
         (resolution + blockSize.y - 1) / blockSize.y
     );
+
+    printf("[CUDA]   blockSize=(%d,%d), gridSize=(%d,%d)\n",
+           blockSize.x, blockSize.y, gridSize.x, gridSize.y);
+    printf("[CUDA]   Launching kernel...\n");
+    fflush(stdout);
 
     generateHeightmapKernel<<<gridSize, blockSize, 0, stream>>>(
         d_heightmap,
@@ -385,7 +409,18 @@ void launchGenerateHeightmap(
         lacunarity
     );
 
-    CUDA_CHECK(cudaGetLastError());
+    printf("[CUDA]   Kernel launched, checking for errors...\n");
+    fflush(stdout);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("[CUDA] ERROR after kernel launch: %s (%s)\n",
+               cudaGetErrorName(err), cudaGetErrorString(err));
+    }
+    CUDA_CHECK(err);
+
+    printf("[CUDA] launchGenerateHeightmap: Complete\n");
+    fflush(stdout);
 }
 
 // Launch normal generation
@@ -398,11 +433,27 @@ void launchGenerateNormals(
 ) {
     using namespace TerrainKernels;
 
+    printf("[CUDA] launchGenerateNormals: Starting\n");
+    printf("[CUDA]   d_normals=%p, d_heightmap=%p, resolution=%d, size=%.2f\n",
+           static_cast<void*>(d_normals), static_cast<const void*>(d_heightmap),
+           resolution, size);
+
+    if (d_normals == nullptr || d_heightmap == nullptr) {
+        printf("[CUDA] ERROR: Null pointer! d_normals=%p, d_heightmap=%p\n",
+               static_cast<void*>(d_normals), static_cast<const void*>(d_heightmap));
+        return;
+    }
+
     dim3 blockSize(16, 16);
     dim3 gridSize(
         (resolution + blockSize.x - 1) / blockSize.x,
         (resolution + blockSize.y - 1) / blockSize.y
     );
+
+    printf("[CUDA]   blockSize=(%d,%d), gridSize=(%d,%d)\n",
+           blockSize.x, blockSize.y, gridSize.x, gridSize.y);
+    printf("[CUDA]   Launching kernel...\n");
+    fflush(stdout);
 
     generateNormalsKernel<<<gridSize, blockSize, 0, stream>>>(
         d_normals,
@@ -411,7 +462,18 @@ void launchGenerateNormals(
         size
     );
 
-    CUDA_CHECK(cudaGetLastError());
+    printf("[CUDA]   Kernel launched, checking for errors...\n");
+    fflush(stdout);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("[CUDA] ERROR after kernel launch: %s (%s)\n",
+               cudaGetErrorName(err), cudaGetErrorString(err));
+    }
+    CUDA_CHECK(err);
+
+    printf("[CUDA] launchGenerateNormals: Complete\n");
+    fflush(stdout);
 }
 
 // Launch splatmap generation
@@ -427,11 +489,28 @@ void launchGenerateSplatmap(
 ) {
     using namespace TerrainKernels;
 
+    printf("[CUDA] launchGenerateSplatmap: Starting\n");
+    printf("[CUDA]   d_splatmap=%p, d_normals=%p, d_heightmap=%p\n",
+           static_cast<void*>(d_splatmap), static_cast<const void*>(d_normals),
+           static_cast<const void*>(d_heightmap));
+    printf("[CUDA]   resolution=%d, grassThresh=%.2f, dirtThresh=%.2f, rockHeight=%.2f\n",
+           resolution, grassSlopeThreshold, dirtSlopeThreshold, rockHeightThreshold);
+
+    if (d_splatmap == nullptr || d_normals == nullptr || d_heightmap == nullptr) {
+        printf("[CUDA] ERROR: Null pointer detected!\n");
+        return;
+    }
+
     dim3 blockSize(16, 16);
     dim3 gridSize(
         (resolution + blockSize.x - 1) / blockSize.x,
         (resolution + blockSize.y - 1) / blockSize.y
     );
+
+    printf("[CUDA]   blockSize=(%d,%d), gridSize=(%d,%d)\n",
+           blockSize.x, blockSize.y, gridSize.x, gridSize.y);
+    printf("[CUDA]   Launching kernel...\n");
+    fflush(stdout);
 
     generateSplatmapKernel<<<gridSize, blockSize, 0, stream>>>(
         d_splatmap,
@@ -443,7 +522,18 @@ void launchGenerateSplatmap(
         rockHeightThreshold
     );
 
-    CUDA_CHECK(cudaGetLastError());
+    printf("[CUDA]   Kernel launched, checking for errors...\n");
+    fflush(stdout);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("[CUDA] ERROR after kernel launch: %s (%s)\n",
+               cudaGetErrorName(err), cudaGetErrorString(err));
+    }
+    CUDA_CHECK(err);
+
+    printf("[CUDA] launchGenerateSplatmap: Complete\n");
+    fflush(stdout);
 }
 
 } // namespace CatGame

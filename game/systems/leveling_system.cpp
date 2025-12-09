@@ -473,4 +473,15 @@ std::string LevelingSystem::elementTypeToString(ElementType element) const {
     }
 }
 
+void LevelingSystem::setLevel(int level) {
+    stats_.level = level;
+    stats_.xpToNextLevel = static_cast<int>(getCatXPToNextLevel(level));
+    recalculateStats();
+    checkAbilityUnlocks();
+}
+
+void LevelingSystem::setXP(int xp) {
+    stats_.xp = xp;
+}
+
 } // namespace CatGame

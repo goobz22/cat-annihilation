@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
 
@@ -21,7 +22,7 @@ namespace CatGame {
  * Formula: XP = 100 * (1.5 ^ (level - 1))
  * Provides exponential growth that slows endgame grind
  */
-const std::map<int, int> CAT_XP_TABLE = {
+const std::map<int, int64_t> CAT_XP_TABLE = {
     {1, 100}, {2, 150}, {3, 225}, {4, 340}, {5, 500},
     {6, 750}, {7, 1125}, {8, 1700}, {9, 2500}, {10, 3750},
     {11, 5625}, {12, 8440}, {13, 12660}, {14, 18990}, {15, 28485},
@@ -30,8 +31,8 @@ const std::map<int, int> CAT_XP_TABLE = {
     {26, 2463926}, {27, 3695889}, {28, 5543834}, {29, 8315751}, {30, 12473627},
     {31, 18710441}, {32, 28065662}, {33, 42098493}, {34, 63147740}, {35, 94721610},
     {36, 142082415}, {37, 213123623}, {38, 319685435}, {39, 479528153}, {40, 719292230},
-    {41, 1078938345}, {42, 1618407518}, {43, 2427611277}, {44, 3641416916}, {45, 5462125374},
-    {46, 8193188061}, {47, 12289782092}, {48, 18434673138}, {49, 27652009707}, {50, 41478014561}
+    {41, 1078938345LL}, {42, 1618407518LL}, {43, 2427611277LL}, {44, 3641416916LL}, {45, 5462125374LL},
+    {46, 8193188061LL}, {47, 12289782092LL}, {48, 18434673138LL}, {49, 27652009707LL}, {50, 41478014561LL}
 };
 
 /**
@@ -159,7 +160,7 @@ struct DiscoveryXPRewards {
  * @param currentLevel Current cat level (1-50)
  * @return XP required to level up, or -1 if max level
  */
-inline int getCatXPToNextLevel(int currentLevel) {
+inline int64_t getCatXPToNextLevel(int currentLevel) {
     auto it = CAT_XP_TABLE.find(currentLevel);
     if (it != CAT_XP_TABLE.end()) {
         return it->second;

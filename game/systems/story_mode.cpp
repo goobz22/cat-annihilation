@@ -437,13 +437,13 @@ float StoryModeSystem::getClanStealthBonus() const {
     return stealth;
 }
 
-ElementType StoryModeSystem::getClanElement() const {
+ClanElementType StoryModeSystem::getClanElement() const {
     switch (state_.playerClan) {
-        case Clan::MistClan: return ElementType::Shadow;
-        case Clan::StormClan: return ElementType::Lightning;
-        case Clan::EmberClan: return ElementType::Fire;
-        case Clan::FrostClan: return ElementType::Ice;
-        default: return ElementType::Shadow;
+        case Clan::MistClan: return ClanElementType::Shadow;
+        case Clan::StormClan: return ClanElementType::Lightning;
+        case Clan::EmberClan: return ClanElementType::Fire;
+        case Clan::FrostClan: return ClanElementType::Ice;
+        default: return ClanElementType::Shadow;
     }
 }
 
@@ -782,22 +782,22 @@ void StoryModeSystem::calculateClanBonuses(
 
 namespace StoryModeHelpers {
 
-const char* getElementName(ElementType element) {
+const char* getElementName(ClanElementType element) {
     switch (element) {
-        case ElementType::Shadow: return "Shadow";
-        case ElementType::Lightning: return "Lightning";
-        case ElementType::Fire: return "Fire";
-        case ElementType::Ice: return "Ice";
+        case ClanElementType::Shadow: return "Shadow";
+        case ClanElementType::Lightning: return "Lightning";
+        case ClanElementType::Fire: return "Fire";
+        case ClanElementType::Ice: return "Ice";
         default: return "Unknown";
     }
 }
 
-Engine::vec3 getElementColor(ElementType element) {
+Engine::vec3 getElementColor(ClanElementType element) {
     switch (element) {
-        case ElementType::Shadow: return Engine::vec3(0.2f, 0.1f, 0.4f);    // Dark purple
-        case ElementType::Lightning: return Engine::vec3(0.9f, 0.9f, 0.2f); // Bright yellow
-        case ElementType::Fire: return Engine::vec3(1.0f, 0.3f, 0.1f);      // Orange-red
-        case ElementType::Ice: return Engine::vec3(0.5f, 0.8f, 1.0f);       // Light blue
+        case ClanElementType::Shadow: return Engine::vec3(0.2f, 0.1f, 0.4f);    // Dark purple
+        case ClanElementType::Lightning: return Engine::vec3(0.9f, 0.9f, 0.2f); // Bright yellow
+        case ClanElementType::Fire: return Engine::vec3(1.0f, 0.3f, 0.1f);      // Orange-red
+        case ClanElementType::Ice: return Engine::vec3(0.5f, 0.8f, 1.0f);       // Light blue
         default: return Engine::vec3(1.0f, 1.0f, 1.0f);
     }
 }
@@ -865,5 +865,57 @@ RankRequirements getRankRequirements(ClanRank rank) {
 }
 
 } // namespace StoryModeHelpers
+
+// ============================================================================
+// Save/Load Helper Methods
+// ============================================================================
+
+bool StoryModeSystem::isStoryComplete() const {
+    // Story is complete when all chapters are finished
+    if (chapters_.empty()) {
+        return false;
+    }
+
+    for (const auto& chapter : chapters_) {
+        if (!chapter.completed) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void StoryModeSystem::setChapter(int chapterIndex) {
+    state_.currentChapter = chapterIndex;
+
+    // Ensure all chapters up to this one are marked as completed
+    for (auto& chapter : chapters_) {
+        if (chapter.chapterNumber < chapterIndex) {
+            chapter.completed = true;
+            chapter.unlocked = true;
+        } else if (chapter.chapterNumber == chapterIndex) {
+            chapter.unlocked = true;
+        }
+    }
+}
+
+void StoryModeSystem::setMission(int missionIndex) {
+    state_.currentMission = missionIndex;
+}
+
+void StoryModeSystem::advanceStory() {
+    // Advance to next mission in current chapter
+    state_.currentMission++;
+
+    // Check if we've completed all missions in the chapter
+    // For now, assume 3 missions per chapter
+    const int missionsPerChapter = 3;
+    if (state_.currentMission > missionsPerChapter) {
+        // Complete current chapter and move to next
+        completeStoryChapter(state_.currentChapter);
+        state_.currentChapter++;
+        state_.currentMission = 1;
+    }
+}
 
 } // namespace CatGame

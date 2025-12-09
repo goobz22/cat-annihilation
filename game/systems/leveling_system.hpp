@@ -5,22 +5,15 @@
 #include <vector>
 #include <functional>
 #include "xp_tables.hpp"
+#include "elemental_magic.hpp"  // For ElementType enum
 
 namespace CatGame {
 
 // Forward declarations
 class ComboSystem;
 
-/**
- * Element types for magical attacks
- */
-enum class ElementType {
-    None = 0,
-    Fire,      // Damage over time
-    Water,     // Slowing effects
-    Earth,     // Shield/defense
-    Air        // Knockback/movement
-};
+// ElementType is now defined in elemental_magic.hpp
+// Values: Water, Air, Earth, Fire, COUNT
 
 /**
  * Cat abilities unlocked at specific levels
@@ -169,6 +162,18 @@ public:
      * Get XP progress as a percentage (0.0 - 1.0)
      */
     float getXPProgress() const;
+
+    /**
+     * Set level directly (for save loading)
+     * @param level Level to set
+     */
+    void setLevel(int level);
+
+    /**
+     * Set XP directly (for save loading)
+     * @param xp XP amount to set
+     */
+    void setXP(int xp);
 
     // ========================================================================
     // CAT STATS

@@ -6,6 +6,19 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 
+// Forward declarations for engine types (full includes needed for inline implementations)
+namespace CatEngine {
+    class AudioEngine;
+    namespace Renderer {
+        class Renderer;
+    }
+}
+
+// Include headers needed for inline method implementations
+#include "../../engine/audio/AudioEngine.hpp"
+#include "../../engine/audio/AudioMixer.hpp"
+#include "../../engine/renderer/Renderer.hpp"
+
 namespace Game {
 
 /**
@@ -190,24 +203,45 @@ public:
 
     /**
      * @brief Apply graphics settings to renderer
-     * (Implementation would interact with renderer)
+     * @param renderer Pointer to the renderer to apply settings to
      */
-    void applyGraphicsSettings() {
-        // TODO: Apply to renderer when integrated
-        // renderer->setVSync(graphics.vsync);
-        // renderer->setRenderScale(graphics.renderScale);
-        // etc.
+    void applyGraphicsSettings(CatEngine::Renderer::Renderer* renderer) {
+        if (!renderer) {
+            return;
+        }
+
+        renderer->SetVSync(graphics.vsync);
+        renderer->OnResize(graphics.windowWidth, graphics.windowHeight);
     }
 
     /**
      * @brief Apply audio settings to audio engine
-     * (Implementation would interact with audio engine)
+     * @param audioEngine Pointer to the audio engine to apply settings to
      */
-    void applyAudioSettings() {
-        // TODO: Apply to audio engine when integrated
-        // audioEngine->setMasterVolume(audio.masterVolume);
-        // audioEngine->setChannelVolume(Channel::Music, audio.musicVolume);
-        // etc.
+    void applyAudioSettings(CatEngine::AudioEngine* audioEngine) {
+        if (!audioEngine) {
+            return;
+        }
+
+        auto& mixer = audioEngine->getMixer();
+
+        // Apply master volume and mute
+        mixer.setMasterVolume(audio.masterVolume);
+        mixer.setMasterMuted(audio.masterMuted);
+
+        // Apply channel volumes
+        mixer.setChannelVolume(CatEngine::AudioMixer::Channel::Music, audio.musicVolume);
+        mixer.setChannelVolume(CatEngine::AudioMixer::Channel::SFX, audio.sfxVolume);
+        mixer.setChannelVolume(CatEngine::AudioMixer::Channel::Voice, audio.voiceVolume);
+        mixer.setChannelVolume(CatEngine::AudioMixer::Channel::Ambient, audio.ambientVolume);
+
+        // Apply channel mutes
+        mixer.setChannelMuted(CatEngine::AudioMixer::Channel::Music, audio.musicMuted);
+        mixer.setChannelMuted(CatEngine::AudioMixer::Channel::SFX, audio.sfxMuted);
+
+        // Note: audioDevice setting would require reinitialization of the audio engine,
+        // which is typically done at startup. Runtime device switching would need
+        // additional logic to safely shutdown and reinitialize the audio context.
     }
 
     /**

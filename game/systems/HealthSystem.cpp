@@ -23,7 +23,7 @@ void HealthSystem::update(float dt) {
         updateHealth(entity, dt);
 
         // Remove dead entities after death animation
-        if (health.isDead && health.deathTimer >= health.deathAnimationDuration) {
+        if (health->isDead && health->deathTimer >= health->deathAnimationDuration) {
             toDestroy.push_back(entity);
         }
     }
@@ -115,23 +115,22 @@ void HealthSystem::handleEnemyDeath(CatEngine::Entity entity) {
     auto* enemy = ecs_->getComponent<EnemyComponent>(entity);
     if (!enemy) return;
 
-    // TODO: Spawn loot at entity position
-    // auto* transform = ecs_->getComponent<Engine::Transform>(entity);
-    // if (transform) {
-    //     spawnLoot(transform->position, enemy->scoreValue);
-    // }
-
-    // TODO: Add score
-    // gameState->addScore(enemy->scoreValue);
-
-    // TODO: Play death sound/effects
+    // Loot spawning, score adding, and death effects are handled by the game layer
+    // via the onEntityDeath_ callback registered during game initialization.
+    // This allows the CatAnnihilation class to coordinate with:
+    // - LootSystem for item drops
+    // - ScoreSystem/GameState for score tracking
+    // - GameAudio for death sounds
+    // - ParticleSystem for death visual effects
 }
 
-void HealthSystem::handlePlayerDeath(CatEngine::Entity entity) {
-    // TODO: Trigger game over
-    // gameState->setGameOver(true);
-
-    // TODO: Play death animation/sound
+void HealthSystem::handlePlayerDeath(CatEngine::Entity /*entity*/) {
+    // Game over and death effects are handled by the game layer
+    // via the onEntityDeath_ callback registered during game initialization.
+    // This allows the CatAnnihilation class to:
+    // - Trigger game over state transition
+    // - Play player death animation and sounds
+    // - Show game over UI
 }
 
 bool HealthSystem::applyDamage(CatEngine::Entity entity, float damage) {

@@ -15,6 +15,7 @@ namespace CatGame {
  * Clan types in the game world
  */
 enum class Clan {
+    None = 0,   // No clan affiliation
     MistClan,   // Forest dwellers, stealth specialists
     StormClan,  // Mountain warriors, speed and agility
     EmberClan,  // Volcanic fighters, raw attack power
@@ -45,7 +46,7 @@ enum class ClanRelation {
 /**
  * Elemental affinities for each clan
  */
-enum class ElementType {
+enum class ClanElementType {
     Shadow,    // MistClan - Stealth and darkness
     Lightning, // StormClan - Speed and electric attacks
     Fire,      // EmberClan - Burning damage over time
@@ -103,6 +104,7 @@ struct StoryModeState {
     int mysticalConnections = 0;
     float storyProgress = 0.0f;  // 0.0 to 100.0
     int currentChapter = 0;
+    int currentMission = 0;
     int playerLevel = 1;
     int playerExperience = 0;
 
@@ -329,7 +331,7 @@ public:
     /**
      * Get clan elemental affinity
      */
-    ElementType getClanElement() const;
+    ClanElementType getClanElement() const;
 
     /**
      * Get total stat multiplier (clan + rank + skills)
@@ -399,6 +401,42 @@ public:
      */
     bool deserialize(const std::string& data);
 
+    // ========================================================================
+    // Save/Load Helper Methods
+    // ========================================================================
+
+    /**
+     * Check if the story is complete (all chapters finished)
+     */
+    [[nodiscard]] bool isStoryComplete() const;
+
+    /**
+     * Get the current chapter number
+     */
+    [[nodiscard]] int getCurrentChapterNumber() const { return state_.currentChapter; }
+
+    /**
+     * Get the current mission number
+     */
+    [[nodiscard]] int getCurrentMission() const { return state_.currentMission; }
+
+    /**
+     * Set the current chapter (for save loading)
+     * @param chapterIndex Index of the chapter to set as current
+     */
+    void setChapter(int chapterIndex);
+
+    /**
+     * Set the current mission within the current chapter (for save loading)
+     * @param missionIndex Index of the mission within the current chapter
+     */
+    void setMission(int missionIndex);
+
+    /**
+     * Advance to the next story beat (mission or chapter)
+     */
+    void advanceStory();
+
 private:
     StoryModeState state_;
     StorySkills skills_;
@@ -439,12 +477,12 @@ namespace StoryModeHelpers {
     /**
      * Get element type name
      */
-    const char* getElementName(ElementType element);
+    const char* getElementName(ClanElementType element);
 
     /**
      * Get element color (for UI)
      */
-    Engine::vec3 getElementColor(ElementType element);
+    Engine::vec3 getElementColor(ClanElementType element);
 
     /**
      * Calculate experience curve

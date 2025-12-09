@@ -15,6 +15,7 @@ namespace CatGame {
  * Element types for the magic system
  */
 enum class ElementType {
+    None = 0,  // No element
     Water,
     Air,
     Earth,
