@@ -1,8 +1,14 @@
 #include "UIPass.hpp"
 #include "../../rhi/RHI.hpp"
+#include "../../rhi/vulkan/VulkanShader.hpp"
+#include "../../rhi/vulkan/VulkanSwapchain.hpp"
+#include "../../rhi/vulkan/VulkanCommandBuffer.hpp"
+#include "../../rhi/vulkan/VulkanRenderPass.hpp"
+#include "../Renderer.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace CatEngine::Renderer {
 
@@ -21,52 +27,205 @@ UIPass::~UIPass() {
 }
 
 void UIPass::Setup(RHI::IRHI* rhi, Renderer* renderer) {
+    std::cout << "[UIPass::Setup] Called with rhi=" << rhi << ", renderer=" << renderer << std::endl;
     rhi_ = rhi;
     renderer_ = renderer;
 
+    std::cout << "[UIPass::Setup] Updating projection matrix..." << std::endl;
     UpdateProjectionMatrix();
-    CreateRenderPass();
+    
+    // Use the swapchain's UI render pass (it's already compatible with the framebuffers)
+    std::cout << "[UIPass::Setup] Getting swapchain's UI render pass..." << std::endl;
+    auto* swapchain = static_cast<RHI::VulkanSwapchain*>(renderer_->GetSwapchain());
+    swapchainRenderPass_ = swapchain ? swapchain->GetUIRenderPassRHI() : nullptr;
+    if (swapchainRenderPass_) {
+        std::cout << "[UIPass::Setup] Using swapchain's UI render pass: " << swapchainRenderPass_ << std::endl;
+    } else {
+        std::cerr << "[UIPass::Setup] ERROR: Failed to get swapchain's UI render pass!" << std::endl;
+    }
+    
+    std::cout << "[UIPass::Setup] Creating pipelines..." << std::endl;
     CreatePipelines();
+    std::cout << "[UIPass::Setup] Creating buffers..." << std::endl;
     CreateBuffers();
+    std::cout << "[UIPass::Setup] Creating uniform buffers..." << std::endl;
     CreateUniformBuffers();
+    
+    // Initialize bitmap font for text rendering
+    std::cout << "[UIPass::Setup] Initializing bitmap font..." << std::endl;
+    if (!bitmapFont_.Initialize(rhi_, 32)) {
+        std::cerr << "[UIPass::Setup] WARNING: Failed to initialize bitmap font!" << std::endl;
+    }
+    
+    std::cout << "[UIPass::Setup] Complete" << std::endl;
 }
 
 void UIPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex) {
-    if (!IsEnabled() || batchedCommands_.empty()) {
+    static int executeCount = 0;
+    executeCount++;
+    
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Called, enabled=" << IsEnabled() 
+                  << ", batchedCommands=" << batchedCommands_.size()
+                  << ", vertices=" << vertices_.size()
+                  << ", indices=" << indices_.size() << "\n";
+        std::cout.flush();
+    }
+    
+    if (!IsEnabled()) {
+        if (executeCount <= 5) {
+            std::cout << "[UIPass::Execute] SKIPPED - not enabled\n";
+            std::cout.flush();
+        }
+        return;
+    }
+    
+    if (batchedCommands_.empty()) {
+        if (executeCount <= 5) {
+            std::cout << "[UIPass::Execute] SKIPPED - no batched commands\n";
+            std::cout.flush();
+        }
         return;
     }
 
+    // Get swapchain for framebuffer and dimensions
+    auto* swapchain = static_cast<RHI::VulkanSwapchain*>(renderer_->GetSwapchain());
+    if (!swapchain) {
+        if (executeCount <= 5) {
+            std::cout << "[UIPass::Execute] ERROR - no swapchain!\n";
+            std::cout.flush();
+        }
+        return;
+    }
+
+    // Use swapchain's UI render pass - it matches the framebuffer!
+    // The framebuffer was created with swapchain's UI render pass, not UIPass's renderPass_
+    uint32_t imageIndex = swapchain->GetCurrentImageIndex();
+    VkRenderPass vkRenderPass = swapchain->GetUIRenderPass();
+    VkFramebuffer vkFramebuffer = swapchain->GetFramebuffer(imageIndex);
+    
+    if (vkRenderPass == VK_NULL_HANDLE || vkFramebuffer == VK_NULL_HANDLE) {
+        if (executeCount <= 5) {
+            std::cout << "[UIPass::Execute] ERROR - render pass or framebuffer is null! "
+                      << "renderPass=" << vkRenderPass << ", framebuffer=" << vkFramebuffer << "\n";
+            std::cout.flush();
+        }
+        return;
+    }
+
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Using swapchain renderPass=" << vkRenderPass 
+                  << ", swapchain framebuffer=" << vkFramebuffer 
+                  << ", imageIndex=" << imageIndex << "\n";
+        std::cout.flush();
+    }
+
     // Upload vertex and index data
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Uploading buffers...\n";
+        std::cout.flush();
+    }
     UploadBuffers(frameIndex);
 
     // Update uniform buffer
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Updating uniform buffer...\n";
+        std::cout.flush();
+    }
     void* data = uniformBuffers_[frameIndex]->Map();
     std::memcpy(data, &uniforms_, sizeof(UIUniforms));
     uniformBuffers_[frameIndex]->Unmap();
 
     // Begin render pass
-    // Note: UI typically renders to the final output buffer
-    // RHI::ClearValue clearValue; // No clear needed, rendering on top
-    // commandBuffer->BeginRenderPass(renderPass_.get(), ...);
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Beginning render pass...\n";
+        std::cout.flush();
+    }
+    
+    auto* vulkanCmd = static_cast<RHI::VulkanCommandBuffer*>(commandBuffer);
+    VkCommandBuffer vkCmd = vulkanCmd->GetHandle();
+    
+    VkRenderPassBeginInfo renderPassInfo = {};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = vkRenderPass;
+    renderPassInfo.framebuffer = vkFramebuffer;
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {swapchain->GetWidth(), swapchain->GetHeight()};
+    renderPassInfo.clearValueCount = 0;  // No clear, we load existing content
+    renderPassInfo.pClearValues = nullptr;
+    
+    vkCmdBeginRenderPass(vkCmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Set viewport
+    VkViewport viewport = {};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapchain->GetWidth());
+    viewport.height = static_cast<float>(swapchain->GetHeight());
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(vkCmd, 0, 1, &viewport);
+
+    // Set scissor
+    VkRect2D scissor = {};
+    scissor.offset = {0, 0};
+    scissor.extent = {swapchain->GetWidth(), swapchain->GetHeight()};
+    vkCmdSetScissor(vkCmd, 0, 1, &scissor);
+
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Viewport/scissor set: " << viewport.width << "x" << viewport.height << "\n";
+        std::cout.flush();
+    }
 
     // Bind vertex and index buffers
     uint64_t offset = 0;
-    commandBuffer->BindVertexBuffer(0, vertexBuffers_[frameIndex].get(), offset);
+    RHI::IRHIBuffer* vertexBuffer = vertexBuffers_[frameIndex].get();
+    commandBuffer->BindVertexBuffers(0, &vertexBuffer, &offset, 1);
     commandBuffer->BindIndexBuffer(indexBuffers_[frameIndex].get(), offset, RHI::IndexType::UInt16);
 
-    // Render batched draw commands
-    for (const auto& cmd : batchedCommands_) {
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Drawing " << batchedCommands_.size() << " batched commands...\n";
+        std::cout.flush();
+    }
+    
+    // Draw EACH command individually (no batching - batching was broken due to depth sorting)
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] === DRAW LOOP START ===\n";
+        std::cout << "[UIPass::Execute] Drawing " << drawCommands_.size() << " individual commands (no batching)\n";
+        std::cout.flush();
+    }
+    
+    RHI::IRHIPipeline* lastPipeline = nullptr;
+    
+    for (size_t i = 0; i < drawCommands_.size(); i++) {
+        const auto& cmd = drawCommands_[i];
+        
         // Select pipeline based on element type
         RHI::IRHIPipeline* pipeline = (cmd.type == UIElementType::Text)
             ? textPipeline_.get()
             : quadPipeline_.get();
 
-        commandBuffer->BindPipeline(pipeline);
+        if (!pipeline) {
+            if (executeCount <= 5) {
+                std::cerr << "[UIPass::Execute] ERROR: Pipeline is NULL for cmd " << i << "!\n";
+            }
+            continue;
+        }
 
-        // Bind texture descriptor
-        // TODO: Bind descriptor set with texture and uniforms
-
-        // Draw indexed
+        // Only rebind pipeline if it changed
+        if (pipeline != lastPipeline) {
+            commandBuffer->BindPipeline(pipeline);
+            lastPipeline = pipeline;
+        }
+        
+        if (executeCount <= 5 && i < 5) {
+            std::cout << "[UIPass::Execute] DrawIndexed cmd " << i 
+                      << ": indexCount=" << cmd.indexCount 
+                      << ", indexOffset=" << cmd.indexOffset
+                      << ", vertexOffset=" << cmd.vertexOffset << "\n";
+        }
+        
+        // Draw this quad
         commandBuffer->DrawIndexed(
             cmd.indexCount,     // Index count
             1,                  // Instance count
@@ -75,12 +234,24 @@ void UIPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex)
             0                   // First instance
         );
     }
-
-    // commandBuffer->EndRenderPass();
+    
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] === DRAW LOOP END (" << drawCommands_.size() << " draw calls) ===\n";
+        std::cout.flush();
+    }
+    
+    // End render pass
+    vkCmdEndRenderPass(vkCmd);
+    
+    if (executeCount <= 5) {
+        std::cout << "[UIPass::Execute] Complete\n";
+        std::cout.flush();
+    }
 }
 
 void UIPass::Cleanup() {
-    renderPass_.reset();
+    // Note: swapchainRenderPass_ is not owned by us, don't delete it
+    swapchainRenderPass_ = nullptr;
     quadPipeline_.reset();
     textPipeline_.reset();
     uiVertShader_.reset();
@@ -109,6 +280,11 @@ void UIPass::OnResize(uint32_t width, uint32_t height) {
 }
 
 void UIPass::BeginFrame() {
+    static int callCount = 0;
+    callCount++;
+    if (callCount <= 5) {
+        std::cout << "[UIPass::BeginFrame] Called, count=" << callCount << "\n";
+    }
     vertices_.clear();
     indices_.clear();
     drawCommands_.clear();
@@ -117,17 +293,42 @@ void UIPass::BeginFrame() {
 }
 
 void UIPass::EndFrame() {
+    static int callCount = 0;
+    callCount++;
+    if (callCount <= 5) {
+        std::cout << "[UIPass::EndFrame] Called, frameInProgress_=" << frameInProgress_
+                  << ", drawCommands=" << drawCommands_.size() << "\n";
+        std::cout.flush();
+    }
     if (!frameInProgress_) {
+        if (callCount <= 5) {
+            std::cout << "[UIPass::EndFrame] SKIPPED - frameInProgress_ is false\n";
+            std::cout.flush();
+        }
         return;
     }
 
     SortDrawCommands();
     BatchDrawCommands();
+    if (callCount <= 5) {
+        std::cout << "[UIPass::EndFrame] Batched " << batchedCommands_.size() << " commands from " 
+                  << drawCommands_.size() << " draw commands\n";
+        std::cout.flush();
+    }
     frameInProgress_ = false;
 }
 
 void UIPass::DrawQuad(const QuadDesc& desc) {
+    static int callCount = 0;
+    callCount++;
+    if (callCount <= 10) {
+        std::cout << "[UIPass::DrawQuad] Called, frameInProgress_=" << frameInProgress_
+                  << ", pos=(" << desc.x << "," << desc.y << "), size=(" << desc.width << "x" << desc.height << ")\n";
+    }
     if (!frameInProgress_) {
+        if (callCount <= 10) {
+            std::cout << "[UIPass::DrawQuad] SKIPPING - frameInProgress_ is false!\n";
+        }
         return;
     }
 
@@ -187,43 +388,109 @@ void UIPass::DrawQuad(const QuadDesc& desc) {
 }
 
 void UIPass::DrawText(const TextDesc& desc) {
-    if (!frameInProgress_ || !desc.text) {
+    if (!frameInProgress_ || !desc.text || desc.text[0] == '\0') {
         return;
     }
 
-    // TODO: Implement text rendering using SDF font atlas
-    // This requires:
-    // 1. Font atlas texture with pre-generated SDF glyphs
-    // 2. Font metrics (glyph sizes, kerning, etc.)
-    // 3. Text layout algorithm (handle line breaks, alignment, etc.)
+    // Text uses shader-based font rendering
+    // Character code is encoded in UV.x as: charCode + 100 (so UV.x > 50 = text)
+    // UV.y encodes the position within the glyph (0-1)
 
-    // For now, this is a placeholder
-    // Real implementation would:
-    // - Iterate through UTF-8 characters
-    // - Look up glyph data in font atlas
-    // - Generate quad for each character
-    // - Apply kerning and spacing
-    // - Create batched draw command
+    float cursorX = desc.x;
+    float cursorY = desc.y;
+    const float glyphWidth = desc.fontSize * 0.6f;   // Approximate width
+    const float glyphHeight = desc.fontSize;
+    const float lineHeight = desc.fontSize * 1.2f;
+    const float charSpacing = glyphWidth;
 
-    RHI::IRHITexture* fontAtlas = desc.fontAtlas ? desc.fontAtlas : defaultFontAtlas_;
-    if (!fontAtlas) {
-        return;
+    uint32_t vertexStart = static_cast<uint32_t>(vertices_.size());
+    uint32_t indexStart = static_cast<uint32_t>(indices_.size());
+    uint32_t charCount = 0;
+
+    // Iterate through text
+    const char* text = desc.text;
+    while (*text != '\0') {
+        char c = *text++;
+
+        // Handle newline
+        if (c == '\n') {
+            cursorX = desc.x;
+            cursorY += lineHeight;
+            continue;
+        }
+
+        // Handle tab (4 spaces)
+        if (c == '\t') {
+            cursorX += charSpacing * 4.0f;
+            continue;
+        }
+
+        // Skip non-printable
+        if (c < 32) continue;
+
+        // Encode: UV.x = charCode + 100 (signals text to shader)
+        //         UV.y = packed: integer part = row (0-4), fractional = column (0-1)
+        float charCodeUV = static_cast<float>(c) + 100.0f;
+
+        // Create quad vertices for this glyph
+        // We encode position as: UV.y = row.column where row is 0-4 and column is 0.0-1.0
+        uint32_t baseVertex = static_cast<uint32_t>(vertices_.size());
+
+        // Top-left: row=0, col=0
+        vertices_.push_back({
+            {cursorX, cursorY},
+            {charCodeUV, 0.0f},  // row 0, col 0
+            {desc.r, desc.g, desc.b, desc.a}
+        });
+
+        // Top-right: row=0, col=1
+        vertices_.push_back({
+            {cursorX + glyphWidth, cursorY},
+            {charCodeUV, 0.99f},  // row 0, col ~1
+            {desc.r, desc.g, desc.b, desc.a}
+        });
+
+        // Bottom-right: row=4, col=1
+        vertices_.push_back({
+            {cursorX + glyphWidth, cursorY + glyphHeight},
+            {charCodeUV, 4.99f},  // row 4, col ~1
+            {desc.r, desc.g, desc.b, desc.a}
+        });
+
+        // Bottom-left: row=4, col=0
+        vertices_.push_back({
+            {cursorX, cursorY + glyphHeight},
+            {charCodeUV, 4.0f},  // row 4, col 0
+            {desc.r, desc.g, desc.b, desc.a}
+        });
+
+        // Create indices for two triangles
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 0));
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 1));
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 2));
+
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 0));
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 2));
+        indices_.push_back(static_cast<uint16_t>(baseVertex + 3));
+
+        cursorX += charSpacing;
+        charCount++;
     }
 
-    // Placeholder: create a simple quad as example
-    QuadDesc quadDesc{};
-    quadDesc.x = desc.x;
-    quadDesc.y = desc.y;
-    quadDesc.width = desc.fontSize * 10.0f; // Approximate width
-    quadDesc.height = desc.fontSize;
-    quadDesc.r = desc.r;
-    quadDesc.g = desc.g;
-    quadDesc.b = desc.b;
-    quadDesc.a = desc.a;
-    quadDesc.depth = desc.depth;
-    quadDesc.texture = fontAtlas;
+    if (charCount > 0) {
+        // Create draw command for all text glyphs
+        // Use Text type - uses bitmap font shader for character rendering
+        UIDrawCommand cmd{};
+        cmd.type = UIElementType::Text;
+        cmd.texture = nullptr;  // No texture for now
+        cmd.vertexOffset = vertexStart;
+        cmd.vertexCount = charCount * 4;
+        cmd.indexOffset = indexStart;
+        cmd.indexCount = charCount * 6;
+        cmd.depth = desc.depth;
 
-    // DrawQuad(quadDesc); // Would draw if we had proper text rendering
+        drawCommands_.push_back(cmd);
+    }
 }
 
 void UIPass::AddDrawCommand(const UIDrawCommand& cmd) {
@@ -234,69 +501,61 @@ void UIPass::AddDrawCommand(const UIDrawCommand& cmd) {
     drawCommands_.push_back(cmd);
 }
 
-void UIPass::CreateRenderPass() {
-    // UI renders to the final output with alpha blending
-
-    // Color attachment (existing framebuffer)
-    RHI::AttachmentDesc colorAttachment{};
-    colorAttachment.format = RHI::TextureFormat::RGBA8_SRGB;
-    colorAttachment.sampleCount = 1;
-    colorAttachment.loadOp = RHI::LoadOp::Load;      // Preserve existing content
-    colorAttachment.storeOp = RHI::StoreOp::Store;
-    colorAttachment.stencilLoadOp = RHI::LoadOp::DontCare;
-    colorAttachment.stencilStoreOp = RHI::StoreOp::DontCare;
-
-    RHI::AttachmentReference colorRef{};
-    colorRef.attachmentIndex = 0;
-
-    RHI::SubpassDesc subpass{};
-    subpass.bindPoint = RHI::PipelineBindPoint::Graphics;
-    subpass.colorAttachments = {colorRef};
-    subpass.depthStencilAttachment = nullptr; // No depth testing
-
-    RHI::RenderPassDesc renderPassDesc{};
-    renderPassDesc.attachments = {colorAttachment};
-    renderPassDesc.subpasses = {subpass};
-    renderPassDesc.debugName = "UIRenderPass";
-
-    renderPass_.reset(rhi_->CreateRenderPass(renderPassDesc));
-}
+// CreateRenderPass is no longer needed - we use the swapchain's UI render pass directly
 
 void UIPass::CreatePipelines() {
-    // Load shaders
-    // TODO: Load actual shader bytecode from compiled SPIR-V files
+    // Load shaders from compiled SPIR-V files
+    auto uiVertCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/ui.vert.spv");
+    auto uiFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/ui.frag.spv");
+    auto textSdfFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/text_sdf.frag.spv");
 
     // Vertex shader (shared)
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
-    vertDesc.code = nullptr; // TODO: Load from shaders/ui/ui.vert.spv
-    vertDesc.codeSize = 0;
+    vertDesc.code = uiVertCode.empty() ? nullptr : uiVertCode.data();
+    vertDesc.codeSize = uiVertCode.size();
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "UIVert";
-    // uiVertShader_.reset(rhi_->CreateShader(vertDesc));
+    if (!uiVertCode.empty()) {
+        uiVertShader_.reset(rhi_->CreateShader(vertDesc));
+    }
 
     // Fragment shader for textured quads
     RHI::ShaderDesc fragDesc{};
     fragDesc.stage = RHI::ShaderStage::Fragment;
-    fragDesc.code = nullptr; // TODO: Load from shaders/ui/ui.frag.spv
-    fragDesc.codeSize = 0;
+    fragDesc.code = uiFragCode.empty() ? nullptr : uiFragCode.data();
+    fragDesc.codeSize = uiFragCode.size();
     fragDesc.entryPoint = "main";
     fragDesc.debugName = "UIFrag";
-    // uiFragShader_.reset(rhi_->CreateShader(fragDesc));
+    if (!uiFragCode.empty()) {
+        uiFragShader_.reset(rhi_->CreateShader(fragDesc));
+    }
 
     // Fragment shader for SDF text
     RHI::ShaderDesc textFragDesc{};
     textFragDesc.stage = RHI::ShaderStage::Fragment;
-    textFragDesc.code = nullptr; // TODO: Load from shaders/ui/text_sdf.frag.spv
-    textFragDesc.codeSize = 0;
+    textFragDesc.code = textSdfFragCode.empty() ? nullptr : textSdfFragCode.data();
+    textFragDesc.codeSize = textSdfFragCode.size();
     textFragDesc.entryPoint = "main";
     textFragDesc.debugName = "TextSDFFrag";
-    // textSDFFragShader_.reset(rhi_->CreateShader(textFragDesc));
+    if (!textSdfFragCode.empty()) {
+        textSDFFragShader_.reset(rhi_->CreateShader(textFragDesc));
+    }
 
     // Create quad pipeline
     {
+        std::cout << "[UIPass::CreatePipelines] Creating quad pipeline...\n";
+        
         RHI::PipelineDesc pipelineDesc{};
-        // pipelineDesc.shaders = {uiVertShader_.get(), uiFragShader_.get()};
+        
+        // Set shaders
+        if (uiVertShader_ && uiFragShader_) {
+            pipelineDesc.shaders = {uiVertShader_.get(), uiFragShader_.get()};
+            std::cout << "[UIPass::CreatePipelines] Shaders set for quad pipeline\n";
+        } else {
+            std::cerr << "[UIPass::CreatePipelines] WARNING: Missing shaders for quad pipeline! vert=" 
+                      << (uiVertShader_ ? "ok" : "NULL") << ", frag=" << (uiFragShader_ ? "ok" : "NULL") << "\n";
+        }
 
         // Vertex input (position + UV + color)
         RHI::VertexBinding vertexBinding{};
@@ -348,17 +607,35 @@ void UIPass::CreatePipelines() {
 
         pipelineDesc.blendAttachments = {blendState};
 
-        pipelineDesc.renderPass = renderPass_.get();
+        // Use swapchain's UI render pass for pipeline creation (same as Execute)
+        pipelineDesc.renderPass = swapchainRenderPass_;
         pipelineDesc.subpass = 0;
         pipelineDesc.debugName = "UIQuadPipeline";
+        
+        std::cout << "[UIPass::CreatePipelines] Using swapchainRenderPass_=" << swapchainRenderPass_ << "\n";
 
-        // quadPipeline_.reset(rhi_->CreateGraphicsPipeline(pipelineDesc));
+        quadPipeline_.reset(rhi_->CreateGraphicsPipeline(pipelineDesc));
+        if (quadPipeline_) {
+            std::cout << "[UIPass::CreatePipelines] Quad pipeline created successfully\n";
+        } else {
+            std::cerr << "[UIPass::CreatePipelines] ERROR: Failed to create quad pipeline!\n";
+        }
     }
 
-    // Create text pipeline (same as quad but with SDF fragment shader)
+    // Create text pipeline (uses ui.frag with built-in bitmap font patterns)
     {
+        std::cout << "[UIPass::CreatePipelines] Creating text pipeline...\n";
+
         RHI::PipelineDesc pipelineDesc{};
-        // pipelineDesc.shaders = {uiVertShader_.get(), textSDFFragShader_.get()};
+
+        // Set shaders - use ui.frag which has built-in bitmap font patterns
+        // The bitmap font is triggered when UV.x > 50 (character code encoding)
+        if (uiVertShader_ && uiFragShader_) {
+            pipelineDesc.shaders = {uiVertShader_.get(), uiFragShader_.get()};
+            std::cout << "[UIPass::CreatePipelines] Shaders set for text pipeline (using bitmap font in ui.frag)\n";
+        } else {
+            std::cerr << "[UIPass::CreatePipelines] WARNING: Missing shaders for text pipeline!\n";
+        }
 
         // Same vertex input as quad pipeline
         RHI::VertexBinding vertexBinding{};
@@ -408,11 +685,16 @@ void UIPass::CreatePipelines() {
 
         pipelineDesc.blendAttachments = {blendState};
 
-        pipelineDesc.renderPass = renderPass_.get();
+        pipelineDesc.renderPass = swapchainRenderPass_;
         pipelineDesc.subpass = 0;
         pipelineDesc.debugName = "UITextPipeline";
 
-        // textPipeline_.reset(rhi_->CreateGraphicsPipeline(pipelineDesc));
+        textPipeline_.reset(rhi_->CreateGraphicsPipeline(pipelineDesc));
+        if (textPipeline_) {
+            std::cout << "[UIPass::CreatePipelines] Text pipeline created successfully\n";
+        } else {
+            std::cerr << "[UIPass::CreatePipelines] ERROR: Failed to create text pipeline!\n";
+        }
     }
 }
 
@@ -492,11 +774,25 @@ void UIPass::SortDrawCommands() {
 }
 
 void UIPass::BatchDrawCommands() {
+    static int batchCallCount = 0;
+    batchCallCount++;
+    
     // Merge consecutive draw commands with the same texture
     batchedCommands_.clear();
 
     if (drawCommands_.empty()) {
         return;
+    }
+
+    if (batchCallCount <= 2) {
+        std::cout << "[UIPass::BatchDrawCommands] Total drawCommands: " << drawCommands_.size() << "\n";
+        // Log first few draw commands
+        for (size_t i = 0; i < std::min(drawCommands_.size(), (size_t)15); i++) {
+            const auto& cmd = drawCommands_[i];
+            std::cout << "[UIPass::BatchDrawCommands] Cmd " << i << ": vOff=" << cmd.vertexOffset 
+                      << ", vCnt=" << cmd.vertexCount << ", iOff=" << cmd.indexOffset 
+                      << ", iCnt=" << cmd.indexCount << ", depth=" << cmd.depth << "\n";
+        }
     }
 
     UIDrawCommand currentBatch = drawCommands_[0];
@@ -522,6 +818,17 @@ void UIPass::BatchDrawCommands() {
 
     // Don't forget the last batch
     batchedCommands_.push_back(currentBatch);
+    
+    if (batchCallCount <= 2) {
+        std::cout << "[UIPass::BatchDrawCommands] Created " << batchedCommands_.size() << " batches\n";
+        for (size_t i = 0; i < batchedCommands_.size(); i++) {
+            const auto& b = batchedCommands_[i];
+            std::cout << "[UIPass::BatchDrawCommands] Batch " << i << ": vOff=" << b.vertexOffset 
+                      << ", vCnt=" << b.vertexCount << ", iOff=" << b.indexOffset 
+                      << ", iCnt=" << b.indexCount << ", depth=" << b.depth << "\n";
+        }
+        std::cout.flush();
+    }
 }
 
 void UIPass::UploadBuffers(uint32_t frameIndex) {

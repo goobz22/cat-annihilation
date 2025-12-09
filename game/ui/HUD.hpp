@@ -2,7 +2,7 @@
 #define GAME_UI_HUD_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include <cstdint>
 #include <string>
 
@@ -40,9 +40,11 @@ public:
 
     /**
      * @brief Render HUD
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     // ========================================================================
     // Data Setters
@@ -132,51 +134,76 @@ public:
      */
     void setFPS(float fps);
 
+    // ========================================================================
+    // Notification System
+    // ========================================================================
+
+    /**
+     * @brief Show a notification message on screen
+     * @param message The message to display
+     * @param duration How long to show (seconds), default 3.0
+     * @param priority Higher priority notifications display on top
+     */
+    void showNotification(const std::string& message, float duration = 3.0f, int priority = 0);
+
+    /**
+     * @brief Show a notification with a specific type (affects color/style)
+     * @param message The message to display
+     * @param type Notification type: "info", "success", "warning", "error"
+     * @param duration How long to show (seconds)
+     */
+    void showNotification(const std::string& message, const std::string& type, float duration = 3.0f);
+
+    /**
+     * @brief Clear all notifications
+     */
+    void clearNotifications();
+
 private:
     /**
      * @brief Render health bar
      */
-    void renderHealthBar(CatEngine::Renderer::Renderer& renderer);
+    void renderHealthBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render wave counter
      */
-    void renderWaveCounter(CatEngine::Renderer::Renderer& renderer);
+    void renderWaveCounter(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render enemy counter
      */
-    void renderEnemyCounter(CatEngine::Renderer::Renderer& renderer);
+    void renderEnemyCounter(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render score display
      */
-    void renderScore(CatEngine::Renderer::Renderer& renderer);
+    void renderScore(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render crosshair
      */
-    void renderCrosshair(CatEngine::Renderer::Renderer& renderer);
+    void renderCrosshair(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render damage indicators
      */
-    void renderDamageIndicators(CatEngine::Renderer::Renderer& renderer);
+    void renderDamageIndicators(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render damage/heal numbers
      */
-    void renderDamageNumbers(CatEngine::Renderer::Renderer& renderer);
+    void renderDamageNumbers(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render low health warning (screen edge glow)
      */
-    void renderLowHealthWarning(CatEngine::Renderer::Renderer& renderer);
+    void renderLowHealthWarning(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render FPS counter
      */
-    void renderFPS(CatEngine::Renderer::Renderer& renderer);
+    void renderFPS(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Update damage indicators
@@ -228,11 +255,48 @@ private:
     std::vector<DamageNumber> m_damageNumbers;
 
     // Low health warning animation
-    float m_lowHealthPulse = 0.0f;
+    float m_lowHealthPulse = 0.0F;
 
     // Combo display
-    float m_comboDisplayTime = 0.0f;
-    float m_comboFadeTime = 2.0f;
+    float m_comboDisplayTime = 0.0F;
+    float m_comboFadeTime = 2.0F;
+
+    // Notification system
+    enum class NotificationType {
+        Info,
+        Success,
+        Warning,
+        Error
+    };
+
+    struct Notification {
+        std::string message;
+        NotificationType type = NotificationType::Info;
+        float duration = 3.0F;
+        float elapsed = 0.0F;
+        int priority = 0;
+    };
+    std::vector<Notification> m_notifications;
+    static constexpr size_t MAX_NOTIFICATIONS = 5;
+
+    /**
+     * @brief Update notifications
+     */
+    void updateNotifications(float deltaTime);
+
+    /**
+     * @brief Render notifications
+     */
+    void renderNotifications(CatEngine::Renderer::UIPass& uiPass);
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
+
+    /**
+     * @brief Get color for notification type
+     */
+    static std::array<float, 4> getNotificationColor(NotificationType type);
 
     bool m_initialized = false;
 };

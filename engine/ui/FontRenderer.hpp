@@ -10,6 +10,11 @@
 
 namespace Engine::UI {
 
+using Engine::u8;
+using Engine::u16;
+using Engine::u32;
+using Engine::u64;
+
 /**
  * @brief Glyph metrics for text layout
  */

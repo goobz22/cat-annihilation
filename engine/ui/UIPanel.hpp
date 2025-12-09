@@ -4,6 +4,7 @@
 #include "UIWidget.hpp"
 #include "UIImage.hpp"
 #include <memory>
+#include <cstdint>
 
 namespace Engine::UI {
 
@@ -21,12 +22,12 @@ enum class LayoutMode {
  * @brief Grid layout configuration
  */
 struct GridLayout {
-    u32 columns;        // Number of columns
-    u32 rows;           // Number of rows (0 = auto-calculate)
+    uint32_t columns;   // Number of columns
+    uint32_t rows;      // Number of rows (0 = auto-calculate)
     float spacing;      // Spacing between cells
 
     GridLayout() : columns(1), rows(0), spacing(0.0f) {}
-    GridLayout(u32 cols, u32 rows = 0, float spacing = 0.0f)
+    GridLayout(uint32_t cols, uint32_t rows = 0, float spacing = 0.0f)
         : columns(cols), rows(rows), spacing(spacing) {}
 };
 

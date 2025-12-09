@@ -389,6 +389,10 @@ private:
     float m_windowX = 0.0f;  // Calculated to center
     float m_windowY = 0.0f;  // Calculated to center
 
+    // Screen dimensions (updated from renderer)
+    float m_screenWidth = 1920.0f;
+    float m_screenHeight = 1080.0f;
+
     // Animation
     float m_openAnimation = 0.0f;  // 0 = closed, 1 = open
     float m_openAnimSpeed = 5.0f;

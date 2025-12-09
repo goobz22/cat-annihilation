@@ -6,6 +6,10 @@
 
 namespace Game {
 
+namespace {
+    constexpr float PI = 3.14159265358979323846F;
+}
+
 WavePopup::WavePopup(Engine::Input& input, GameAudio& audio)
     : m_input(input)
     , m_audio(audio) {
@@ -70,18 +74,22 @@ void WavePopup::update(float deltaTime) {
     }
 }
 
-void WavePopup::render(CatEngine::Renderer::Renderer& renderer) {
+void WavePopup::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight) {
     if (!m_initialized || !m_isVisible) {
         return;
     }
 
+    // Cache screen dimensions
+    m_screenWidth = screenWidth;
+    m_screenHeight = screenHeight;
+
     switch (m_state) {
         case PopupState::WaveComplete:
-            renderWaveComplete(renderer);
+            renderWaveComplete(uiPass);
             break;
 
         case PopupState::Countdown:
-            renderCountdown(renderer);
+            renderCountdown(uiPass);
             break;
 
         default:
@@ -104,8 +112,7 @@ void WavePopup::handleInput() {
         }
     }
 
-    // Countdown cannot be manually dismissed (or can it? Up to design choice)
-    // For now, let users skip countdown with Space/Enter
+    // Countdown can be skipped with Space/Enter
     if (m_state == PopupState::Countdown) {
         if (m_input.isKeyPressed(Engine::Input::Key::Space) ||
             m_input.isKeyPressed(Engine::Input::Key::Enter)) {
@@ -131,11 +138,10 @@ void WavePopup::showWaveComplete(uint32_t waveNumber,
     m_timeTaken = timeTaken;
     m_nextWaveEnemyCount = nextWaveEnemyCount;
 
-    m_displayTimer = 0.0f;
-    m_animationTimer = 0.0f;
-    m_fadeAlpha = 0.0f;
+    m_displayTimer = 0.0F;
+    m_animationTimer = 0.0F;
+    m_fadeAlpha = 0.0F;
 
-    // Wave complete sound is played by caller
     Engine::Logger::info("Wave " + std::to_string(waveNumber) + " complete popup shown");
 }
 
@@ -146,9 +152,9 @@ void WavePopup::showWaveStart(uint32_t waveNumber, uint32_t enemyCount) {
     m_startingWave = waveNumber;
     m_waveEnemyCount = enemyCount;
 
-    m_countdownTimer = 0.0f;
-    m_animationTimer = 0.0f;
-    m_fadeAlpha = 0.0f;
+    m_countdownTimer = 0.0F;
+    m_animationTimer = 0.0F;
+    m_fadeAlpha = 0.0F;
 
     m_audio.playWaveStart();
     Engine::Logger::info("Wave " + std::to_string(waveNumber) + " countdown started");
@@ -173,98 +179,208 @@ void WavePopup::dismiss() {
 // Private Methods
 // ============================================================================
 
-void WavePopup::renderWaveComplete(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void WavePopup::renderWaveComplete(CatEngine::Renderer::UIPass& uiPass) {
+    float centerX = static_cast<float>(m_screenWidth) / 2.0F;
+    float centerY = static_cast<float>(m_screenHeight) / 2.0F;
+
     // Semi-transparent overlay
-    renderer.drawRect({0, 0}, {screenWidth, screenHeight},
-                     {0, 0, 0, 0.6f * m_fadeAlpha});
+    CatEngine::Renderer::UIPass::QuadDesc overlay;
+    overlay.x = 0.0F;
+    overlay.y = 0.0F;
+    overlay.width = static_cast<float>(m_screenWidth);
+    overlay.height = static_cast<float>(m_screenHeight);
+    overlay.r = 0.0F;
+    overlay.g = 0.0F;
+    overlay.b = 0.0F;
+    overlay.a = 0.6F * m_fadeAlpha;
+    overlay.depth = 0.0F;
+    overlay.texture = nullptr;
+    uiPass.DrawQuad(overlay);
 
-    // Main title with animation (scale effect)
-    float scale = 1.0f + std::sin(m_animationTimer * 3.0f) * 0.1f;
-    vec2 titlePos = {screenWidth / 2 - 150, screenHeight / 2 - 100};
+    // Title with pulsing effect
+    float titleScale = 1.0F + std::sin(m_animationTimer * 3.0F) * 0.1F;
+    std::string titleStr = "WAVE " + std::to_string(m_completedWave) + " COMPLETE!";
 
-    std::string titleText = "WAVE " + std::to_string(m_completedWave) + " COMPLETE!";
-    renderer.drawText(titleText, titlePos, {1, 0.8f, 0, m_fadeAlpha}, 36 * scale);
+    CatEngine::Renderer::UIPass::TextDesc titleText;
+    titleText.text = titleStr.c_str();
+    titleText.x = centerX - 200.0F;
+    titleText.y = centerY - 100.0F;
+    titleText.fontSize = 42.0F * titleScale;
+    titleText.r = 1.0F;
+    titleText.g = 0.8F;
+    titleText.b = 0.0F;
+    titleText.a = m_fadeAlpha;
+    titleText.depth = 0.1F;
+    titleText.fontAtlas = nullptr;
+    uiPass.DrawText(titleText);
 
-    // Stats display
-    vec2 statsPos = {screenWidth / 2 - 100, screenHeight / 2};
+    // Stats
+    std::string killsStr = "Enemies Killed: " + std::to_string(m_enemiesKilled);
+    CatEngine::Renderer::UIPass::TextDesc killsText;
+    killsText.text = killsStr.c_str();
+    killsText.x = centerX - 100.0F;
+    killsText.y = centerY - 30.0F;
+    killsText.fontSize = 20.0F;
+    killsText.r = 1.0F;
+    killsText.g = 1.0F;
+    killsText.b = 1.0F;
+    killsText.a = m_fadeAlpha;
+    killsText.depth = 0.1F;
+    killsText.fontAtlas = nullptr;
+    uiPass.DrawText(killsText);
 
-    std::string killsText = "Enemies Killed: " + std::to_string(m_enemiesKilled);
-    renderer.drawText(killsText, statsPos, {1, 1, 1, m_fadeAlpha}, 20);
-
-    vec2 timePos = {statsPos[0], statsPos[1] + 30};
-    std::string timeText = "Time: " + std::to_string((int)m_timeTaken) + "s";
-    renderer.drawText(timeText, timePos, {1, 1, 1, m_fadeAlpha}, 20);
+    std::string timeStr = "Time: " + std::to_string(static_cast<int>(m_timeTaken)) + "s";
+    CatEngine::Renderer::UIPass::TextDesc timeText;
+    timeText.text = timeStr.c_str();
+    timeText.x = centerX - 50.0F;
+    timeText.y = centerY;
+    timeText.fontSize = 20.0F;
+    timeText.r = 1.0F;
+    timeText.g = 1.0F;
+    timeText.b = 1.0F;
+    timeText.a = m_fadeAlpha;
+    timeText.depth = 0.1F;
+    timeText.fontAtlas = nullptr;
+    uiPass.DrawText(timeText);
 
     // Next wave preview
-    vec2 nextWavePos = {statsPos[0], statsPos[1] + 80};
-    std::string nextWaveText = "Next Wave: " + std::to_string(m_nextWaveEnemyCount) + " Enemies";
-    renderer.drawText(nextWaveText, nextWavePos, {0.8f, 0.8f, 1, m_fadeAlpha}, 22);
+    std::string nextStr = "Next Wave: " + std::to_string(m_nextWaveEnemyCount) + " Enemies";
+    CatEngine::Renderer::UIPass::TextDesc nextText;
+    nextText.text = nextStr.c_str();
+    nextText.x = centerX - 120.0F;
+    nextText.y = centerY + 50.0F;
+    nextText.fontSize = 18.0F;
+    nextText.r = 0.8F;
+    nextText.g = 0.8F;
+    nextText.b = 1.0F;
+    nextText.a = m_fadeAlpha;
+    nextText.depth = 0.1F;
+    nextText.fontAtlas = nullptr;
+    uiPass.DrawText(nextText);
 
-    // Prompt to continue
-    vec2 promptPos = {screenWidth / 2 - 120, screenHeight / 2 + 150};
-    float promptAlpha = (std::sin(m_animationTimer * 4.0f) + 1.0f) * 0.5f * m_fadeAlpha;
-    renderer.drawText("Press SPACE to continue", promptPos,
-                     {1, 1, 1, promptAlpha}, 18);
-    */
+    // Prompt with blinking effect
+    float promptAlpha = (std::sin(m_animationTimer * 4.0F) + 1.0F) * 0.5F * m_fadeAlpha;
+
+    CatEngine::Renderer::UIPass::TextDesc promptText;
+    promptText.text = "Press SPACE to continue";
+    promptText.x = centerX - 120.0F;
+    promptText.y = centerY + 100.0F;
+    promptText.fontSize = 16.0F;
+    promptText.r = 0.8F;
+    promptText.g = 0.8F;
+    promptText.b = 0.8F;
+    promptText.a = promptAlpha;
+    promptText.depth = 0.1F;
+    promptText.fontAtlas = nullptr;
+    uiPass.DrawText(promptText);
 }
 
-void WavePopup::renderCountdown(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void WavePopup::renderCountdown(CatEngine::Renderer::UIPass& uiPass) {
+    float centerX = static_cast<float>(m_screenWidth) / 2.0F;
+    float centerY = static_cast<float>(m_screenHeight) / 2.0F;
+
     // Semi-transparent overlay
-    renderer.drawRect({0, 0}, {screenWidth, screenHeight},
-                     {0, 0, 0, 0.5f * m_fadeAlpha});
+    CatEngine::Renderer::UIPass::QuadDesc overlay;
+    overlay.x = 0.0F;
+    overlay.y = 0.0F;
+    overlay.width = static_cast<float>(m_screenWidth);
+    overlay.height = static_cast<float>(m_screenHeight);
+    overlay.r = 0.0F;
+    overlay.g = 0.0F;
+    overlay.b = 0.0F;
+    overlay.a = 0.5F * m_fadeAlpha;
+    overlay.depth = 0.0F;
+    overlay.texture = nullptr;
+    uiPass.DrawQuad(overlay);
 
-    // Wave number display
-    vec2 wavePos = {screenWidth / 2 - 100, screenHeight / 2 - 80};
-    std::string waveText = "WAVE " + std::to_string(m_startingWave);
-    renderer.drawText(waveText, wavePos, {1, 0.8f, 0, m_fadeAlpha}, 42);
+    // Wave title
+    std::string waveStr = "WAVE " + std::to_string(m_startingWave);
+    CatEngine::Renderer::UIPass::TextDesc waveText;
+    waveText.text = waveStr.c_str();
+    waveText.x = centerX - 80.0F;
+    waveText.y = centerY - 80.0F;
+    waveText.fontSize = 42.0F;
+    waveText.r = 1.0F;
+    waveText.g = 0.8F;
+    waveText.b = 0.0F;
+    waveText.a = m_fadeAlpha;
+    waveText.depth = 0.1F;
+    waveText.fontAtlas = nullptr;
+    uiPass.DrawText(waveText);
 
-    // Enemy count
-    vec2 enemyPos = {screenWidth / 2 - 80, screenHeight / 2 - 20};
-    std::string enemyText = std::to_string(m_waveEnemyCount) + " Enemies Incoming";
-    renderer.drawText(enemyText, enemyPos, {1, 0.5f, 0, m_fadeAlpha}, 24);
+    // Enemy count subtitle
+    std::string enemyStr = std::to_string(m_waveEnemyCount) + " Enemies Incoming";
+    CatEngine::Renderer::UIPass::TextDesc enemyText;
+    enemyText.text = enemyStr.c_str();
+    enemyText.x = centerX - 100.0F;
+    enemyText.y = centerY - 30.0F;
+    enemyText.fontSize = 24.0F;
+    enemyText.r = 1.0F;
+    enemyText.g = 0.6F;
+    enemyText.b = 0.2F;
+    enemyText.a = m_fadeAlpha;
+    enemyText.depth = 0.1F;
+    enemyText.fontAtlas = nullptr;
+    uiPass.DrawText(enemyText);
 
-    // Countdown timer
+    // Countdown number
     float remainingTime = m_countdownDuration - m_countdownTimer;
-    int countdown = static_cast<int>(std::ceil(remainingTime));
+    int countdownNum = static_cast<int>(std::ceil(remainingTime));
+    if (countdownNum < 0) countdownNum = 0;
 
-    vec2 countdownPos = {screenWidth / 2 - 30, screenHeight / 2 + 40};
-    std::string countdownText = std::to_string(countdown);
-
-    // Scale countdown number with pulsing effect
     float pulsePhase = remainingTime - std::floor(remainingTime);
-    float countdownScale = 1.5f + (1.0f - pulsePhase) * 0.5f;
+    float countdownScale = 1.5F + ((1.0F - pulsePhase) * 0.5F);
 
-    vec4 countdownColor = {1, 1, 1, m_fadeAlpha};
-    if (countdown <= 3) {
-        // Flash red for last 3 seconds
-        countdownColor = {1, 0.2f, 0.2f, m_fadeAlpha};
+    // Color changes to red in last 3 seconds
+    float countR = 1.0F;
+    float countG = 1.0F;
+    float countB = 1.0F;
+    if (remainingTime <= 3.0F) {
+        countR = 1.0F;
+        countG = 0.2F;
+        countB = 0.2F;
     }
 
-    renderer.drawText(countdownText, countdownPos, countdownColor,
-                     static_cast<int>(48 * countdownScale));
+    std::string countStr = std::to_string(countdownNum);
+    CatEngine::Renderer::UIPass::TextDesc countText;
+    countText.text = countStr.c_str();
+    countText.x = centerX - (20.0F * countdownScale);
+    countText.y = centerY + 20.0F;
+    countText.fontSize = 48.0F * countdownScale;
+    countText.r = countR;
+    countText.g = countG;
+    countText.b = countB;
+    countText.a = m_fadeAlpha;
+    countText.depth = 0.2F;
+    countText.fontAtlas = nullptr;
+    uiPass.DrawText(countText);
 
-    // Hint text
-    vec2 hintPos = {screenWidth / 2 - 100, screenHeight / 2 + 120};
-    renderer.drawText("Press SPACE to skip", hintPos,
-                     {0.6f, 0.6f, 0.6f, m_fadeAlpha * 0.7f}, 16);
-    */
+    // Skip hint
+    CatEngine::Renderer::UIPass::TextDesc skipText;
+    skipText.text = "Press SPACE to skip";
+    skipText.x = centerX - 90.0F;
+    skipText.y = centerY + 120.0F;
+    skipText.fontSize = 14.0F;
+    skipText.r = 0.6F;
+    skipText.g = 0.6F;
+    skipText.b = 0.6F;
+    skipText.a = m_fadeAlpha * 0.7F;
+    skipText.depth = 0.1F;
+    skipText.fontAtlas = nullptr;
+    uiPass.DrawText(skipText);
 }
 
 void WavePopup::updateAnimation(float deltaTime) {
     m_animationTimer += deltaTime;
 
     // Fade in effect
-    float fadeInDuration = 0.3f;
-    if (m_displayTimer < fadeInDuration || m_countdownTimer < fadeInDuration) {
-        float currentTimer = (m_state == PopupState::WaveComplete) ?
-                            m_displayTimer : m_countdownTimer;
-        m_fadeAlpha = std::min(currentTimer / fadeInDuration, 1.0f);
+    float fadeInDuration = 0.3F;
+    float currentTimer = (m_state == PopupState::WaveComplete) ? m_displayTimer : m_countdownTimer;
+
+    if (currentTimer < fadeInDuration) {
+        m_fadeAlpha = std::min(currentTimer / fadeInDuration, 1.0F);
     } else {
-        m_fadeAlpha = 1.0f;
+        m_fadeAlpha = 1.0F;
     }
 }
 

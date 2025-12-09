@@ -2,7 +2,7 @@
 #define GAME_UI_MINIMAP_UI_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include "../../engine/math/Vector.hpp"
 #include <string>
 #include <vector>
@@ -17,11 +17,11 @@ struct MinimapIcon {
     std::string id;
     Engine::vec3 worldPosition;
     std::string iconPath;
-    Engine::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};
-    float scale = 1.0f;
+    Engine::vec4 color = {1.0F, 1.0F, 1.0F, 1.0F};
+    float scale = 1.0F;
     bool isVisible = true;
     bool rotateWithIcon = false;  // For directional icons
-    float rotation = 0.0f;        // Rotation in degrees
+    float rotation = 0.0F;        // Rotation in degrees
 };
 
 /**
@@ -31,7 +31,7 @@ struct FogCell {
     int x;
     int y;
     bool revealed = false;
-    float revealTime = 0.0f;  // Time when revealed (for fade-in effect)
+    float revealTime = 0.0F;  // Time when revealed (for fade-in effect)
 };
 
 /**
@@ -73,9 +73,11 @@ public:
 
     /**
      * @brief Render minimap UI
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     // ========================================================================
     // Configuration
@@ -300,7 +302,7 @@ public:
      * @param color Ping color
      * @param duration Ping duration in seconds
      */
-    void createPing(const Engine::vec3& worldPos, const Engine::vec4& color, float duration = 3.0f);
+    void createPing(const Engine::vec3& worldPos, const Engine::vec4& color, float duration = 3.0F);
 
     /**
      * @brief Clear all pings
@@ -316,38 +318,38 @@ private:
         Engine::vec4 color;
         float lifetime;
         float maxLifetime;
-        float pulsePhase = 0.0f;
+        float pulsePhase = 0.0F;
     };
 
     /**
      * @brief Render minimap background
      */
-    void renderBackground(CatEngine::Renderer::Renderer& renderer);
+    void renderBackground(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render fog of war
      */
-    void renderFogOfWar(CatEngine::Renderer::Renderer& renderer);
+    void renderFogOfWar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render minimap icons
      */
-    void renderIcons(CatEngine::Renderer::Renderer& renderer);
+    void renderIcons(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render player indicator
      */
-    void renderPlayer(CatEngine::Renderer::Renderer& renderer);
+    void renderPlayer(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render pings
      */
-    void renderPings(CatEngine::Renderer::Renderer& renderer);
+    void renderPings(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render minimap border
      */
-    void renderBorder(CatEngine::Renderer::Renderer& renderer);
+    void renderBorder(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Convert world position to minimap position
@@ -380,7 +382,12 @@ private:
     /**
      * @brief Get icon prefix for category
      */
-    std::string getIconPrefix(const std::string& category) const;
+    static std::string getIconPrefix(const std::string& category);
+
+    /**
+     * @brief Check if icon category is visible
+     */
+    bool isIconCategoryVisible(const std::string& iconId) const;
 
     Engine::Input& m_input;
 
@@ -397,30 +404,34 @@ private:
     bool m_visible = true;
     bool m_rotateWithPlayer = true;
     bool m_isCircular = true;
-    float m_radius = 100.0f;
-    float m_zoom = 1.0f;
-    float m_minZoom = 0.5f;
-    float m_maxZoom = 4.0f;
-    float m_opacity = 0.8f;
+    float m_radius = 100.0F;
+    float m_zoom = 1.0F;
+    float m_minZoom = 0.5F;
+    float m_maxZoom = 4.0F;
+    float m_opacity = 0.8F;
 
     // Position (normalized screen coordinates)
-    Engine::vec2 m_screenPos = {0.9f, 0.1f};  // Top right
+    Engine::vec2 m_screenPos = {0.9F, 0.1F};  // Top right
 
     // Player state
     Engine::vec3 m_playerPosition = Engine::vec3::zero();
-    float m_playerYaw = 0.0f;
+    float m_playerYaw = 0.0F;
 
     // Fog of war
     bool m_fogOfWarEnabled = true;
-    float m_fogCellSize = 10.0f;  // Size of each fog cell in world units
+    float m_fogCellSize = 10.0F;  // Size of each fog cell in world units
     std::unordered_map<uint64_t, FogCell> m_fogCells;
 
     // Pings
     std::vector<Ping> m_pings;
 
     // Zoom animation
-    float m_targetZoom = 1.0f;
-    float m_zoomSpeed = 5.0f;
+    float m_targetZoom = 1.0F;
+    float m_zoomSpeed = 5.0F;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
 
     bool m_initialized = false;
 };

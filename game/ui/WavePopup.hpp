@@ -2,7 +2,7 @@
 #define GAME_UI_WAVE_POPUP_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include <functional>
 #include <cstdint>
 #include <string>
@@ -46,9 +46,11 @@ public:
 
     /**
      * @brief Render wave popup
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     /**
      * @brief Handle input
@@ -86,13 +88,13 @@ public:
     /**
      * @brief Check if popup is currently visible
      */
-    bool isVisible() const { return m_isVisible; }
+    [[nodiscard]] bool isVisible() const { return m_isVisible; }
 
     /**
      * @brief Set dismiss callback
      */
     void setDismissCallback(DismissCallback callback) {
-        m_dismissCallback = callback;
+        m_dismissCallback = std::move(callback);
     }
 
     /**
@@ -118,12 +120,12 @@ private:
     /**
      * @brief Render wave complete screen
      */
-    void renderWaveComplete(CatEngine::Renderer::Renderer& renderer);
+    void renderWaveComplete(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render countdown screen
      */
-    void renderCountdown(CatEngine::Renderer::Renderer& renderer);
+    void renderCountdown(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Update animation timers
@@ -140,25 +142,29 @@ private:
     // Wave complete data
     uint32_t m_completedWave = 0;
     uint32_t m_enemiesKilled = 0;
-    float m_timeTaken = 0.0f;
+    float m_timeTaken = 0.0F;
     uint32_t m_nextWaveEnemyCount = 0;
 
     // Countdown data
     uint32_t m_startingWave = 0;
     uint32_t m_waveEnemyCount = 0;
-    float m_countdownTimer = 0.0f;
-    float m_countdownDuration = 10.0f;
+    float m_countdownTimer = 0.0F;
+    float m_countdownDuration = 10.0F;
 
     // Timing
-    float m_displayTimer = 0.0f;
-    float m_autoDismissDelay = 5.0f;
+    float m_displayTimer = 0.0F;
+    float m_autoDismissDelay = 5.0F;
 
     // Animation
-    float m_animationTimer = 0.0f;
-    float m_fadeAlpha = 0.0f;
+    float m_animationTimer = 0.0F;
+    float m_fadeAlpha = 0.0F;
 
     // Callback
     DismissCallback m_dismissCallback;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
 
     bool m_initialized = false;
 };

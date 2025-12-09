@@ -2,10 +2,11 @@
 #define GAME_UI_MAIN_MENU_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include <functional>
 #include <vector>
 #include <string>
+#include <array>
 
 namespace Game {
 
@@ -45,9 +46,11 @@ public:
 
     /**
      * @brief Render main menu
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     /**
      * @brief Handle input
@@ -62,28 +65,28 @@ public:
      * @brief Set callback for Start Game button
      */
     void setStartGameCallback(ButtonCallback callback) {
-        m_startGameCallback = callback;
+        m_startGameCallback = std::move(callback);
     }
 
     /**
      * @brief Set callback for Continue button
      */
     void setContinueCallback(ButtonCallback callback) {
-        m_continueCallback = callback;
+        m_continueCallback = std::move(callback);
     }
 
     /**
      * @brief Set callback for Settings button
      */
     void setSettingsCallback(ButtonCallback callback) {
-        m_settingsCallback = callback;
+        m_settingsCallback = std::move(callback);
     }
 
     /**
      * @brief Set callback for Quit button
      */
     void setQuitCallback(ButtonCallback callback) {
-        m_quitCallback = callback;
+        m_quitCallback = std::move(callback);
     }
 
     // ========================================================================
@@ -110,8 +113,8 @@ private:
         std::string text;
         bool enabled = true;
         bool hovered = false;
-        std::array<float, 2> position;
-        std::array<float, 2> size;
+        std::array<float, 2> position = {0.0F, 0.0F};
+        std::array<float, 2> size = {0.0F, 0.0F};
         ButtonCallback callback;
     };
 
@@ -123,27 +126,27 @@ private:
     /**
      * @brief Render background
      */
-    void renderBackground(CatEngine::Renderer::Renderer& renderer);
+    void renderBackground(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render title
      */
-    void renderTitle(CatEngine::Renderer::Renderer& renderer);
+    void renderTitle(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render buttons
      */
-    void renderButtons(CatEngine::Renderer::Renderer& renderer);
+    void renderButtons(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render version info
      */
-    void renderVersion(CatEngine::Renderer::Renderer& renderer);
+    void renderVersion(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Check if mouse is over button
      */
-    bool isMouseOverButton(const MenuButton& button);
+    bool isMouseOverButton(const MenuButton& button) const;
 
     Engine::Input& m_input;
     GameAudio& m_audio;
@@ -164,8 +167,12 @@ private:
     std::string m_versionString = "v1.0.0";
 
     // Animation
-    float m_titleAnimTimer = 0.0f;
-    float m_backgroundAnimTimer = 0.0f;
+    float m_titleAnimTimer = 0.0F;
+    float m_backgroundAnimTimer = 0.0F;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
 
     bool m_initialized = false;
 };

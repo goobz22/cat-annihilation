@@ -1,6 +1,7 @@
 #include "UIPanel.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace Engine::UI {
 
@@ -187,8 +188,8 @@ void UIPanel::ApplyGridLayout() {
     float availableWidth = m_size.x - m_padding.left - m_padding.right;
     float cellWidth = (availableWidth - (m_gridLayout.columns - 1) * m_gridLayout.spacing) / m_gridLayout.columns;
 
-    u32 col = 0;
-    u32 row = 0;
+    uint32_t col = 0;
+    uint32_t row = 0;
     float maxRowHeight = 0.0f;
 
     for (auto& child : m_children) {

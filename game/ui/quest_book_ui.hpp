@@ -354,6 +354,10 @@ private:
     float m_windowX = 0.0f;  // Calculated to center
     float m_windowY = 0.0f;  // Calculated to center
 
+    // Screen dimensions (updated from renderer)
+    float m_screenWidth = 1920.0f;
+    float m_screenHeight = 1080.0f;
+
     float m_questListWidth = 400.0f;
     float m_detailsPanelWidth = 0.0f;  // Calculated
 

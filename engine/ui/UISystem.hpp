@@ -7,6 +7,7 @@
 #include "UIButton.hpp"
 #include "UIPanel.hpp"
 #include "../core/Input.hpp"
+#include "../core/Types.hpp"
 #include <memory>
 #include <vector>
 #include <functional>
@@ -17,6 +18,8 @@ namespace CatEngine::Renderer {
 }
 
 namespace Engine::UI {
+
+using Engine::u32;
 
 /**
  * @brief UI System - manages widget tree, input, and rendering
@@ -186,6 +189,20 @@ private:
      * @brief Draw UIText widget
      */
     void DrawTextWidget(UIText* text, CatEngine::Renderer::UIPass* uiPass);
+
+    /**
+     * @brief Recursively collect all focusable widgets
+     * @param widget Starting widget
+     * @param out Output vector for focusable widgets
+     */
+    void CollectFocusableWidgets(UIWidget* widget, std::vector<UIWidget*>& out);
+
+    /**
+     * @brief Check if a widget is focusable
+     * @param widget Widget to check
+     * @return true if widget can receive focus
+     */
+    bool IsWidgetFocusable(UIWidget* widget) const;
 
     // Input system
     Input* m_input;

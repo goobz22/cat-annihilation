@@ -2,7 +2,7 @@
 #define GAME_UI_HUD_UI_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include "../../engine/math/Vector.hpp"
 #include "compass_ui.hpp"
 #include "minimap_ui.hpp"
@@ -161,9 +161,11 @@ public:
 
     /**
      * @brief Render HUD
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     // ========================================================================
     // Components Access
@@ -378,67 +380,67 @@ private:
     /**
      * @brief Render health bar
      */
-    void renderHealthBar(CatEngine::Renderer::Renderer& renderer);
+    void renderHealthBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render mana bar
      */
-    void renderManaBar(CatEngine::Renderer::Renderer& renderer);
+    void renderManaBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render stamina bar
      */
-    void renderStaminaBar(CatEngine::Renderer::Renderer& renderer);
+    void renderStaminaBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render quest tracker
      */
-    void renderQuestTracker(CatEngine::Renderer::Renderer& renderer);
+    void renderQuestTracker(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render spell slots
      */
-    void renderSpellSlots(CatEngine::Renderer::Renderer& renderer);
+    void renderSpellSlots(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render buff bar
      */
-    void renderBuffBar(CatEngine::Renderer::Renderer& renderer);
+    void renderBuffBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render experience bar
      */
-    void renderExperienceBar(CatEngine::Renderer::Renderer& renderer);
+    void renderExperienceBar(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render level and currency
      */
-    void renderLevelAndCurrency(CatEngine::Renderer::Renderer& renderer);
+    void renderLevelAndCurrency(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render crosshair
      */
-    void renderCrosshair(CatEngine::Renderer::Renderer& renderer);
+    void renderCrosshair(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render FPS counter
      */
-    void renderFPS(CatEngine::Renderer::Renderer& renderer);
+    void renderFPS(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render damage/heal numbers
      */
-    void renderDamageNumbers(CatEngine::Renderer::Renderer& renderer);
+    void renderDamageNumbers(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render damage indicators
      */
-    void renderDamageIndicators(CatEngine::Renderer::Renderer& renderer);
+    void renderDamageIndicators(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render low health warning
      */
-    void renderLowHealthWarning(CatEngine::Renderer::Renderer& renderer);
+    void renderLowHealthWarning(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Update damage numbers animation
@@ -519,6 +521,10 @@ private:
     float m_lowHealthPulse = 0.0f;
 
     bool m_initialized = false;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
 };
 
 } // namespace Game

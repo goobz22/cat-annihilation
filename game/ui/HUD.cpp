@@ -22,8 +22,8 @@ bool HUD::initialize() {
     }
 
     // Initialize with default values
-    m_currentHealth = 100.0f;
-    m_maxHealth = 100.0f;
+    m_currentHealth = 100.0F;
+    m_maxHealth = 100.0F;
     m_currentWave = 1;
     m_remainingEnemies = 0;
     m_totalEnemies = 0;
@@ -58,50 +58,60 @@ void HUD::update(float deltaTime) {
     // Update damage numbers
     updateDamageNumbers(deltaTime);
 
+    // Update notifications
+    updateNotifications(deltaTime);
+
     // Update low health warning pulse
     if (m_lowHealthWarning) {
-        m_lowHealthPulse += deltaTime * 4.0f; // Pulse speed
+        m_lowHealthPulse += deltaTime * 4.0F;
     }
 
     // Update combo display timer
     if (m_combo > 0) {
         m_comboDisplayTime += deltaTime;
     } else {
-        m_comboDisplayTime = 0.0f;
+        m_comboDisplayTime = 0.0F;
     }
 }
 
-void HUD::render(CatEngine::Renderer::Renderer& renderer) {
+void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight) {
     if (!m_initialized) {
         return;
     }
 
+    // Cache screen dimensions
+    m_screenWidth = screenWidth;
+    m_screenHeight = screenHeight;
+
     // Render low health warning first (background layer)
     if (m_lowHealthWarning) {
-        renderLowHealthWarning(renderer);
+        renderLowHealthWarning(uiPass);
     }
 
     // Render damage indicators
-    renderDamageIndicators(renderer);
+    renderDamageIndicators(uiPass);
 
     // Render main HUD elements
-    renderHealthBar(renderer);
-    renderWaveCounter(renderer);
-    renderEnemyCounter(renderer);
-    renderScore(renderer);
+    renderHealthBar(uiPass);
+    renderWaveCounter(uiPass);
+    renderEnemyCounter(uiPass);
+    renderScore(uiPass);
 
     // Render crosshair (center of screen)
     if (m_showCrosshair) {
-        renderCrosshair(renderer);
+        renderCrosshair(uiPass);
     }
 
     // Render damage numbers
-    renderDamageNumbers(renderer);
+    renderDamageNumbers(uiPass);
 
     // Render FPS counter (if enabled)
     if (m_showFPS) {
-        renderFPS(renderer);
+        renderFPS(uiPass);
     }
+
+    // Render notifications
+    renderNotifications(uiPass);
 }
 
 // ============================================================================
@@ -114,7 +124,7 @@ void HUD::setHealth(float current, float max) {
 
     // Auto-enable low health warning below 30%
     float healthPercent = current / max;
-    if (healthPercent < 0.3f && healthPercent > 0.0f) {
+    if (healthPercent < 0.3F && healthPercent > 0.0F) {
         setLowHealthWarning(true);
     } else {
         setLowHealthWarning(false);
@@ -137,7 +147,7 @@ void HUD::setScore(uint32_t score) {
 void HUD::setCombo(uint32_t combo) {
     m_combo = combo;
     if (combo > 0) {
-        m_comboDisplayTime = 0.0f; // Reset display timer
+        m_comboDisplayTime = 0.0F;
     }
 }
 
@@ -149,7 +159,7 @@ void HUD::showDamageIndicator(const std::array<float, 2>& direction, float inten
     DamageIndicator indicator;
     indicator.direction = direction;
     indicator.intensity = intensity;
-    indicator.lifetime = 0.0f;
+    indicator.lifetime = 0.0F;
 
     m_damageIndicators.push_back(indicator);
 }
@@ -160,8 +170,8 @@ void HUD::showDamageNumber(float damage,
     DamageNumber number;
     number.amount = damage;
     number.position = screenPosition;
-    number.velocity = {0.0f, -50.0f}; // Float upward
-    number.lifetime = 0.0f;
+    number.velocity = {0.0F, -50.0F};
+    number.lifetime = 0.0F;
     number.isCritical = isCritical;
     number.isHeal = false;
 
@@ -172,8 +182,8 @@ void HUD::showHealNumber(float amount, const std::array<float, 2>& screenPositio
     DamageNumber number;
     number.amount = amount;
     number.position = screenPosition;
-    number.velocity = {0.0f, -50.0f}; // Float upward
-    number.lifetime = 0.0f;
+    number.velocity = {0.0F, -50.0F};
+    number.lifetime = 0.0F;
     number.isCritical = false;
     number.isHeal = true;
 
@@ -183,7 +193,7 @@ void HUD::showHealNumber(float amount, const std::array<float, 2>& screenPositio
 void HUD::setLowHealthWarning(bool enable) {
     m_lowHealthWarning = enable;
     if (enable) {
-        m_lowHealthPulse = 0.0f;
+        m_lowHealthPulse = 0.0F;
     }
 }
 
@@ -195,150 +205,287 @@ void HUD::setFPS(float fps) {
 // Private Rendering Methods
 // ============================================================================
 
-void HUD::renderHealthBar(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    // For now, this is a placeholder showing the logic
-
-    /*
+void HUD::renderHealthBar(CatEngine::Renderer::UIPass& uiPass) {
     float healthPercent = m_currentHealth / m_maxHealth;
 
     // Health bar background (top-left)
-    vec2 barPos = {20, 20};
-    vec2 barSize = {200, 30};
-
-    renderer.drawRect(barPos, barSize, {0.2f, 0.2f, 0.2f, 0.8f});
+    CatEngine::Renderer::UIPass::QuadDesc bgQuad;
+    bgQuad.x = 20.0F;
+    bgQuad.y = 20.0F;
+    bgQuad.width = 200.0F;
+    bgQuad.height = 30.0F;
+    bgQuad.r = 0.2F;
+    bgQuad.g = 0.2F;
+    bgQuad.b = 0.2F;
+    bgQuad.a = 0.8F;
+    bgQuad.depth = 0.0F;
+    uiPass.DrawQuad(bgQuad);
 
     // Health bar fill
-    vec2 fillSize = {barSize.x * healthPercent, barSize.y};
-    vec4 healthColor = healthPercent > 0.5f ?
-        vec4{0.0f, 0.8f, 0.0f, 1.0f} :  // Green
-        vec4{0.8f, 0.0f, 0.0f, 1.0f};   // Red
-
-    renderer.drawRect(barPos, fillSize, healthColor);
+    CatEngine::Renderer::UIPass::QuadDesc fillQuad;
+    fillQuad.x = 20.0F;
+    fillQuad.y = 20.0F;
+    fillQuad.width = 200.0F * healthPercent;
+    fillQuad.height = 30.0F;
+    if (healthPercent > 0.5F) {
+        fillQuad.r = 0.0F;
+        fillQuad.g = 0.8F;
+        fillQuad.b = 0.0F;
+    } else {
+        fillQuad.r = 0.8F;
+        fillQuad.g = 0.0F;
+        fillQuad.b = 0.0F;
+    }
+    fillQuad.a = 1.0F;
+    fillQuad.depth = 0.1F;
+    uiPass.DrawQuad(fillQuad);
 
     // Health text
-    std::string healthText = std::to_string((int)m_currentHealth) + " / " +
-                             std::to_string((int)m_maxHealth);
-    renderer.drawText(healthText, barPos + vec2{5, 5}, {1, 1, 1, 1});
-    */
+    std::string healthText = std::to_string(static_cast<int>(m_currentHealth)) + " / " +
+                             std::to_string(static_cast<int>(m_maxHealth));
+    CatEngine::Renderer::UIPass::TextDesc textDesc;
+    textDesc.text = healthText.c_str();
+    textDesc.x = 25.0F;
+    textDesc.y = 25.0F;
+    textDesc.fontSize = 16.0F;
+    textDesc.r = 1.0F;
+    textDesc.g = 1.0F;
+    textDesc.b = 1.0F;
+    textDesc.a = 1.0F;
+    textDesc.depth = 0.2F;
+    uiPass.DrawText(textDesc);
 }
 
-void HUD::renderWaveCounter(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void HUD::renderWaveCounter(CatEngine::Renderer::UIPass& uiPass) {
     std::string waveText = "WAVE " + std::to_string(m_currentWave);
-    vec2 position = {screenWidth / 2 - 50, 20}; // Top center
-    renderer.drawText(waveText, position, {1, 1, 0, 1}, 24); // Yellow, size 24
-    */
+    CatEngine::Renderer::UIPass::TextDesc textDesc;
+    textDesc.text = waveText.c_str();
+    textDesc.x = (static_cast<float>(m_screenWidth) / 2.0F) - 50.0F;
+    textDesc.y = 20.0F;
+    textDesc.fontSize = 24.0F;
+    textDesc.r = 1.0F;
+    textDesc.g = 1.0F;
+    textDesc.b = 0.0F;
+    textDesc.a = 1.0F;
+    textDesc.depth = 0.0F;
+    uiPass.DrawText(textDesc);
 }
 
-void HUD::renderEnemyCounter(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void HUD::renderEnemyCounter(CatEngine::Renderer::UIPass& uiPass) {
     std::string enemyText = "Enemies: " + std::to_string(m_remainingEnemies) +
                            " / " + std::to_string(m_totalEnemies);
-    vec2 position = {screenWidth - 200, 20}; // Top right
-    renderer.drawText(enemyText, position, {1, 0.5f, 0, 1}, 18); // Orange
-    */
+    CatEngine::Renderer::UIPass::TextDesc textDesc;
+    textDesc.text = enemyText.c_str();
+    textDesc.x = static_cast<float>(m_screenWidth) - 200.0F;
+    textDesc.y = 20.0F;
+    textDesc.fontSize = 18.0F;
+    textDesc.r = 1.0F;
+    textDesc.g = 0.5F;
+    textDesc.b = 0.0F;
+    textDesc.a = 1.0F;
+    textDesc.depth = 0.0F;
+    uiPass.DrawText(textDesc);
 }
 
-void HUD::renderScore(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void HUD::renderScore(CatEngine::Renderer::UIPass& uiPass) {
     std::string scoreText = "Score: " + std::to_string(m_score);
-    vec2 position = {20, 60}; // Below health bar
-    renderer.drawText(scoreText, position, {1, 1, 1, 1}, 18);
+    CatEngine::Renderer::UIPass::TextDesc textDesc;
+    textDesc.text = scoreText.c_str();
+    textDesc.x = 20.0F;
+    textDesc.y = 60.0F;
+    textDesc.fontSize = 18.0F;
+    textDesc.r = 1.0F;
+    textDesc.g = 1.0F;
+    textDesc.b = 1.0F;
+    textDesc.a = 1.0F;
+    textDesc.depth = 0.0F;
+    uiPass.DrawText(textDesc);
 
     // Render combo if active
     if (m_combo > 1 && m_comboDisplayTime < m_comboFadeTime) {
-        float fadeAlpha = 1.0f - (m_comboDisplayTime / m_comboFadeTime);
+        float fadeAlpha = 1.0F - (m_comboDisplayTime / m_comboFadeTime);
         std::string comboText = "COMBO x" + std::to_string(m_combo);
-        vec2 comboPos = {20, 90};
-        renderer.drawText(comboText, comboPos, {1, 0.8f, 0, fadeAlpha}, 22);
+        CatEngine::Renderer::UIPass::TextDesc comboDesc;
+        comboDesc.text = comboText.c_str();
+        comboDesc.x = 20.0F;
+        comboDesc.y = 90.0F;
+        comboDesc.fontSize = 22.0F;
+        comboDesc.r = 1.0F;
+        comboDesc.g = 0.8F;
+        comboDesc.b = 0.0F;
+        comboDesc.a = fadeAlpha;
+        comboDesc.depth = 0.0F;
+        uiPass.DrawText(comboDesc);
     }
-    */
 }
 
-void HUD::renderCrosshair(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
-    vec2 center = {screenWidth / 2, screenHeight / 2};
-    float size = 10.0f;
-    float thickness = 2.0f;
-    vec4 color = {1, 1, 1, 0.8f};
+void HUD::renderCrosshair(CatEngine::Renderer::UIPass& uiPass) {
+    float centerX = static_cast<float>(m_screenWidth) / 2.0F;
+    float centerY = static_cast<float>(m_screenHeight) / 2.0F;
+    float size = 10.0F;
+    float thickness = 2.0F;
 
-    // Draw cross
-    renderer.drawLine({center.x - size, center.y},
-                     {center.x + size, center.y},
-                     color, thickness);
-    renderer.drawLine({center.x, center.y - size},
-                     {center.x, center.y + size},
-                     color, thickness);
-    */
+    // Horizontal line
+    CatEngine::Renderer::UIPass::QuadDesc hLine;
+    hLine.x = centerX - size;
+    hLine.y = centerY - (thickness / 2.0F);
+    hLine.width = size * 2.0F;
+    hLine.height = thickness;
+    hLine.r = 1.0F;
+    hLine.g = 1.0F;
+    hLine.b = 1.0F;
+    hLine.a = 0.8F;
+    hLine.depth = 0.0F;
+    uiPass.DrawQuad(hLine);
+
+    // Vertical line
+    CatEngine::Renderer::UIPass::QuadDesc vLine;
+    vLine.x = centerX - (thickness / 2.0F);
+    vLine.y = centerY - size;
+    vLine.width = thickness;
+    vLine.height = size * 2.0F;
+    vLine.r = 1.0F;
+    vLine.g = 1.0F;
+    vLine.b = 1.0F;
+    vLine.a = 0.8F;
+    vLine.depth = 0.0F;
+    uiPass.DrawQuad(vLine);
 }
 
-void HUD::renderDamageIndicators(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void HUD::renderDamageIndicators(CatEngine::Renderer::UIPass& uiPass) {
+    float screenCenterX = static_cast<float>(m_screenWidth) / 2.0F;
+    float screenCenterY = static_cast<float>(m_screenHeight) / 2.0F;
+    float edgeDistance = std::min(static_cast<float>(m_screenWidth),
+                                   static_cast<float>(m_screenHeight)) * 0.4F;
+
     for (const auto& indicator : m_damageIndicators) {
-        float alpha = 1.0f - (indicator.lifetime / indicator.maxLifetime);
+        float alpha = 1.0F - (indicator.lifetime / indicator.maxLifetime);
         alpha *= indicator.intensity;
 
-        // Draw directional damage indicator at screen edge
-        vec2 edgePos = calculateEdgePosition(indicator.direction);
-        renderer.drawTriangle(edgePos, indicator.direction,
-                            {1, 0, 0, alpha}, 30.0f);
+        // Calculate edge position based on direction
+        float angle = std::atan2(indicator.direction[1], indicator.direction[0]);
+        float edgeX = screenCenterX + std::cos(angle) * edgeDistance;
+        float edgeY = screenCenterY + std::sin(angle) * edgeDistance;
+
+        // Draw damage indicator as red quad
+        CatEngine::Renderer::UIPass::QuadDesc indicatorQuad;
+        indicatorQuad.x = edgeX - 15.0F;
+        indicatorQuad.y = edgeY - 15.0F;
+        indicatorQuad.width = 30.0F;
+        indicatorQuad.height = 30.0F;
+        indicatorQuad.r = 1.0F;
+        indicatorQuad.g = 0.0F;
+        indicatorQuad.b = 0.0F;
+        indicatorQuad.a = alpha;
+        indicatorQuad.depth = 0.5F;
+        uiPass.DrawQuad(indicatorQuad);
     }
-    */
 }
 
-void HUD::renderDamageNumbers(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
+void HUD::renderDamageNumbers(CatEngine::Renderer::UIPass& uiPass) {
     for (const auto& number : m_damageNumbers) {
-        float alpha = 1.0f - (number.lifetime / number.maxLifetime);
+        float alpha = 1.0F - (number.lifetime / number.maxLifetime);
 
-        vec4 color;
+        float r, g, b;
         if (number.isHeal) {
-            color = {0, 1, 0, alpha}; // Green for heal
+            r = 0.0F; g = 1.0F; b = 0.0F;
         } else if (number.isCritical) {
-            color = {1, 0.5f, 0, alpha}; // Orange for critical
+            r = 1.0F; g = 0.5F; b = 0.0F;
         } else {
-            color = {1, 1, 1, alpha}; // White for normal damage
+            r = 1.0F; g = 1.0F; b = 1.0F;
         }
 
         std::string text = number.isCritical ?
-            std::to_string((int)number.amount) + "!" :
-            std::to_string((int)number.amount);
+            std::to_string(static_cast<int>(number.amount)) + "!" :
+            std::to_string(static_cast<int>(number.amount));
 
-        int fontSize = number.isCritical ? 28 : 20;
-        renderer.drawText(text, number.position, color, fontSize);
+        float fontSize = number.isCritical ? 28.0F : 20.0F;
+
+        CatEngine::Renderer::UIPass::TextDesc textDesc;
+        textDesc.text = text.c_str();
+        textDesc.x = number.position[0];
+        textDesc.y = number.position[1];
+        textDesc.fontSize = fontSize;
+        textDesc.r = r;
+        textDesc.g = g;
+        textDesc.b = b;
+        textDesc.a = alpha;
+        textDesc.depth = 0.8F;
+        uiPass.DrawText(textDesc);
     }
-    */
 }
 
-void HUD::renderLowHealthWarning(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
-    // Pulsing red glow at screen edges
-    float pulseIntensity = (std::sin(m_lowHealthPulse) + 1.0f) * 0.5f;
-    float alpha = 0.3f * pulseIntensity;
+void HUD::renderLowHealthWarning(CatEngine::Renderer::UIPass& uiPass) {
+    // Pulsing red glow at screen edges using vignette quads
+    float pulseIntensity = (std::sin(m_lowHealthPulse) + 1.0F) * 0.5F;
+    float alpha = 0.3F * pulseIntensity;
 
-    vec4 redGlow = {1, 0, 0, alpha};
+    // Top edge
+    CatEngine::Renderer::UIPass::QuadDesc topEdge;
+    topEdge.x = 0.0F;
+    topEdge.y = 0.0F;
+    topEdge.width = static_cast<float>(m_screenWidth);
+    topEdge.height = 50.0F;
+    topEdge.r = 1.0F;
+    topEdge.g = 0.0F;
+    topEdge.b = 0.0F;
+    topEdge.a = alpha;
+    topEdge.depth = 0.9F;
+    uiPass.DrawQuad(topEdge);
 
-    // Draw vignette effect
-    renderer.drawVignette({screenWidth / 2, screenHeight / 2},
-                         screenWidth, redGlow);
-    */
+    // Bottom edge
+    CatEngine::Renderer::UIPass::QuadDesc bottomEdge;
+    bottomEdge.x = 0.0F;
+    bottomEdge.y = static_cast<float>(m_screenHeight) - 50.0F;
+    bottomEdge.width = static_cast<float>(m_screenWidth);
+    bottomEdge.height = 50.0F;
+    bottomEdge.r = 1.0F;
+    bottomEdge.g = 0.0F;
+    bottomEdge.b = 0.0F;
+    bottomEdge.a = alpha;
+    bottomEdge.depth = 0.9F;
+    uiPass.DrawQuad(bottomEdge);
+
+    // Left edge
+    CatEngine::Renderer::UIPass::QuadDesc leftEdge;
+    leftEdge.x = 0.0F;
+    leftEdge.y = 0.0F;
+    leftEdge.width = 50.0F;
+    leftEdge.height = static_cast<float>(m_screenHeight);
+    leftEdge.r = 1.0F;
+    leftEdge.g = 0.0F;
+    leftEdge.b = 0.0F;
+    leftEdge.a = alpha;
+    leftEdge.depth = 0.9F;
+    uiPass.DrawQuad(leftEdge);
+
+    // Right edge
+    CatEngine::Renderer::UIPass::QuadDesc rightEdge;
+    rightEdge.x = static_cast<float>(m_screenWidth) - 50.0F;
+    rightEdge.y = 0.0F;
+    rightEdge.width = 50.0F;
+    rightEdge.height = static_cast<float>(m_screenHeight);
+    rightEdge.r = 1.0F;
+    rightEdge.g = 0.0F;
+    rightEdge.b = 0.0F;
+    rightEdge.a = alpha;
+    rightEdge.depth = 0.9F;
+    uiPass.DrawQuad(rightEdge);
 }
 
-void HUD::renderFPS(CatEngine::Renderer::Renderer& renderer) {
-    // TODO: Implement with actual rendering
-    /*
-    std::string fpsText = "FPS: " + std::to_string((int)m_fps);
-    vec2 position = {screenWidth - 100, screenHeight - 30}; // Bottom right
-    renderer.drawText(fpsText, position, {0, 1, 0, 1}, 16); // Green
-    */
+void HUD::renderFPS(CatEngine::Renderer::UIPass& uiPass) {
+    std::string fpsText = "FPS: " + std::to_string(static_cast<int>(m_fps));
+    CatEngine::Renderer::UIPass::TextDesc textDesc;
+    textDesc.text = fpsText.c_str();
+    textDesc.x = static_cast<float>(m_screenWidth) - 100.0F;
+    textDesc.y = static_cast<float>(m_screenHeight) - 30.0F;
+    textDesc.fontSize = 16.0F;
+    textDesc.r = 0.0F;
+    textDesc.g = 1.0F;
+    textDesc.b = 0.0F;
+    textDesc.a = 1.0F;
+    textDesc.depth = 0.0F;
+    uiPass.DrawText(textDesc);
 }
 
 // ============================================================================
@@ -365,7 +512,7 @@ void HUD::updateDamageNumbers(float deltaTime) {
         number.position[1] += number.velocity[1] * deltaTime;
 
         // Slow down over time
-        number.velocity[1] *= 0.95f;
+        number.velocity[1] *= 0.95F;
     }
 
     m_damageNumbers.erase(
@@ -375,6 +522,158 @@ void HUD::updateDamageNumbers(float deltaTime) {
             }),
         m_damageNumbers.end()
     );
+}
+
+// ============================================================================
+// Notification System
+// ============================================================================
+
+void HUD::showNotification(const std::string& message, float duration, int priority) {
+    Notification notification;
+    notification.message = message;
+    notification.type = NotificationType::Info;
+    notification.duration = duration;
+    notification.elapsed = 0.0F;
+    notification.priority = priority;
+
+    // Insert sorted by priority (higher priority first)
+    auto insertPos = std::find_if(m_notifications.begin(), m_notifications.end(),
+        [priority](const Notification& n) { return n.priority < priority; });
+    m_notifications.insert(insertPos, notification);
+
+    // Limit number of notifications
+    if (m_notifications.size() > MAX_NOTIFICATIONS) {
+        m_notifications.pop_back();
+    }
+
+    Engine::Logger::debug("Notification shown: " + message);
+}
+
+void HUD::showNotification(const std::string& message, const std::string& type, float duration) {
+    NotificationType notificationType = NotificationType::Info;
+
+    if (type == "success") {
+        notificationType = NotificationType::Success;
+    } else if (type == "warning") {
+        notificationType = NotificationType::Warning;
+    } else if (type == "error") {
+        notificationType = NotificationType::Error;
+    }
+
+    Notification notification;
+    notification.message = message;
+    notification.type = notificationType;
+    notification.duration = duration;
+    notification.elapsed = 0.0F;
+    if (notificationType == NotificationType::Error) {
+        notification.priority = 10;
+    } else if (notificationType == NotificationType::Warning) {
+        notification.priority = 5;
+    } else if (notificationType == NotificationType::Success) {
+        notification.priority = 3;
+    } else {
+        notification.priority = 0;
+    }
+
+    // Insert sorted by priority (higher priority first)
+    auto insertPos = std::find_if(m_notifications.begin(), m_notifications.end(),
+        [&notification](const Notification& n) { return n.priority < notification.priority; });
+    m_notifications.insert(insertPos, notification);
+
+    // Limit number of notifications
+    if (m_notifications.size() > MAX_NOTIFICATIONS) {
+        m_notifications.pop_back();
+    }
+
+    Engine::Logger::debug("Notification shown (" + type + "): " + message.c_str());
+}
+
+void HUD::clearNotifications() {
+    m_notifications.clear();
+}
+
+void HUD::updateNotifications(float deltaTime) {
+    // Update elapsed time and remove expired notifications
+    m_notifications.erase(
+        std::remove_if(m_notifications.begin(), m_notifications.end(),
+            [deltaTime](Notification& notification) {
+                notification.elapsed += deltaTime;
+                return notification.elapsed >= notification.duration;
+            }),
+        m_notifications.end()
+    );
+}
+
+void HUD::renderNotifications(CatEngine::Renderer::UIPass& uiPass) {
+    float yOffset = 60.0F;
+    float xPosition = static_cast<float>(m_screenWidth) - 320.0F;
+    float notificationHeight = 40.0F;
+    float padding = 10.0F;
+
+    for (const auto& notification : m_notifications) {
+        // Calculate fade alpha (fade in first 0.2s, fade out last 0.5s)
+        float fadeIn = std::min(notification.elapsed / 0.2F, 1.0F);
+        float fadeOut = std::min((notification.duration - notification.elapsed) / 0.5F, 1.0F);
+        float alpha = fadeIn * fadeOut;
+
+        // Get color based on type
+        std::array<float, 4> colorArr = getNotificationColor(notification.type);
+
+        // Draw background
+        CatEngine::Renderer::UIPass::QuadDesc bgQuad;
+        bgQuad.x = xPosition;
+        bgQuad.y = yOffset;
+        bgQuad.width = 300.0F;
+        bgQuad.height = notificationHeight;
+        bgQuad.r = 0.1F;
+        bgQuad.g = 0.1F;
+        bgQuad.b = 0.1F;
+        bgQuad.a = 0.8F * alpha;
+        bgQuad.depth = 0.7F;
+        uiPass.DrawQuad(bgQuad);
+
+        // Draw colored left border
+        CatEngine::Renderer::UIPass::QuadDesc borderQuad;
+        borderQuad.x = xPosition;
+        borderQuad.y = yOffset;
+        borderQuad.width = 4.0F;
+        borderQuad.height = notificationHeight;
+        borderQuad.r = colorArr[0];
+        borderQuad.g = colorArr[1];
+        borderQuad.b = colorArr[2];
+        borderQuad.a = colorArr[3] * alpha;
+        borderQuad.depth = 0.75F;
+        uiPass.DrawQuad(borderQuad);
+
+        // Draw text
+        CatEngine::Renderer::UIPass::TextDesc textDesc;
+        textDesc.text = notification.message.c_str();
+        textDesc.x = xPosition + 12.0F;
+        textDesc.y = yOffset + 10.0F;
+        textDesc.fontSize = 16.0F;
+        textDesc.r = 1.0F;
+        textDesc.g = 1.0F;
+        textDesc.b = 1.0F;
+        textDesc.a = alpha;
+        textDesc.depth = 0.8F;
+        uiPass.DrawText(textDesc);
+
+        yOffset += notificationHeight + padding;
+    }
+}
+
+std::array<float, 4> HUD::getNotificationColor(NotificationType type) {
+    switch (type) {
+        case NotificationType::Success:
+            return {0.2F, 0.8F, 0.2F, 1.0F};
+        case NotificationType::Warning:
+            return {1.0F, 0.8F, 0.0F, 1.0F};
+        case NotificationType::Error:
+            return {1.0F, 0.2F, 0.2F, 1.0F};
+        case NotificationType::Info:
+        default:
+            return {0.3F, 0.6F, 1.0F, 1.0F};
+    }
 }
 
 } // namespace Game

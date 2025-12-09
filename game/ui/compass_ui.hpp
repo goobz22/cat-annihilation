@@ -2,7 +2,7 @@
 #define GAME_UI_COMPASS_UI_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include "../../engine/math/Vector.hpp"
 #include <string>
 #include <vector>
@@ -20,15 +20,15 @@ struct CompassMarker {
     std::string label;
     Engine::vec3 worldPosition;
     std::string iconPath;
-    Engine::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};
+    Engine::vec4 color = {1.0F, 1.0F, 1.0F, 1.0F};
     bool isVisible = true;
-    float importance = 1.0f;  // For priority when overlapping (1.0 = normal, 2.0 = high)
-    float minDistance = 0.0f;  // Distance at which marker disappears (0 = never)
-    float maxDistance = 0.0f;  // Distance beyond which marker fades out (0 = infinite)
+    float importance = 1.0F;  // For priority when overlapping (1.0 = normal, 2.0 = high)
+    float minDistance = 0.0F;  // Distance at which marker disappears (0 = never)
+    float maxDistance = 0.0F;  // Distance beyond which marker fades out (0 = infinite)
 
     // Animation
-    float pulseSpeed = 0.0f;  // 0 = no pulse
-    float pulseAmount = 0.0f; // Pulse intensity
+    float pulseSpeed = 0.0F;  // 0 = no pulse
+    float pulseAmount = 0.0F; // Pulse intensity
 };
 
 /**
@@ -78,9 +78,11 @@ public:
 
     /**
      * @brief Render compass UI
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     // ========================================================================
     // Marker Management
@@ -228,17 +230,17 @@ private:
     /**
      * @brief Render compass background
      */
-    void renderBackground(CatEngine::Renderer::Renderer& renderer);
+    void renderBackground(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render cardinal directions
      */
-    void renderCardinals(CatEngine::Renderer::Renderer& renderer);
+    void renderCardinals(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Render markers
      */
-    void renderMarkers(CatEngine::Renderer::Renderer& renderer);
+    void renderMarkers(CatEngine::Renderer::UIPass& uiPass);
 
     /**
      * @brief Calculate angle from player to world position
@@ -278,6 +280,13 @@ private:
      */
     std::vector<CardinalDirection> getCardinalDirections() const;
 
+    /**
+     * @brief Calculate X position on compass bar for an angle
+     * @param angle Angle relative to player (0 = directly ahead)
+     * @return X position on compass, or -1 if outside visible range
+     */
+    float angleToCompassX(float angle) const;
+
     Engine::Input& m_input;
 
     // Markers
@@ -291,23 +300,30 @@ private:
     bool m_showCardinals = true;
     bool m_showDistances = true;
     bool m_visible = true;
-    float m_opacity = 1.0f;
+    float m_opacity = 1.0F;
 
     // Position and size (normalized screen coordinates)
-    float m_screenX = 0.5f;  // Center top
-    float m_screenY = 0.05f;
-    float m_width = 400.0f;
-    float m_height = 60.0f;
+    float m_screenX = 0.5F;  // Center top
+    float m_screenY = 0.05F;
+    float m_width = 400.0F;
+    float m_height = 60.0F;
 
     // Player state
     Engine::vec3 m_playerPosition = Engine::vec3::zero();
-    float m_playerYaw = 0.0f;
+    float m_playerYaw = 0.0F;
 
     // Animation state
-    float m_animationTime = 0.0f;
+    float m_animationTime = 0.0F;
 
     // Cardinal directions cache
     std::vector<CardinalDirection> m_cardinals;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
+
+    // Compass visibility range (degrees from center)
+    float m_visibleRange = 90.0F;
 
     bool m_initialized = false;
 };

@@ -2,6 +2,7 @@
 
 #include "RenderPass.hpp"
 #include "../../rhi/RHITypes.hpp"
+#include "../BitmapFont.hpp"
 #include <memory>
 #include <vector>
 #include <array>
@@ -156,21 +157,18 @@ public:
     void AddDrawCommand(const UIDrawCommand& cmd);
 
     /**
-     * Set default font atlas for text rendering
+     * Get the bitmap font for text rendering
      */
-    void SetDefaultFontAtlas(RHI::IRHITexture* fontAtlas) { defaultFontAtlas_ = fontAtlas; }
-
+    [[nodiscard]] BitmapFont* GetFont() { return &bitmapFont_; }
+    
     /**
-     * Get default font atlas
+     * Get default font atlas for text rendering
      */
-    [[nodiscard]] RHI::IRHITexture* GetDefaultFontAtlas() const { return defaultFontAtlas_; }
+    [[nodiscard]] RHI::IRHITexture* GetDefaultFontAtlas() const { 
+        return bitmapFont_.GetAtlas(); 
+    }
 
 private:
-    /**
-     * Create render pass
-     */
-    void CreateRenderPass();
-
     /**
      * Create pipelines for quads and text
      */
@@ -215,8 +213,8 @@ private:
     uint32_t width_ = 1920;
     uint32_t height_ = 1080;
 
-    // Render pass
-    std::unique_ptr<RHI::IRHIRenderPass> renderPass_;
+    // Render pass (we use the swapchain's render pass, so we don't own it)
+    RHI::IRHIRenderPass* swapchainRenderPass_ = nullptr;
 
     // Pipelines
     std::unique_ptr<RHI::IRHIPipeline> quadPipeline_;
@@ -246,8 +244,8 @@ private:
     std::vector<UIDrawCommand> drawCommands_;
     std::vector<UIDrawCommand> batchedCommands_;
 
-    // Default font atlas
-    RHI::IRHITexture* defaultFontAtlas_ = nullptr;
+    // Bitmap font for text rendering
+    BitmapFont bitmapFont_;
 
     // Uniform data
     UIUniforms uniforms_;

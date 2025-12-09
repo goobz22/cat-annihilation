@@ -280,8 +280,35 @@ void UISystem::HandleKeyboardInput() {
 
     // Tab for focus navigation (next widget)
     if (m_input->isKeyPressed(Input::Key::Tab)) {
-        // TODO: Implement tab navigation through widgets
-        // This would involve maintaining a tab order list
+        // Navigate to next focusable widget in tab order
+        bool shiftHeld = m_input->isKeyDown(Input::Key::LeftShift) || m_input->isKeyDown(Input::Key::RightShift);
+
+        // Collect all focusable widgets
+        std::vector<UIWidget*> focusableWidgets;
+        CollectFocusableWidgets(m_root.get(), focusableWidgets);
+
+        if (!focusableWidgets.empty()) {
+            // Find current focused widget index
+            int currentIndex = -1;
+            for (size_t i = 0; i < focusableWidgets.size(); ++i) {
+                if (focusableWidgets[i] == m_focusedWidget) {
+                    currentIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+
+            // Calculate next index based on direction
+            int nextIndex = 0;
+            if (shiftHeld) {
+                // Shift+Tab: go backwards
+                nextIndex = (currentIndex <= 0) ? static_cast<int>(focusableWidgets.size()) - 1 : currentIndex - 1;
+            } else {
+                // Tab: go forwards
+                nextIndex = (currentIndex < 0 || currentIndex >= static_cast<int>(focusableWidgets.size()) - 1) ? 0 : currentIndex + 1;
+            }
+
+            SetFocusedWidget(focusableWidgets[nextIndex]);
+        }
     }
 }
 
@@ -392,6 +419,36 @@ void UISystem::DrawTextWidget(UIText* text, CatEngine::Renderer::UIPass* uiPass)
     textDesc.fontAtlas = static_cast<CatEngine::RHI::IRHITexture*>(nullptr); // Would need to convert FontAtlas to texture
 
     uiPass->DrawText(textDesc);
+}
+
+bool UISystem::IsWidgetFocusable(UIWidget* widget) const {
+    if (!widget || !widget->IsVisible() || !widget->IsEnabled()) {
+        return false;
+    }
+
+    // Buttons are focusable
+    if (dynamic_cast<UIButton*>(widget) != nullptr) {
+        return true;
+    }
+
+    // Future: Add other focusable types like input fields, sliders, etc.
+    return false;
+}
+
+void UISystem::CollectFocusableWidgets(UIWidget* widget, std::vector<UIWidget*>& out) {
+    if (!widget) {
+        return;
+    }
+
+    // Check if this widget is focusable
+    if (IsWidgetFocusable(widget)) {
+        out.push_back(widget);
+    }
+
+    // Recursively check children
+    for (const auto& child : widget->GetChildren()) {
+        CollectFocusableWidgets(child.get(), out);
+    }
 }
 
 } // namespace Engine::UI

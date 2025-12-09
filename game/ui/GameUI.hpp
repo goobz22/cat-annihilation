@@ -2,10 +2,11 @@
 #define GAME_UI_GAME_UI_HPP
 
 #include "../../engine/core/Input.hpp"
-#include "../../engine/renderer/Renderer.hpp"
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include <memory>
 #include <vector>
 #include <string>
+#include <cstdint>
 
 namespace Game {
 
@@ -58,9 +59,11 @@ public:
 
     /**
      * @brief Render UI (call after game rendering)
-     * @param renderer Renderer to use for drawing
+     * @param uiPass UIPass to use for 2D drawing
+     * @param screenWidth Current screen width
+     * @param screenHeight Current screen height
      */
-    void render(CatEngine::Renderer::Renderer& renderer);
+    void render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight);
 
     // ========================================================================
     // State Management
@@ -69,7 +72,7 @@ public:
     /**
      * @brief Get current game state
      */
-    GameState getGameState() const { return m_currentState; }
+    [[nodiscard]] GameState getGameState() const { return m_currentState; }
 
     /**
      * @brief Set game state and transition UI accordingly
@@ -80,7 +83,7 @@ public:
     /**
      * @brief Check if game is paused (UI is blocking gameplay)
      */
-    bool isPaused() const {
+    [[nodiscard]] bool isPaused() const {
         return m_currentState == GameState::MainMenu ||
                m_currentState == GameState::Paused ||
                m_currentState == GameState::WaveComplete ||
@@ -94,22 +97,22 @@ public:
     /**
      * @brief Get HUD reference
      */
-    HUD& getHUD() { return *m_hud; }
+    [[nodiscard]] HUD& getHUD() { return *m_hud; }
 
     /**
      * @brief Get Main Menu reference
      */
-    MainMenu& getMainMenu() { return *m_mainMenu; }
+    [[nodiscard]] MainMenu& getMainMenu() { return *m_mainMenu; }
 
     /**
      * @brief Get Pause Menu reference
      */
-    PauseMenu& getPauseMenu() { return *m_pauseMenu; }
+    [[nodiscard]] PauseMenu& getPauseMenu() { return *m_pauseMenu; }
 
     /**
      * @brief Get Wave Popup reference
      */
-    WavePopup& getWavePopup() { return *m_wavePopup; }
+    [[nodiscard]] WavePopup& getWavePopup() { return *m_wavePopup; }
 
     // ========================================================================
     // Input Handling
@@ -124,7 +127,7 @@ public:
     /**
      * @brief Check if UI is consuming input (blocks gameplay input)
      */
-    bool isConsumingInput() const;
+    [[nodiscard]] bool isConsumingInput() const;
 
     // ========================================================================
     // Transitions
@@ -134,17 +137,17 @@ public:
      * @brief Start screen transition effect
      * @param duration Transition duration in seconds
      */
-    void startTransition(float duration = 0.3f);
+    void startTransition(float duration = 0.3F);
 
     /**
      * @brief Check if currently transitioning
      */
-    bool isTransitioning() const { return m_isTransitioning; }
+    [[nodiscard]] bool isTransitioning() const { return m_isTransitioning; }
 
     /**
      * @brief Get transition progress (0.0 to 1.0)
      */
-    float getTransitionProgress() const { return m_transitionProgress; }
+    [[nodiscard]] float getTransitionProgress() const { return m_transitionProgress; }
 
 private:
     /**
@@ -156,6 +159,21 @@ private:
      * @brief Update transition animation
      */
     void updateTransition(float deltaTime);
+
+    /**
+     * @brief Render transition overlay
+     */
+    void renderTransitionOverlay(CatEngine::Renderer::UIPass& uiPass);
+
+    /**
+     * @brief Render game over screen
+     */
+    void renderGameOver(CatEngine::Renderer::UIPass& uiPass);
+
+    /**
+     * @brief Render victory screen
+     */
+    void renderVictory(CatEngine::Renderer::UIPass& uiPass);
 
     Engine::Input& m_input;
     GameAudio& m_audio;
@@ -172,9 +190,19 @@ private:
 
     // Transition
     bool m_isTransitioning = false;
-    float m_transitionProgress = 0.0f;
-    float m_transitionDuration = 0.3f;
-    float m_transitionTimer = 0.0f;
+    float m_transitionProgress = 0.0F;
+    float m_transitionDuration = 0.3F;
+    float m_transitionTimer = 0.0F;
+
+    // Game over / victory state
+    float m_endGameTimer = 0.0F;
+    uint32_t m_finalScore = 0;
+    uint32_t m_finalWave = 0;
+    float m_survivalTime = 0.0F;
+
+    // Screen dimensions (cached during render)
+    uint32_t m_screenWidth = 1920;
+    uint32_t m_screenHeight = 1080;
 
     bool m_initialized = false;
 };
