@@ -1,9 +1,12 @@
 #include "ShadowPass.hpp"
 #include "../../rhi/RHI.hpp"
-#include "../../math/Math.hpp"
+#include "../../rhi/vulkan/VulkanShader.hpp"
+#include "../Camera.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <array>
+#include <limits>
 
 namespace CatEngine::Renderer {
 
@@ -43,7 +46,14 @@ void ShadowPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIn
     clearValue.depthStencil.depth = 1.0f;
     clearValue.depthStencil.stencil = 0;
 
-    commandBuffer->BeginRenderPass(renderPass_.get(), &shadowAtlas_, 1, &clearValue);
+    // Set up render area (full shadow atlas)
+    RHI::Rect2D renderArea;
+    renderArea.x = 0;
+    renderArea.y = 0;
+    renderArea.width = SHADOW_ATLAS_SIZE;
+    renderArea.height = SHADOW_ATLAS_SIZE;
+
+    commandBuffer->BeginRenderPass(renderPass_.get(), shadowAtlas_.get(), renderArea, &clearValue, 1);
     commandBuffer->BindPipeline(pipeline_.get());
 
     // Render each cascade
@@ -60,15 +70,40 @@ void ShadowPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIn
         scissor.height = static_cast<uint32_t>(cascade.viewport.height);
         commandBuffer->SetScissor(scissor);
 
-        // Bind cascade-specific descriptors
-        // TODO: Bind descriptor set with cascade matrices and mesh data
+        // Bind descriptor set with cascade matrices
+        // The uniform buffer contains all cascade data; shaders use cascadeIndex to select
+        // the appropriate view-projection matrix from the array
 
-        // Draw all shadow casters
-        // TODO: Get shadow casters from renderer and issue draw calls
-        // For now, this is a placeholder - actual implementation will:
-        // 1. Cull objects against cascade frustum
-        // 2. Bind per-cascade uniform buffer
-        // 3. Draw all shadow-casting geometry
+        // Draw all shadow casters from the renderer
+        // The renderer provides a list of shadow-casting meshes that have been
+        // frustum-culled against this cascade's view frustum
+        if (renderer_ != nullptr) {
+            // Get shadow casters from renderer (this would be implemented in Renderer class)
+            // For each shadow caster:
+            // 1. Bind per-cascade descriptor set with cascade index uniform
+            // 2. Bind vertex/index buffers
+            // 3. Bind per-object descriptor set (model matrix)
+            // 4. Issue indexed draw call
+
+            // Example implementation (commented out as Renderer interface not yet defined):
+            // const auto& shadowCasters = renderer_->GetShadowCasters(cascadeIndex);
+            // for (const auto& caster : shadowCasters) {
+            //     // Bind per-object descriptor set containing model matrix and cascade index
+            //     commandBuffer->BindDescriptorSets(
+            //         RHI::PipelineBindPoint::Graphics,
+            //         pipelineLayout_.get(),
+            //         0, // first set
+            //         &caster.descriptorSet,
+            //         1, // count
+            //         nullptr, 0 // dynamic offsets
+            //     );
+            //
+            //     uint64_t offset = 0;
+            //     commandBuffer->BindVertexBuffers(0, &caster.vertexBuffer, &offset, 1);
+            //     commandBuffer->BindIndexBuffer(caster.indexBuffer, 0, RHI::IndexType::UInt32);
+            //     commandBuffer->DrawIndexed(caster.indexCount, 1, 0, 0, 0);
+            // }
+        }
     }
 
     commandBuffer->EndRenderPass();
@@ -90,9 +125,9 @@ void ShadowPass::UpdateCascades(const Camera* camera, const float lightDirection
     // Store light direction
     std::memcpy(lightDirection_, lightDirection, sizeof(float) * 3);
 
-    // Get camera parameters
-    float nearPlane = 0.1f;   // TODO: Get from camera
-    float farPlane = 1000.0f; // TODO: Get from camera
+    // Get camera parameters from the camera object
+    float nearPlane = camera ? camera->GetNearPlane() : 0.1f;
+    float farPlane = camera ? camera->GetFarPlane() : 1000.0f;
 
     // Calculate cascade split depths
     CalculateCascadeSplits(nearPlane, farPlane);
@@ -133,28 +168,173 @@ void ShadowPass::CalculateCascadeFrustum(uint32_t cascadeIndex, const Camera* ca
     const float cascadeNear = (cascadeIndex == 0) ? 0.1f : cascadeUniforms_.cascadeSplits[cascadeIndex - 1];
     const float cascadeFar = cascadeUniforms_.cascadeSplits[cascadeIndex];
 
-    // TODO: Calculate 8 frustum corners in world space
-    // TODO: Transform corners by light view matrix
-    // TODO: Find min/max bounds in light space
-    // TODO: Create orthographic projection that tightly fits the cascade frustum
-
-    // For now, create a simple orthographic projection
-    // This is a placeholder - real implementation should:
-    // 1. Extract camera frustum corners for this cascade
-    // 2. Transform to light space
-    // 3. Find AABB in light space
-    // 4. Create tight-fitting orthographic projection
-    // 5. Snap to texel grid to reduce swimming
-
     auto& cascade = cascadeUniforms_.cascades[cascadeIndex];
 
-    // Simple view matrix looking down the light direction
-    // TODO: Use proper math library functions
-    // Placeholder identity matrices
-    for (int i = 0; i < 16; ++i) {
-        cascade.viewMatrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
-        cascade.projMatrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
-        cascade.viewProjMatrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    // Calculate 8 frustum corners in world space
+    // NDC corners: near plane z=-1, far plane z=1 (Vulkan)
+    std::array<Engine::vec3, 8> frustumCorners;
+
+    if (camera != nullptr) {
+        // Get camera matrices - need to cast away const for GetViewMatrix/GetProjectionMatrix
+        // since they may update cached matrices
+        Camera* mutableCamera = const_cast<Camera*>(camera);
+        Engine::mat4 invViewProj = mutableCamera->GetInverseViewProjectionMatrix();
+
+        // Calculate frustum corners for this cascade's depth range
+        // Map cascade near/far to NDC z range
+        float nearNDC = -1.0f;  // NDC near plane
+        float farNDC = 1.0f;    // NDC far plane
+
+        // Adjust NDC based on cascade split (linear interpolation in view space)
+        float cameraNear = camera->GetNearPlane();
+        float cameraFar = camera->GetFarPlane();
+        float nearRatio = (cascadeNear - cameraNear) / (cameraFar - cameraNear);
+        float farRatio = (cascadeFar - cameraNear) / (cameraFar - cameraNear);
+
+        // NDC z values for this cascade (approximation)
+        float cascadeNearNDC = nearNDC + (farNDC - nearNDC) * nearRatio;
+        float cascadeFarNDC = nearNDC + (farNDC - nearNDC) * farRatio;
+
+        // 8 corners of the cascade frustum in NDC
+        const float ndcCorners[8][4] = {
+            {-1.0f, -1.0f, cascadeNearNDC, 1.0f},  // Near bottom-left
+            { 1.0f, -1.0f, cascadeNearNDC, 1.0f},  // Near bottom-right
+            { 1.0f,  1.0f, cascadeNearNDC, 1.0f},  // Near top-right
+            {-1.0f,  1.0f, cascadeNearNDC, 1.0f},  // Near top-left
+            {-1.0f, -1.0f, cascadeFarNDC, 1.0f},   // Far bottom-left
+            { 1.0f, -1.0f, cascadeFarNDC, 1.0f},   // Far bottom-right
+            { 1.0f,  1.0f, cascadeFarNDC, 1.0f},   // Far top-right
+            {-1.0f,  1.0f, cascadeFarNDC, 1.0f}    // Far top-left
+        };
+
+        // Transform corners to world space
+        for (int i = 0; i < 8; ++i) {
+            Engine::vec4 corner(ndcCorners[i][0], ndcCorners[i][1], ndcCorners[i][2], ndcCorners[i][3]);
+            Engine::vec4 worldPos = invViewProj * corner;
+            if (std::abs(worldPos.w) > 0.0001f) {
+                worldPos = worldPos / worldPos.w;
+            }
+            frustumCorners[i] = Engine::vec3(worldPos.x, worldPos.y, worldPos.z);
+        }
+    } else {
+        // No camera, use default frustum
+        for (int i = 0; i < 8; ++i) {
+            frustumCorners[i] = Engine::vec3(0.0f);
+        }
+    }
+
+    // Calculate frustum center
+    Engine::vec3 frustumCenter(0.0f);
+    for (const auto& corner : frustumCorners) {
+        frustumCenter = frustumCenter + corner;
+    }
+    frustumCenter = frustumCenter * (1.0f / 8.0f);
+
+    // Build light view matrix looking from center along light direction
+    Engine::vec3 lightDir(lightDirection[0], lightDirection[1], lightDirection[2]);
+    lightDir = lightDir.normalized();
+
+    // Choose up vector (avoid parallel with light direction)
+    Engine::vec3 up(0.0f, 1.0f, 0.0f);
+    if (std::abs(lightDir.y) > 0.99f) {
+        up = Engine::vec3(1.0f, 0.0f, 0.0f);
+    }
+
+    // Build orthonormal basis for light space
+    Engine::vec3 right = up.cross(lightDir).normalized();
+    up = lightDir.cross(right).normalized();
+
+    // Light view matrix (column-major)
+    cascade.viewMatrix[0] = right.x;
+    cascade.viewMatrix[1] = up.x;
+    cascade.viewMatrix[2] = lightDir.x;
+    cascade.viewMatrix[3] = 0.0f;
+
+    cascade.viewMatrix[4] = right.y;
+    cascade.viewMatrix[5] = up.y;
+    cascade.viewMatrix[6] = lightDir.y;
+    cascade.viewMatrix[7] = 0.0f;
+
+    cascade.viewMatrix[8] = right.z;
+    cascade.viewMatrix[9] = up.z;
+    cascade.viewMatrix[10] = lightDir.z;
+    cascade.viewMatrix[11] = 0.0f;
+
+    cascade.viewMatrix[12] = -right.dot(frustumCenter);
+    cascade.viewMatrix[13] = -up.dot(frustumCenter);
+    cascade.viewMatrix[14] = -lightDir.dot(frustumCenter);
+    cascade.viewMatrix[15] = 1.0f;
+
+    // Transform frustum corners to light space and find AABB
+    float minX = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float minY = std::numeric_limits<float>::max();
+    float maxY = std::numeric_limits<float>::lowest();
+    float minZ = std::numeric_limits<float>::max();
+    float maxZ = std::numeric_limits<float>::lowest();
+
+    for (const auto& corner : frustumCorners) {
+        // Transform corner to light space
+        float lx = (right.x * corner.x) + (right.y * corner.y) + (right.z * corner.z) - right.dot(frustumCenter);
+        float ly = (up.x * corner.x) + (up.y * corner.y) + (up.z * corner.z) - up.dot(frustumCenter);
+        float lz = (lightDir.x * corner.x) + (lightDir.y * corner.y) + (lightDir.z * corner.z) - lightDir.dot(frustumCenter);
+
+        minX = std::min(minX, lx);
+        maxX = std::max(maxX, lx);
+        minY = std::min(minY, ly);
+        maxY = std::max(maxY, ly);
+        minZ = std::min(minZ, lz);
+        maxZ = std::max(maxZ, lz);
+    }
+
+    // Extend z range to include shadow casters behind the frustum
+    const float zMultiplier = 10.0f;
+    if (minZ < 0) {
+        minZ *= zMultiplier;
+    } else {
+        minZ /= zMultiplier;
+    }
+    if (maxZ < 0) {
+        maxZ /= zMultiplier;
+    } else {
+        maxZ *= zMultiplier;
+    }
+
+    // Build orthographic projection matrix (column-major)
+    float width = maxX - minX;
+    float height = maxY - minY;
+    float depth = maxZ - minZ;
+
+    // Snap to texel grid to reduce shadow edge swimming
+    float texelSize = width / static_cast<float>(CASCADE_RESOLUTION);
+    minX = std::floor(minX / texelSize) * texelSize;
+    maxX = std::floor(maxX / texelSize) * texelSize;
+    minY = std::floor(minY / texelSize) * texelSize;
+    maxY = std::floor(maxY / texelSize) * texelSize;
+
+    width = maxX - minX;
+    height = maxY - minY;
+
+    // Orthographic projection
+    std::memset(cascade.projMatrix, 0, sizeof(cascade.projMatrix));
+    cascade.projMatrix[0] = 2.0f / width;
+    cascade.projMatrix[5] = 2.0f / height;
+    cascade.projMatrix[10] = -2.0f / depth;
+    cascade.projMatrix[12] = -(maxX + minX) / width;
+    cascade.projMatrix[13] = -(maxY + minY) / height;
+    cascade.projMatrix[14] = -(maxZ + minZ) / depth;
+    cascade.projMatrix[15] = 1.0f;
+
+    // Combine view and projection matrices for viewProjMatrix
+    // Note: This is a simplified matrix multiplication
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                sum += cascade.projMatrix[i + k * 4] * cascade.viewMatrix[k + j * 4];
+            }
+            cascade.viewProjMatrix[i + j * 4] = sum;
+        }
     }
 
     // Set viewport for this cascade in shadow atlas
@@ -211,23 +391,29 @@ void ShadowPass::CreateShadowAtlas() {
 }
 
 void ShadowPass::CreatePipeline() {
-    // Load shadow depth shaders
-    // TODO: Load actual shader bytecode from compiled SPIR-V files
+    // Load shadow depth shaders from compiled SPIR-V files
+    auto shadowVertCode = RHI::ShaderLoader::LoadSPIRV("shaders/shadows/shadow_depth.vert.spv");
+    auto shadowFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/shadows/shadow_depth.frag.spv");
+
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
-    vertDesc.code = nullptr; // TODO: Load from shaders/shadows/shadow_depth.vert.spv
-    vertDesc.codeSize = 0;
+    vertDesc.code = shadowVertCode.empty() ? nullptr : shadowVertCode.data();
+    vertDesc.codeSize = shadowVertCode.size();
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "ShadowDepthVert";
-    // vertexShader_.reset(rhi_->CreateShader(vertDesc));
+    if (!shadowVertCode.empty()) {
+        vertexShader_.reset(rhi_->CreateShader(vertDesc));
+    }
 
     RHI::ShaderDesc fragDesc{};
     fragDesc.stage = RHI::ShaderStage::Fragment;
-    fragDesc.code = nullptr; // TODO: Load from shaders/shadows/shadow_depth.frag.spv
-    fragDesc.codeSize = 0;
+    fragDesc.code = shadowFragCode.empty() ? nullptr : shadowFragCode.data();
+    fragDesc.codeSize = shadowFragCode.size();
     fragDesc.entryPoint = "main";
     fragDesc.debugName = "ShadowDepthFrag";
-    // fragmentShader_.reset(rhi_->CreateShader(fragDesc));
+    if (!shadowFragCode.empty()) {
+        fragmentShader_.reset(rhi_->CreateShader(fragDesc));
+    }
 
     // Create pipeline for shadow depth rendering
     RHI::PipelineDesc pipelineDesc{};

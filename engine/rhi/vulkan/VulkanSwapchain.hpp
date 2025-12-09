@@ -1,15 +1,15 @@
 #pragma once
 
 #include "../RHISwapchain.hpp"
+#include "../RHIRenderPass.hpp"
 #include "VulkanDevice.hpp"
+#include "VulkanRenderPass.hpp"
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <memory>
 
-namespace CatEngine::RHI::Vulkan {
-
-// Forward declarations
-class VulkanTexture;
+namespace CatEngine::RHI {
 
 /**
  * Vulkan swapchain implementation
@@ -57,6 +57,50 @@ public:
 
     uint32_t GetCurrentFrameIndex() const { return m_currentFrame; }
 
+    /**
+     * Get raw VkImage by index (for direct Vulkan operations)
+     */
+    VkImage GetVkImage(uint32_t index) const {
+        if (index >= m_images.size()) return VK_NULL_HANDLE;
+        return m_images[index];
+    }
+
+    /**
+     * Get VkImageView by index
+     */
+    VkImageView GetVkImageView(uint32_t index) const {
+        if (index >= m_imageViews.size()) return VK_NULL_HANDLE;
+        return m_imageViews[index];
+    }
+
+    /**
+     * Get VkFramebuffer by index
+     */
+    VkFramebuffer GetFramebuffer(uint32_t index) const {
+        if (index >= m_framebuffers.size()) return VK_NULL_HANDLE;
+        return m_framebuffers[index];
+    }
+
+    /**
+     * Get UI render pass for simple 2D rendering (raw Vulkan handle)
+     */
+    VkRenderPass GetUIRenderPass() const { return m_uiRenderPass; }
+
+    /**
+     * Get UI render pass as RHI interface (for pipeline creation)
+     */
+    IRHIRenderPass* GetUIRenderPassRHI() const { return m_uiRenderPassWrapper.get(); }
+
+    /**
+     * Get VkFormat
+     */
+    VkFormat GetVkFormat() const { return m_vkFormat; }
+
+    /**
+     * Get device reference
+     */
+    VulkanDevice* GetDevice() const { return m_device; }
+
 private:
     /**
      * Create or recreate swapchain
@@ -93,6 +137,7 @@ private:
      */
     void CleanupSyncObjects();
 
+public:
     /**
      * Convert Vulkan format to RHI format
      */
@@ -103,6 +148,8 @@ private:
      */
     static VkFormat RHIFormatToVkFormat(TextureFormat format);
 
+private:
+
     // Device reference
     VulkanDevice* m_device;
 
@@ -110,9 +157,13 @@ private:
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
 
-    // Swapchain images and views
+    // Swapchain images, views, and framebuffers
     std::vector<VkImage> m_images;
-    std::vector<VulkanTexture*> m_textureWrappers;
+    std::vector<VkImageView> m_imageViews;
+    std::vector<VkFramebuffer> m_framebuffers;
+    std::vector<IRHITexture*> m_textureWrappers;
+    VkRenderPass m_uiRenderPass = VK_NULL_HANDLE;
+    std::unique_ptr<VulkanRenderPass> m_uiRenderPassWrapper;
 
     // Swapchain properties
     uint32_t m_width = 0;
@@ -139,4 +190,4 @@ private:
     void* m_windowHandle = nullptr;
 };
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI

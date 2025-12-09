@@ -1,4 +1,7 @@
 #include "VulkanDescriptor.hpp"
+#include "VulkanDevice.hpp"
+#include "VulkanTexture.hpp"
+#include "VulkanBuffer.hpp"
 #include "../RHIBuffer.hpp"
 #include "../RHITexture.hpp"
 #include <stdexcept>
@@ -6,26 +9,12 @@
 
 namespace CatEngine::RHI {
 
-// Forward declare VulkanDevice interface we need
-class VulkanDevice {
-public:
-    virtual VkDevice GetDevice() const = 0;
-};
-
-// Forward declarations for texture view and sampler
-class VulkanTextureView {
-public:
-    virtual VkImageView GetHandle() const = 0;
-};
-
-class VulkanSampler {
-public:
-    virtual VkSampler GetHandle() const = 0;
-};
-
 // Helper to get VkBuffer from IRHIBuffer
 static VkBuffer GetVulkanBuffer(IRHIBuffer* buffer) {
-    return reinterpret_cast<VkBuffer>(buffer);
+    if (auto* vkBuffer = dynamic_cast<VulkanBuffer*>(buffer)) {
+        return vkBuffer->GetHandle();
+    }
+    return VK_NULL_HANDLE;
 }
 
 // ============================================================================
@@ -100,11 +89,13 @@ VulkanDescriptorPool::~VulkanDescriptorPool() {
 IRHIDescriptorSet* VulkanDescriptorPool::AllocateDescriptorSet(IRHIDescriptorSetLayout* layout) {
     VulkanDescriptorSetLayout* vkLayout = static_cast<VulkanDescriptorSetLayout*>(layout);
 
+    VkDescriptorSetLayout layoutHandle = vkLayout->GetHandle();
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_pool;
     allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &vkLayout->GetHandle();
+    allocInfo.pSetLayouts = &layoutHandle;
 
     VkDescriptorSet descriptorSet;
     if (vkAllocateDescriptorSets(m_device->GetDevice(), &allocInfo, &descriptorSet) != VK_SUCCESS) {

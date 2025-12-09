@@ -266,7 +266,7 @@ float ShadowAtlas::getUsedSpace() const {
     return totalPixels > 0 ? static_cast<float>(m_usedPixels) / static_cast<float>(totalPixels) : 0.0f;
 }
 
-bool ShadowAtlas::hasSpace(ShadowResolution resolution) const {
+bool ShadowAtlas::hasSpace(ShadowResolution resolution) {
     uint32_t size = static_cast<uint32_t>(resolution);
     return findFreeSpace(size, size).has_value();
 }

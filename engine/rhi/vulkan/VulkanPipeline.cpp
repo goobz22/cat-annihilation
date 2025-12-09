@@ -2,10 +2,12 @@
 #include "VulkanDevice.hpp"
 #include "VulkanShader.hpp"
 #include "VulkanTexture.hpp"
+#include "VulkanRenderPass.hpp"
 #include "../RHIRenderPass.hpp"
 #include "../RHIDescriptorSet.hpp"
 #include <stdexcept>
 #include <fstream>
+#include <iostream>
 
 namespace CatEngine::RHI {
 
@@ -400,8 +402,15 @@ void VulkanGraphicsPipeline::CreatePipeline(const PipelineDesc& desc, VkPipeline
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Get render pass (would need proper casting in production)
-    VkRenderPass renderPass = VK_NULL_HANDLE; // Placeholder
+    // Get render pass from descriptor
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    if (desc.renderPass) {
+        auto* vulkanRenderPass = static_cast<VulkanRenderPass*>(desc.renderPass);
+        renderPass = vulkanRenderPass->GetHandle();
+        std::cout << "[VulkanPipeline] Using render pass from desc: " << renderPass << "\n";
+    } else {
+        std::cerr << "[VulkanPipeline] WARNING: No render pass provided, pipeline may not work!\n";
+    }
 
     // Create graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};

@@ -2,6 +2,8 @@
 #include "VulkanDevice.hpp"
 #include <fstream>
 #include <stdexcept>
+#include <algorithm>
+#include <unordered_map>
 
 namespace CatEngine::RHI {
 
@@ -137,33 +139,190 @@ VkPipelineShaderStageCreateInfo VulkanShader::GetShaderStageCreateInfo() const {
 }
 
 void VulkanShader::ReflectShader() {
-    // This is a placeholder implementation
-    // In production, you would use SPIRV-Cross or SPIRV-Reflect here
-    // to parse the SPIR-V bytecode and extract:
-    // - Descriptor set layouts
-    // - Push constant ranges
-    // - Vertex input attributes
-    // - etc.
-
-    // For now, we just initialize empty reflection data
+    // Initialize empty reflection data
     m_ReflectionData = ShaderReflectionData{};
 
-    // Example: Parse SPIR-V magic number to validate
-    if (m_Code.size() >= 4) {
-        uint32_t magic = *reinterpret_cast<const uint32_t*>(m_Code.data());
-        if (magic != 0x07230203) { // SPIR-V magic number
-            throw std::runtime_error("VulkanShader: Invalid SPIR-V magic number");
+    // Validate minimum size for SPIR-V header (5 words = 20 bytes)
+    if (m_Code.size() < 20) {
+        throw std::runtime_error("VulkanShader: SPIR-V bytecode too small");
+    }
+
+    const uint32_t* code = reinterpret_cast<const uint32_t*>(m_Code.data());
+    size_t wordCount = m_Code.size() / 4;
+
+    // Validate magic number
+    if (code[0] != 0x07230203) {
+        throw std::runtime_error("VulkanShader: Invalid SPIR-V magic number");
+    }
+
+    // SPIR-V header layout:
+    // [0] Magic number
+    // [1] Version
+    // [2] Generator magic
+    // [3] Bound (upper bound of all IDs)
+    // [4] Reserved (schema)
+    // [5+] Instructions
+
+    // Basic SPIR-V reflection by parsing instructions
+    // This is a simplified implementation - production code should use SPIRV-Cross
+    //
+    // SPIR-V instruction format:
+    // - Low 16 bits: opcode
+    // - High 16 bits: word count
+    //
+    // Key opcodes for reflection:
+    // - OpDecorate (71): Contains binding/set/location decorations
+    // - OpVariable (59): Defines shader variables
+    // - OpTypePointer (32): Pointer types (for finding variable types)
+    // - OpTypeStruct (30): Struct types
+    // - OpName (5): Debug names
+
+    constexpr uint32_t OP_DECORATE = 71;
+    constexpr uint32_t OP_VARIABLE = 59;
+
+    constexpr uint32_t DECORATION_LOCATION = 30;
+    constexpr uint32_t DECORATION_BINDING = 33;
+    constexpr uint32_t DECORATION_DESCRIPTOR_SET = 34;
+
+    constexpr uint32_t STORAGE_CLASS_INPUT = 1;
+    constexpr uint32_t STORAGE_CLASS_UNIFORM = 2;
+    constexpr uint32_t STORAGE_CLASS_UNIFORM_CONSTANT = 0;
+    constexpr uint32_t STORAGE_CLASS_PUSH_CONSTANT = 9;
+
+    // Maps for collecting decoration info
+    std::unordered_map<uint32_t, uint32_t> idToBinding;
+    std::unordered_map<uint32_t, uint32_t> idToSet;
+    std::unordered_map<uint32_t, uint32_t> idToLocation;
+    std::unordered_map<uint32_t, uint32_t> variableToStorageClass;
+
+    // First pass: collect decorations and variable storage classes
+    size_t i = 5; // Start after header
+    while (i < wordCount) {
+        uint32_t instruction = code[i];
+        uint32_t opcode = instruction & 0xFFFF;
+        uint32_t instructionWordCount = instruction >> 16;
+
+        if (instructionWordCount == 0 || i + instructionWordCount > wordCount) {
+            break; // Invalid instruction
+        }
+
+        switch (opcode) {
+            case OP_DECORATE:
+                if (instructionWordCount >= 4) {
+                    uint32_t targetId = code[i + 1];
+                    uint32_t decoration = code[i + 2];
+                    uint32_t value = code[i + 3];
+
+                    switch (decoration) {
+                        case DECORATION_LOCATION:
+                            idToLocation[targetId] = value;
+                            break;
+                        case DECORATION_BINDING:
+                            idToBinding[targetId] = value;
+                            break;
+                        case DECORATION_DESCRIPTOR_SET:
+                            idToSet[targetId] = value;
+                            break;
+                        default:
+                            // Ignore other decorations
+                            break;
+                    }
+                }
+                break;
+
+            case OP_VARIABLE:
+                if (instructionWordCount >= 4) {
+                    uint32_t resultId = code[i + 2];
+                    uint32_t storageClass = code[i + 3];
+                    variableToStorageClass[resultId] = storageClass;
+                }
+                break;
+
+            default:
+                // Ignore other opcodes
+                break;
+        }
+
+        i += instructionWordCount;
+    }
+
+    // Second pass: build reflection data from collected information
+    std::unordered_map<uint32_t, std::vector<DescriptorBinding>> setBindings;
+
+    for (const auto& varEntry : variableToStorageClass) {
+        uint32_t varId = varEntry.first;
+        uint32_t storageClass = varEntry.second;
+
+        // Check for uniform/storage buffer variables
+        if (storageClass == STORAGE_CLASS_UNIFORM ||
+            storageClass == STORAGE_CLASS_UNIFORM_CONSTANT) {
+
+            auto bindingIt = idToBinding.find(varId);
+            auto setIt = idToSet.find(varId);
+
+            if (bindingIt != idToBinding.end()) {
+                DescriptorBinding binding{};
+                binding.binding = bindingIt->second;
+                binding.descriptorCount = 1;
+                binding.stageFlags = m_Stage;
+
+                // Determine type based on storage class
+                if (storageClass == STORAGE_CLASS_UNIFORM) {
+                    binding.descriptorType = DescriptorType::UniformBuffer;
+                } else {
+                    binding.descriptorType = DescriptorType::CombinedImageSampler;
+                }
+
+                uint32_t setIndex = (setIt != idToSet.end()) ? setIt->second : 0;
+                setBindings[setIndex].push_back(binding);
+            }
+        }
+
+        // Handle vertex shader inputs
+        if (m_Stage == ShaderStage::Vertex && storageClass == STORAGE_CLASS_INPUT) {
+            auto locationIt = idToLocation.find(varId);
+            if (locationIt != idToLocation.end()) {
+                VertexAttribute attr{};
+                attr.location = locationIt->second;
+                attr.binding = 0; // Default binding
+                attr.format = TextureFormat::RGBA32_SFLOAT; // Default, would need type analysis
+                attr.offset = 0; // Would need layout analysis
+
+                m_ReflectionData.inputAttributes.push_back(attr);
+            }
+        }
+
+        // Handle push constants
+        if (storageClass == STORAGE_CLASS_PUSH_CONSTANT) {
+            ShaderReflectionData::PushConstantInfo pushConstant{};
+            pushConstant.offset = 0;
+            pushConstant.size = 128; // Default max size, would need type analysis
+            pushConstant.stageFlags = m_Stage;
+
+            m_ReflectionData.pushConstants.push_back(pushConstant);
         }
     }
 
-    // TODO: Implement full SPIR-V reflection using SPIRV-Cross
-    // This would involve:
-    // 1. Creating a spirv_cross::Compiler from the bytecode
-    // 2. Getting shader resources
-    // 3. Iterating over uniforms, samplers, storage buffers
-    // 4. Building descriptor set layouts
-    // 5. Extracting push constants
-    // 6. For vertex shaders, extracting input attributes
+    // Build descriptor set info
+    for (const auto& setEntry : setBindings) {
+        ShaderReflectionData::DescriptorSetInfo setInfo{};
+        setInfo.set = setEntry.first;
+        setInfo.bindings = setEntry.second;
+        m_ReflectionData.descriptorSets.push_back(setInfo);
+    }
+
+    // Sort by set index
+    std::sort(m_ReflectionData.descriptorSets.begin(), m_ReflectionData.descriptorSets.end(),
+              [](const ShaderReflectionData::DescriptorSetInfo& a,
+                 const ShaderReflectionData::DescriptorSetInfo& b) {
+                  return a.set < b.set;
+              });
+
+    // Sort input attributes by location
+    std::sort(m_ReflectionData.inputAttributes.begin(), m_ReflectionData.inputAttributes.end(),
+              [](const VertexAttribute& a, const VertexAttribute& b) {
+                  return a.location < b.location;
+              });
 }
 
 // ============================================================================

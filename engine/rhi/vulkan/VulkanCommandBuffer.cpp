@@ -1,37 +1,44 @@
 #include "VulkanCommandBuffer.hpp"
+#include "VulkanDevice.hpp"
 #include "VulkanRenderPass.hpp"
+#include "VulkanBuffer.hpp"
+#include "VulkanTexture.hpp"
+#include "VulkanPipeline.hpp"
+#include "VulkanDescriptor.hpp"
 #include "../RHIBuffer.hpp"
 #include "../RHITexture.hpp"
 #include "../RHIPipeline.hpp"
 #include <stdexcept>
 #include <cstring>
+#include <iostream>
 
 namespace CatEngine::RHI {
 
-// Forward declare VulkanDevice interface we need
-// In a real implementation, this would be in VulkanDevice.hpp
-class VulkanDevice {
-public:
-    virtual VkDevice GetDevice() const = 0;
-    virtual VkPhysicalDevice GetPhysicalDevice() const = 0;
-    virtual uint32_t GetGraphicsQueueFamily() const = 0;
-};
-
 // Helper to get VkBuffer from IRHIBuffer
 static VkBuffer GetVulkanBuffer(IRHIBuffer* buffer) {
-    // In actual implementation, this would cast and extract the handle
-    // For now, we'll assume the buffer has a GetHandle method
-    return reinterpret_cast<VkBuffer>(buffer);
+    if (buffer == nullptr) {
+        return VK_NULL_HANDLE;
+    }
+    auto* vulkanBuffer = static_cast<VulkanBuffer*>(buffer);
+    return vulkanBuffer->GetHandle();
 }
 
 // Helper to get VkImage from IRHITexture
 static VkImage GetVulkanImage(IRHITexture* texture) {
-    return reinterpret_cast<VkImage>(texture);
+    if (texture == nullptr) {
+        return VK_NULL_HANDLE;
+    }
+    auto* vulkanTexture = static_cast<VulkanTexture*>(texture);
+    return vulkanTexture->GetVkImage();
 }
 
 // Helper to get VkPipeline from IRHIPipeline
 static VkPipeline GetVulkanPipeline(IRHIPipeline* pipeline) {
-    return reinterpret_cast<VkPipeline>(pipeline);
+    if (pipeline == nullptr) {
+        return VK_NULL_HANDLE;
+    }
+    auto* vulkanPipeline = static_cast<VulkanGraphicsPipeline*>(pipeline);
+    return vulkanPipeline->GetVkPipeline();
 }
 
 // Helper to convert index type
@@ -213,9 +220,31 @@ void VulkanCommandBuffer::NextSubpass() {
 // ============================================================================
 
 void VulkanCommandBuffer::BindPipeline(IRHIPipeline* pipeline) {
+    static int bindCount = 0;
+    bindCount++;
+    
     VkPipeline vkPipeline = GetVulkanPipeline(pipeline);
+    
+    if (bindCount <= 10) {
+        std::cout << "[VulkanCommandBuffer::BindPipeline] pipeline=" << pipeline 
+                  << ", vkPipeline=" << vkPipeline 
+                  << ", cmdBuffer=" << m_commandBuffer << "\n";
+        std::cout.flush();
+    }
+    
+    if (vkPipeline == VK_NULL_HANDLE) {
+        std::cerr << "[VulkanCommandBuffer::BindPipeline] ERROR: vkPipeline is NULL!\n";
+        std::cerr.flush();
+        return;
+    }
+    
     // Assume graphics pipeline for now - could be extended with pipeline type query
     vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkPipeline);
+    
+    if (bindCount <= 10) {
+        std::cout << "[VulkanCommandBuffer::BindPipeline] vkCmdBindPipeline called successfully\n";
+        std::cout.flush();
+    }
 }
 
 void VulkanCommandBuffer::BindDescriptorSets(
@@ -328,7 +357,25 @@ void VulkanCommandBuffer::DrawIndexed(
     int32_t vertexOffset,
     uint32_t firstInstance
 ) {
+    static int drawCount = 0;
+    drawCount++;
+    
+    if (drawCount <= 10) {
+        std::cout << "[VulkanCommandBuffer::DrawIndexed] indexCount=" << indexCount 
+                  << ", instanceCount=" << instanceCount
+                  << ", firstIndex=" << firstIndex
+                  << ", vertexOffset=" << vertexOffset
+                  << ", firstInstance=" << firstInstance
+                  << ", cmdBuffer=" << m_commandBuffer << "\n";
+        std::cout.flush();
+    }
+    
     vkCmdDrawIndexed(m_commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    
+    if (drawCount <= 10) {
+        std::cout << "[VulkanCommandBuffer::DrawIndexed] vkCmdDrawIndexed called\n";
+        std::cout.flush();
+    }
 }
 
 void VulkanCommandBuffer::DrawIndirect(

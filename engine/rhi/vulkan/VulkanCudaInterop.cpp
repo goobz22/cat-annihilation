@@ -1,3 +1,8 @@
+// Platform-specific defines must come before vulkan.h
+#ifdef _WIN32
+    #define VK_USE_PLATFORM_WIN32_KHR
+#endif
+
 #include "VulkanCudaInterop.hpp"
 #include <stdexcept>
 #include <cstring>
@@ -43,7 +48,7 @@ bool VulkanCudaExtensions::checkExtensionSupport(VkPhysicalDevice physicalDevice
 // VulkanCudaInterop
 // =============================================================================
 
-cudaUUID VulkanCudaInterop::getVulkanDeviceUUID(VkPhysicalDevice physicalDevice) {
+cudaUUID_t VulkanCudaInterop::getVulkanDeviceUUID(VkPhysicalDevice physicalDevice) {
     VkPhysicalDeviceIDProperties deviceIDProps = {};
     deviceIDProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
 
@@ -53,13 +58,13 @@ cudaUUID VulkanCudaInterop::getVulkanDeviceUUID(VkPhysicalDevice physicalDevice)
 
     vkGetPhysicalDeviceProperties2(physicalDevice, &props2);
 
-    cudaUUID uuid;
+    cudaUUID_t uuid;
     memcpy(uuid.bytes, deviceIDProps.deviceUUID, VK_UUID_SIZE);
     return uuid;
 }
 
 std::optional<int> VulkanCudaInterop::matchCudaDevice(VkPhysicalDevice physicalDevice) {
-    cudaUUID vulkanUUID = getVulkanDeviceUUID(physicalDevice);
+    cudaUUID_t vulkanUUID = getVulkanDeviceUUID(physicalDevice);
     return CUDA::CudaContext::findDeviceByUUID(vulkanUUID);
 }
 

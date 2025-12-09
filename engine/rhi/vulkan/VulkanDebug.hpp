@@ -3,7 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <string>
 
-namespace CatEngine::RHI::Vulkan {
+namespace CatEngine::RHI {
 
 /**
  * Debug severity levels for filtering
@@ -114,4 +114,4 @@ template<> inline VkObjectType VulkanDebug::GetObjectType<VkCommandBuffer>() { r
 template<> inline VkObjectType VulkanDebug::GetObjectType<VkSwapchainKHR>() { return VK_OBJECT_TYPE_SWAPCHAIN_KHR; }
 template<> inline VkObjectType VulkanDebug::GetObjectType<VkSurfaceKHR>() { return VK_OBJECT_TYPE_SURFACE_KHR; }
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI

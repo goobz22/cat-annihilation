@@ -325,10 +325,21 @@ void GPUScene::BuildIndirectDrawCommands() {
 
     std::vector<DrawBatch> batches;
 
+    // Build list of instance indices to draw
     // Use visible instances if culling was performed, otherwise use all visible instances
-    const auto& instancesToDraw = visibleInstances.empty() ? instances : visibleInstances;
+    std::vector<uint32_t> indicesToDraw;
+    if (visibleInstances.empty()) {
+        // No culling performed, use all visible instances
+        for (uint32_t i = 0; i < instances.size(); ++i) {
+            if (instances[i].visible) {
+                indicesToDraw.push_back(i);
+            }
+        }
+    } else {
+        indicesToDraw = visibleInstances;
+    }
 
-    for (uint32_t instanceIndex : visibleInstances) {
+    for (uint32_t instanceIndex : indicesToDraw) {
         if (instanceIndex >= instances.size()) continue;
 
         const auto& instance = instances[instanceIndex];

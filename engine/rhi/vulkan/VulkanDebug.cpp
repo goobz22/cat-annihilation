@@ -2,7 +2,7 @@
 #include <iostream>
 #include <cstring>
 
-namespace CatEngine::RHI::Vulkan {
+namespace CatEngine::RHI {
 
 // Static member initialization
 DebugSeverity VulkanDebug::s_minSeverity = DebugSeverity::Warning;
@@ -142,4 +142,4 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebug::DebugCallback(
     return VK_FALSE;
 }
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI

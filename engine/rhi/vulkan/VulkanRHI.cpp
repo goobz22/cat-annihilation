@@ -1,12 +1,19 @@
 #include "VulkanRHI.hpp"
 #include "VulkanSwapchain.hpp"
+#include "VulkanBuffer.hpp"
+#include "VulkanTexture.hpp"
+#include "VulkanShader.hpp"
+#include "VulkanPipeline.hpp"
+#include "VulkanDescriptor.hpp"
+#include "VulkanRenderPass.hpp"
+#include "VulkanCommandBuffer.hpp"
 #include "../../core/Window.hpp"
 #include <iostream>
 #include <set>
 #include <cstring>
 #include <GLFW/glfw3.h>
 
-namespace CatEngine::RHI::Vulkan {
+namespace CatEngine::RHI {
 
 // Validation layers
 const std::vector<const char*> VulkanRHI::s_validationLayers = {
@@ -81,25 +88,35 @@ const DeviceFeatures& VulkanRHI::GetFeatures() const {
 }
 
 IRHIBuffer* VulkanRHI::CreateBuffer(const BufferDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateBuffer not yet implemented" << std::endl;
-    return nullptr;
+    auto* buffer = new VulkanBuffer(&m_device, desc);
+    return buffer;
 }
 
 void VulkanRHI::DestroyBuffer(IRHIBuffer* buffer) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyBuffer not yet implemented" << std::endl;
+    delete buffer;
+}
+
+void* VulkanRHI::MapBuffer(IRHIBuffer* buffer) {
+    if (!buffer) {
+        return nullptr;
+    }
+    return buffer->Map();
+}
+
+void VulkanRHI::UnmapBuffer(IRHIBuffer* buffer) {
+    if (!buffer) {
+        return;
+    }
+    buffer->Unmap();
 }
 
 IRHITexture* VulkanRHI::CreateTexture(const TextureDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateTexture not yet implemented" << std::endl;
-    return nullptr;
+    auto* texture = new VulkanTexture(&m_device, desc);
+    return texture;
 }
 
 void VulkanRHI::DestroyTexture(IRHITexture* texture) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyTexture not yet implemented" << std::endl;
+    delete texture;
 }
 
 IRHITextureView* VulkanRHI::CreateTextureView(
@@ -110,72 +127,86 @@ IRHITextureView* VulkanRHI::CreateTextureView(
     uint32_t baseArrayLayer,
     uint32_t arrayLayerCount
 ) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateTextureView not yet implemented" << std::endl;
-    return nullptr;
+    if (!texture) {
+        std::cerr << "[VulkanRHI] CreateTextureView: null texture" << std::endl;
+        return nullptr;
+    }
+    auto* vulkanTexture = static_cast<VulkanTexture*>(texture);
+
+    // Use texture's format if not specified
+    if (format == TextureFormat::Undefined) {
+        format = texture->GetFormat();
+    }
+    // Use all remaining mip levels if not specified
+    if (mipLevelCount == 0) {
+        mipLevelCount = texture->GetMipLevels() - baseMipLevel;
+    }
+    // Use all remaining array layers if not specified
+    if (arrayLayerCount == 0) {
+        arrayLayerCount = texture->GetArrayLayers() - baseArrayLayer;
+    }
+
+    auto* view = new VulkanTextureView(&m_device, vulkanTexture, format,
+                                        baseMipLevel, mipLevelCount,
+                                        baseArrayLayer, arrayLayerCount);
+    return view;
 }
 
 void VulkanRHI::DestroyTextureView(IRHITextureView* view) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyTextureView not yet implemented" << std::endl;
+    delete view;
 }
 
 IRHISampler* VulkanRHI::CreateSampler(const SamplerDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateSampler not yet implemented" << std::endl;
-    return nullptr;
+    auto* sampler = new VulkanSampler(&m_device, desc);
+    return sampler;
 }
 
 void VulkanRHI::DestroySampler(IRHISampler* sampler) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroySampler not yet implemented" << std::endl;
+    delete sampler;
 }
 
 IRHIShader* VulkanRHI::CreateShader(const ShaderDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateShader not yet implemented" << std::endl;
-    return nullptr;
+    auto* shader = new VulkanShader(&m_device, desc);
+    return shader;
 }
 
 void VulkanRHI::DestroyShader(IRHIShader* shader) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyShader not yet implemented" << std::endl;
+    delete shader;
 }
 
 IRHIDescriptorSetLayout* VulkanRHI::CreateDescriptorSetLayout(const DescriptorSetLayoutDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateDescriptorSetLayout not yet implemented" << std::endl;
-    return nullptr;
+    auto* layout = new VulkanDescriptorSetLayout(&m_device, desc);
+    return layout;
 }
 
 void VulkanRHI::DestroyDescriptorSetLayout(IRHIDescriptorSetLayout* layout) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyDescriptorSetLayout not yet implemented" << std::endl;
+    delete layout;
 }
 
 IRHIPipelineLayout* VulkanRHI::CreatePipelineLayout(
     IRHIDescriptorSetLayout** setLayouts,
     uint32_t setLayoutCount
 ) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreatePipelineLayout not yet implemented" << std::endl;
-    return nullptr;
+    std::vector<IRHIDescriptorSetLayout*> layouts;
+    if (setLayouts && setLayoutCount > 0) {
+        layouts.assign(setLayouts, setLayouts + setLayoutCount);
+    }
+    std::vector<VulkanPipelineLayout::PushConstantRange> pushConstants;
+    auto* layout = new VulkanPipelineLayout(&m_device, layouts, pushConstants);
+    return layout;
 }
 
 void VulkanRHI::DestroyPipelineLayout(IRHIPipelineLayout* layout) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyPipelineLayout not yet implemented" << std::endl;
+    delete layout;
 }
 
 IRHIRenderPass* VulkanRHI::CreateRenderPass(const RenderPassDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateRenderPass not yet implemented" << std::endl;
-    return nullptr;
+    auto* renderPass = new VulkanRenderPass(&m_device, desc);
+    return renderPass;
 }
 
 void VulkanRHI::DestroyRenderPass(IRHIRenderPass* renderPass) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyRenderPass not yet implemented" << std::endl;
+    delete renderPass;
 }
 
 IRHIFramebuffer* VulkanRHI::CreateFramebuffer(
@@ -186,53 +217,67 @@ IRHIFramebuffer* VulkanRHI::CreateFramebuffer(
     uint32_t height,
     uint32_t layers
 ) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateFramebuffer not yet implemented" << std::endl;
-    return nullptr;
+    if (!renderPass) {
+        std::cerr << "[VulkanRHI] CreateFramebuffer: null render pass" << std::endl;
+        return nullptr;
+    }
+    auto* vulkanRenderPass = static_cast<VulkanRenderPass*>(renderPass);
+    auto* framebuffer = new VulkanFramebuffer(&m_device, vulkanRenderPass,
+                                               attachments, attachmentCount,
+                                               width, height, layers);
+    return framebuffer;
 }
 
 void VulkanRHI::DestroyFramebuffer(IRHIFramebuffer* framebuffer) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyFramebuffer not yet implemented" << std::endl;
+    delete framebuffer;
 }
 
 IRHIPipeline* VulkanRHI::CreateGraphicsPipeline(const PipelineDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateGraphicsPipeline not yet implemented" << std::endl;
-    return nullptr;
+    auto* pipeline = new VulkanGraphicsPipeline(&m_device, desc);
+    return pipeline;
 }
 
 IRHIPipeline* VulkanRHI::CreateComputePipeline(const ComputePipelineDesc& desc) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateComputePipeline not yet implemented" << std::endl;
-    return nullptr;
+    auto* pipeline = new VulkanComputePipeline(&m_device, desc);
+    return pipeline;
 }
 
 void VulkanRHI::DestroyPipeline(IRHIPipeline* pipeline) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyPipeline not yet implemented" << std::endl;
+    delete pipeline;
 }
 
 IRHIDescriptorPool* VulkanRHI::CreateDescriptorPool(uint32_t maxSets) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateDescriptorPool not yet implemented" << std::endl;
-    return nullptr;
+    auto poolSizes = VulkanDescriptorHelper::CreateDefaultPoolSizes(maxSets);
+    auto* pool = new VulkanDescriptorPool(&m_device, maxSets, poolSizes);
+    return pool;
 }
 
 void VulkanRHI::DestroyDescriptorPool(IRHIDescriptorPool* pool) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyDescriptorPool not yet implemented" << std::endl;
+    delete pool;
+}
+
+void VulkanRHI::DestroyDescriptorSet(IRHIDescriptorSet* descriptorSet) {
+    // Descriptor sets are typically managed by their pool
+    // Individual destruction is handled through the pool's FreeDescriptorSet method
+    if (descriptorSet) {
+        // The descriptor set will be freed when the pool is destroyed or reset
+        // For explicit freeing, the caller should use the pool's FreeDescriptorSet
+    }
 }
 
 IRHICommandBuffer* VulkanRHI::CreateCommandBuffer() {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] CreateCommandBuffer not yet implemented" << std::endl;
-    return nullptr;
+    // Create a command pool if we don't have one for the graphics queue
+    if (!m_commandPool) {
+        m_commandPool = std::make_unique<VulkanCommandPool>(
+            &m_device, m_device.GetQueueFamilyIndices().graphics.value()
+        );
+    }
+    auto* commandBuffer = new VulkanCommandBuffer(&m_device, m_commandPool.get());
+    return commandBuffer;
 }
 
 void VulkanRHI::DestroyCommandBuffer(IRHICommandBuffer* commandBuffer) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] DestroyCommandBuffer not yet implemented" << std::endl;
+    delete commandBuffer;
 }
 
 IRHISwapchain* VulkanRHI::CreateSwapchain(const SwapchainDesc& desc) {
@@ -253,6 +298,14 @@ IRHISwapchain* VulkanRHI::CreateSwapchain(const SwapchainDesc& desc) {
         return nullptr;
     }
 
+    // Initialize device with surface if not already initialized
+    if (m_device.GetDevice() == VK_NULL_HANDLE) {
+        if (!InitializeDevice(surface)) {
+            std::cerr << "[VulkanRHI] Failed to initialize device for swapchain" << std::endl;
+            return nullptr;
+        }
+    }
+
     // Create swapchain
     VulkanSwapchain* swapchain = new VulkanSwapchain(&m_device, surface, desc);
     return swapchain;
@@ -263,8 +316,34 @@ void VulkanRHI::DestroySwapchain(IRHISwapchain* swapchain) {
 }
 
 void VulkanRHI::Submit(IRHICommandBuffer** commandBuffers, uint32_t count) {
-    // TODO: Implement
-    std::cerr << "[VulkanRHI] Submit not yet implemented" << std::endl;
+    if (!commandBuffers || count == 0) {
+        return;
+    }
+
+    // Collect Vulkan command buffers
+    std::vector<VkCommandBuffer> vkCommandBuffers;
+    vkCommandBuffers.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (commandBuffers[i]) {
+            auto* vulkanCmdBuffer = static_cast<VulkanCommandBuffer*>(commandBuffers[i]);
+            vkCommandBuffers.push_back(vulkanCmdBuffer->GetHandle());
+        }
+    }
+
+    if (vkCommandBuffers.empty()) {
+        return;
+    }
+
+    // Submit to graphics queue
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = static_cast<uint32_t>(vkCommandBuffers.size());
+    submitInfo.pCommandBuffers = vkCommandBuffers.data();
+
+    VkResult result = vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    if (result != VK_SUCCESS) {
+        std::cerr << "[VulkanRHI] Failed to submit command buffers: " << result << std::endl;
+    }
 }
 
 void VulkanRHI::WaitIdle() {
@@ -381,7 +460,7 @@ void VulkanRHI::SetupDebugMessenger() {
     }
 }
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI
 
 // ============================================================================
 // Factory Functions
@@ -390,7 +469,7 @@ void VulkanRHI::SetupDebugMessenger() {
 namespace CatEngine::RHI {
 
 IRHIDevice* CreateRHIDevice(const RHIDesc& desc) {
-    auto* device = new Vulkan::VulkanRHI();
+    auto* device = new VulkanRHI();
     if (!device->Initialize(desc)) {
         delete device;
         return nullptr;

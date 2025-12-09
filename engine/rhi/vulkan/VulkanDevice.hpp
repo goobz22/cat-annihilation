@@ -6,7 +6,7 @@
 #include <array>
 #include <optional>
 
-namespace CatEngine::RHI::Vulkan {
+namespace CatEngine::RHI {
 
 /**
  * Queue family indices
@@ -68,6 +68,28 @@ public:
 
     VkPhysicalDevice GetPhysicalDevice() const { return m_physicalDevice; }
     VkDevice GetDevice() const { return m_device; }
+
+    // Aliases for compatibility
+    VkPhysicalDevice GetVkPhysicalDevice() const { return m_physicalDevice; }
+    VkDevice GetVkDevice() const { return m_device; }
+
+    // Debug utilities
+    bool IsDebugUtilsSupported() const { return m_debugUtilsSupported; }
+    void SetObjectName(VkObjectType objectType, uint64_t objectHandle, const char* name) const;
+
+    // Command buffer helpers
+    void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels = 1) const;
+    void TransitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                               uint32_t baseMipLevel, uint32_t levelCount,
+                               uint32_t baseArrayLayer, uint32_t layerCount) const;
+    void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) const;
+    void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height,
+                           uint32_t mipLevel, uint32_t arrayLayer) const;
+    void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size,
+                    VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0) const;
+
+    // Feature queries
+    bool IsBufferDeviceAddressSupported() const { return m_bufferDeviceAddressSupported; }
 
     VkQueue GetGraphicsQueue() const { return m_graphicsQueue; }
     VkQueue GetComputeQueue() const { return m_computeQueue; }
@@ -176,8 +198,17 @@ private:
     DeviceLimits m_rhiLimits = {};
     DeviceFeatures m_rhiFeatures = {};
 
+    // Debug utilities support
+    bool m_debugUtilsSupported = false;
+
+    // Buffer device address support
+    bool m_bufferDeviceAddressSupported = false;
+
+    // Command pool for one-time commands
+    VkCommandPool m_commandPool = VK_NULL_HANDLE;
+
     // Required device extensions
     static const std::vector<const char*> s_deviceExtensions;
 };
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI

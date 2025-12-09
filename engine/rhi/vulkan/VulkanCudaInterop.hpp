@@ -6,7 +6,6 @@
 
 #include <vulkan/vulkan.h>
 #include <cuda_runtime.h>
-#include <cudaVK.h>
 
 #include <memory>
 #include <vector>
@@ -86,7 +85,7 @@ public:
     static bool verifyCudaExternalMemorySupport(int cudaDeviceId);
 
 private:
-    static cudaUUID getVulkanDeviceUUID(VkPhysicalDevice physicalDevice);
+    static cudaUUID_t getVulkanDeviceUUID(VkPhysicalDevice physicalDevice);
 };
 
 /**

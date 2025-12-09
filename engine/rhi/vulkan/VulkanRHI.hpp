@@ -6,8 +6,13 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <memory>
 
-namespace CatEngine::RHI::Vulkan {
+namespace CatEngine::RHI {
+class VulkanCommandPool;
+}
+
+namespace CatEngine::RHI {
 
 /**
  * Vulkan RHI device implementation
@@ -55,6 +60,8 @@ public:
 
     IRHIBuffer* CreateBuffer(const BufferDesc& desc) override;
     void DestroyBuffer(IRHIBuffer* buffer) override;
+    void* MapBuffer(IRHIBuffer* buffer) override;
+    void UnmapBuffer(IRHIBuffer* buffer) override;
 
     IRHITexture* CreateTexture(const TextureDesc& desc) override;
     void DestroyTexture(IRHITexture* texture) override;
@@ -103,6 +110,7 @@ public:
 
     IRHIDescriptorPool* CreateDescriptorPool(uint32_t maxSets) override;
     void DestroyDescriptorPool(IRHIDescriptorPool* pool) override;
+    void DestroyDescriptorSet(IRHIDescriptorSet* descriptorSet) override;
 
     IRHICommandBuffer* CreateCommandBuffer() override;
     void DestroyCommandBuffer(IRHICommandBuffer* commandBuffer) override;
@@ -166,8 +174,11 @@ private:
     // Frame management
     uint32_t m_frameIndex = 0;
 
+    // Command pool for creating command buffers
+    std::unique_ptr<VulkanCommandPool> m_commandPool;
+
     // Validation layers
     static const std::vector<const char*> s_validationLayers;
 };
 
-} // namespace CatEngine::RHI::Vulkan
+} // namespace CatEngine::RHI

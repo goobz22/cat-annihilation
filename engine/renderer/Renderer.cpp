@@ -1,5 +1,12 @@
 #include "Renderer.hpp"
+#include "passes/UIPass.hpp"
+#include "../rhi/vulkan/VulkanRHI.hpp"
+#include "../rhi/vulkan/VulkanSwapchain.hpp"
+#include "../rhi/vulkan/VulkanCommandBuffer.hpp"
+#include <vulkan/vulkan.h>
 #include <chrono>
+#include <iostream>
+#include <cstring>
 
 namespace CatEngine::Renderer {
 
@@ -25,24 +32,42 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
 
     this->device = device;
 
+    std::cout << "[Renderer] Creating swapchain..." << std::endl;
     // Create swapchain
     if (!CreateSwapchain()) {
         return false;
     }
+    std::cout << "[Renderer] Swapchain created" << std::endl;
 
-    // Create command buffer
-    commandBuffer = device->CreateCommandBuffer();
-    if (!commandBuffer) {
-        return false;
+    std::cout << "[Renderer] Creating command buffers..." << std::endl;
+    // Create one command buffer per frame in flight
+    commandBuffers.resize(config.maxFramesInFlight);
+    for (uint32_t i = 0; i < config.maxFramesInFlight; ++i) {
+        commandBuffers[i] = device->CreateCommandBuffer();
+        if (!commandBuffers[i]) {
+            return false;
+        }
     }
+    std::cout << "[Renderer] Created " << config.maxFramesInFlight << " command buffers" << std::endl;
 
+    std::cout << "[Renderer] Creating frame resources..." << std::endl;
     // Create frame resources
     if (!CreateFrameResources()) {
         return false;
     }
+    std::cout << "[Renderer] Frame resources created" << std::endl;
 
+    std::cout << "[Renderer] Creating render graph..." << std::endl;
     // Create default render graph
     defaultRenderGraph = std::make_unique<RenderGraph>(device);
+    std::cout << "[Renderer] Render graph created" << std::endl;
+
+    std::cout << "[Renderer] Creating UI pass..." << std::endl;
+    // Create UI pass for 2D rendering
+    uiPass = std::make_unique<UIPass>();
+    uiPass->Setup(device, this);  // Initialize UIPass with RHI device
+    uiPass->OnResize(renderWidth, renderHeight);
+    std::cout << "[Renderer] UI pass created and initialized" << std::endl;
 
     initialized = true;
     return true;
@@ -59,11 +84,13 @@ void Renderer::Shutdown() {
     // Destroy frame resources
     DestroyFrameResources();
 
-    // Destroy command buffer
-    if (commandBuffer) {
-        device->DestroyCommandBuffer(commandBuffer);
-        commandBuffer = nullptr;
+    // Destroy command buffers
+    for (auto* cmdBuffer : commandBuffers) {
+        if (cmdBuffer) {
+            device->DestroyCommandBuffer(cmdBuffer);
+        }
     }
+    commandBuffers.clear();
 
     // Destroy swapchain
     if (swapchain) {
@@ -74,6 +101,9 @@ void Renderer::Shutdown() {
     // Reset render graph
     defaultRenderGraph.reset();
 
+    // Reset UI pass
+    uiPass.reset();
+
     initialized = false;
 }
 
@@ -82,35 +112,238 @@ void Renderer::Shutdown() {
 // ============================================================================
 
 bool Renderer::BeginFrame() {
-    if (!initialized) {
+    std::cout << "[Renderer::BeginFrame] Starting..." << std::endl;
+
+    if (!initialized || !swapchain) {
+        std::cout << "[Renderer::BeginFrame] Not initialized or no swapchain" << std::endl;
         return false;
     }
 
+    std::cout << "[Renderer::BeginFrame] Acquiring next swapchain image..." << std::endl;
+    // Acquire next swapchain image
+    // Note: AcquireNextImage handles fence waiting internally, don't duplicate it here
+    currentSwapchainImageIndex = swapchain->AcquireNextImage();
+    if (currentSwapchainImageIndex == UINT32_MAX) {
+        std::cout << "[Renderer::BeginFrame] Swapchain out of date, recreating..." << std::endl;
+        // Swapchain out of date, need to recreate
+        RecreateSwapchain();
+        return false;
+    }
+    std::cout << "[Renderer::BeginFrame] Got swapchain image index: " << currentSwapchainImageIndex << std::endl;
+
+    std::cout << "[Renderer::BeginFrame] Calling device->BeginFrame()..." << std::endl;
     // Begin frame on device
     device->BeginFrame();
 
     // Cycle frame index
     currentFrameIndex = (currentFrameIndex + 1) % config.maxFramesInFlight;
     frameNumber++;
+    std::cout << "[Renderer::BeginFrame] Frame " << frameNumber << ", index " << currentFrameIndex << std::endl;
 
     // Reset statistics
     ResetStatistics();
 
+    std::cout << "[Renderer::BeginFrame] Beginning command buffer recording..." << std::endl;
+    // Begin recording command buffer for current frame
+    auto* currentCmdBuffer = commandBuffers[currentFrameIndex];
+    if (currentCmdBuffer != nullptr) {
+        currentCmdBuffer->Begin();
+        std::cout << "[Renderer::BeginFrame] Command buffer Begin() called" << std::endl;
+
+        // Get Vulkan command buffer handle
+        auto* vulkanCmdBuffer = static_cast<RHI::VulkanCommandBuffer*>(currentCmdBuffer);
+        VkCommandBuffer vkCmd = vulkanCmdBuffer->GetHandle();
+
+        // Get Vulkan swapchain for image access
+        auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
+
+        // Get the swapchain image
+        VkImage swapchainImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
+
+        std::cout << "[Renderer::BeginFrame] vkCmd=" << vkCmd << ", swapchainImage=" << swapchainImage << std::endl;
+        if (vkCmd != VK_NULL_HANDLE && swapchainImage != VK_NULL_HANDLE) {
+            std::cout << "[Renderer::BeginFrame] Setting up image transition barrier..." << std::endl;
+            // Transition image from undefined to transfer dst for clearing
+            VkImageMemoryBarrier barrier = {};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = swapchainImage;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            vkCmdPipelineBarrier(
+                vkCmd,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+
+            // Clear the image to dark blue (0.1, 0.1, 0.2, 1.0)
+            VkClearColorValue clearColor = {};
+            clearColor.float32[0] = 0.1f;
+            clearColor.float32[1] = 0.1f;
+            clearColor.float32[2] = 0.2f;
+            clearColor.float32[3] = 1.0f;
+
+            VkImageSubresourceRange clearRange = {};
+            clearRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            clearRange.baseMipLevel = 0;
+            clearRange.levelCount = 1;
+            clearRange.baseArrayLayer = 0;
+            clearRange.layerCount = 1;
+
+            vkCmdClearColorImage(
+                vkCmd,
+                swapchainImage,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                &clearColor,
+                1,
+                &clearRange
+            );
+            std::cout << "[Renderer::BeginFrame] Image cleared" << std::endl;
+
+            // Transition to color attachment optimal for rendering
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+            vkCmdPipelineBarrier(
+                vkCmd,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+            std::cout << "[Renderer::BeginFrame] Image transitioned to color attachment" << std::endl;
+        }
+    }
+
+    std::cout << "[Renderer::BeginFrame] Complete, returning true" << std::endl;
     return true;
 }
 
 void Renderer::EndFrame() {
+    std::cout << "[Renderer::EndFrame] Starting..." << std::endl;
+    std::cout.flush();
+
     if (!initialized) {
+        std::cout << "[Renderer::EndFrame] Not initialized, returning" << std::endl;
         return;
     }
 
-    // Submit command buffer
-    if (commandBuffer) {
-        device->Submit(&commandBuffer, 1);
+    std::cout << "[Renderer::EndFrame] Getting Vulkan objects..." << std::endl;
+    // Get Vulkan swapchain for accessing synchronization primitives
+    auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
+    auto* currentCmdBuffer = commandBuffers[currentFrameIndex];
+    auto* vulkanCmdBuffer = static_cast<RHI::VulkanCommandBuffer*>(currentCmdBuffer);
+
+    if (currentCmdBuffer != nullptr && vulkanCmdBuffer != nullptr) {
+        VkCommandBuffer vkCmd = vulkanCmdBuffer->GetHandle();
+        VkImage swapchainImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
+        std::cout << "[Renderer::EndFrame] vkCmd=" << vkCmd << ", swapchainImage=" << swapchainImage << std::endl;
+
+        if (vkCmd != VK_NULL_HANDLE && swapchainImage != VK_NULL_HANDLE) {
+            std::cout << "[Renderer::EndFrame] Transitioning to present layout...\n";
+            std::cout.flush();
+            // Transition swapchain image to present layout
+            VkImageMemoryBarrier barrier = {};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = swapchainImage;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstAccessMask = 0;
+
+            vkCmdPipelineBarrier(
+                vkCmd,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        } else {
+            std::cout << "[Renderer::EndFrame] WARNING: vkCmd or swapchainImage is null!\n";
+            std::cout.flush();
+        }
+
+        // End command buffer recording
+        std::cout << "[Renderer::EndFrame] Ending command buffer...\n";
+        std::cout.flush();
+        currentCmdBuffer->End();
+        std::cout << "[Renderer::EndFrame] Command buffer ended" << std::endl;
+
+        // Submit command buffer with proper synchronization
+        std::cout << "[Renderer::EndFrame] Setting up submit info..." << std::endl;
+        VkSubmitInfo submitInfo = {};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        // Wait for image available semaphore
+        VkSemaphore waitSemaphores[] = { vulkanSwapchain->GetImageAvailableSemaphore() };
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        // Command buffer to submit
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &vkCmd;
+
+        // Signal render finished semaphore
+        VkSemaphore signalSemaphores[] = { vulkanSwapchain->GetRenderFinishedSemaphore() };
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        // Submit to graphics queue with fence
+        std::cout << "[Renderer::EndFrame] Submitting to graphics queue..." << std::endl;
+        VkFence inFlightFence = vulkanSwapchain->GetInFlightFence();
+        VkResult result = vkQueueSubmit(
+            static_cast<RHI::VulkanRHI*>(device)->GetDevice()->GetGraphicsQueue(),
+            1,
+            &submitInfo,
+            inFlightFence
+        );
+
+        if (result != VK_SUCCESS) {
+            std::cerr << "[Renderer::EndFrame] Failed to submit command buffer: " << result << std::endl;
+            return;
+        }
+        std::cout << "[Renderer::EndFrame] Queue submit succeeded" << std::endl;
+    }
+
+    // Present the swapchain image
+    std::cout << "[Renderer::EndFrame] Presenting swapchain..." << std::endl;
+    if (swapchain) {
+        swapchain->Present();
+        std::cout << "[Renderer::EndFrame] Present complete" << std::endl;
     }
 
     // End frame on device
+    std::cout << "[Renderer::EndFrame] Calling device->EndFrame()..." << std::endl;
     device->EndFrame();
+    std::cout << "[Renderer::EndFrame] Complete" << std::endl;
 }
 
 // ============================================================================
@@ -142,7 +375,7 @@ void Renderer::Render(Camera* camera, GPUScene* scene) {
     // Build and execute render graph
     BuildDefaultRenderGraph(camera, scene);
     if (defaultRenderGraph) {
-        defaultRenderGraph->Execute(commandBuffer);
+        defaultRenderGraph->Execute(commandBuffers[currentFrameIndex]);
     }
 
     // Update statistics
@@ -170,12 +403,12 @@ void Renderer::RenderToTarget(Camera* camera, GPUScene* scene, RHI::IRHITexture*
 }
 
 void Renderer::SubmitRenderGraph(RenderGraph* graph) {
-    if (!initialized || !graph) {
+    if (!initialized || graph == nullptr) {
         return;
     }
 
     graph->Compile();
-    graph->Execute(commandBuffer);
+    graph->Execute(commandBuffers[currentFrameIndex]);
 }
 
 // ============================================================================
@@ -195,6 +428,11 @@ void Renderer::OnResize(uint32_t width, uint32_t height) {
 
     // Recreate swapchain
     RecreateSwapchain();
+
+    // Resize UI pass
+    if (uiPass) {
+        uiPass->OnResize(width, height);
+    }
 
     // Rebuild render graph (if it depends on render target size)
     // This would happen automatically on next frame
@@ -366,7 +604,7 @@ bool Renderer::CreateSwapchain() {
     swapchainDesc.imageCount = config.maxFramesInFlight;
     swapchainDesc.vsync = config.enableVSync;
     swapchainDesc.debugName = "MainSwapchain";
-    // swapchainDesc.windowHandle would be set from platform window
+    swapchainDesc.windowHandle = config.windowHandle;
 
     swapchain = device->CreateSwapchain(swapchainDesc);
     return swapchain != nullptr;

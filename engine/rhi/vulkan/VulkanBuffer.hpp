@@ -40,6 +40,7 @@ public:
 
     // Vulkan-specific getters
     VkBuffer GetVkBuffer() const { return m_Buffer; }
+    VkBuffer GetHandle() const { return m_Buffer; }
     VkDeviceMemory GetVkDeviceMemory() const { return m_Memory; }
     bool IsMapped() const { return m_MappedData != nullptr; }
 

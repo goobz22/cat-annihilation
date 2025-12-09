@@ -10,6 +10,8 @@ class IRHIBuffer;
 class IRHITexture;
 class IRHITextureView;
 class IRHISampler;
+class IRHIDescriptorSet;
+class IRHIDescriptorSetLayout;
 
 /**
  * Descriptor buffer info for uniform/storage buffers

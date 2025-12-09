@@ -3,6 +3,7 @@
 
 #include "../../math/Vector.hpp"
 #include "../../math/Matrix.hpp"
+#include "../../math/Math.hpp"
 #include <cstdint>
 
 namespace Engine::Renderer {
@@ -123,8 +124,8 @@ struct SpotLight {
         , direction(0.0f, -1.0f, 0.0f)
         , color(1.0f, 1.0f, 1.0f)
         , intensity(1.0f)
-        , innerAngle(Math::degToRad(12.5f))
-        , outerAngle(Math::degToRad(17.5f))
+        , innerAngle(Engine::Math::degToRad(12.5f))
+        , outerAngle(Engine::Math::degToRad(17.5f))
         , radius(25.0f)
     {}
 

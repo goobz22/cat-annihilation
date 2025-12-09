@@ -48,6 +48,14 @@ inline MemoryProperty operator|(MemoryProperty a, MemoryProperty b) {
     return static_cast<MemoryProperty>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
 }
 
+inline MemoryProperty operator&(MemoryProperty a, MemoryProperty b) {
+    return static_cast<MemoryProperty>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+
+inline bool operator!=(MemoryProperty a, uint32_t b) {
+    return static_cast<uint32_t>(a) != b;
+}
+
 /**
  * Texture formats
  */
@@ -102,6 +110,11 @@ enum class TextureFormat {
     RG32_UINT,
     RG32_SINT,
     RG32_SFLOAT,
+
+    // 96-bit formats (3 components)
+    RGB32_UINT,
+    RGB32_SINT,
+    RGB32_SFLOAT,
 
     // 128-bit formats
     RGBA32_UINT,

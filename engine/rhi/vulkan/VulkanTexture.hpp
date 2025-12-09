@@ -104,6 +104,7 @@ public:
 
     // Vulkan-specific getters
     VkSampler GetVkSampler() const { return m_Sampler; }
+    VkSampler GetHandle() const { return m_Sampler; }
 
 private:
     VulkanDevice* m_Device;
@@ -138,6 +139,7 @@ public:
 
     // Vulkan-specific getters
     VkImageView GetVkImageView() const { return m_ImageView; }
+    VkImageView GetHandle() const { return m_ImageView; }
 
 private:
     VulkanDevice* m_Device;

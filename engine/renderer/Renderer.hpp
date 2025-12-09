@@ -9,6 +9,9 @@
 
 namespace CatEngine::Renderer {
 
+// Forward declaration
+class UIPass;
+
 /**
  * Frame resource management
  * Manages per-frame resources that need to be cycled (e.g., uniform buffers)
@@ -81,6 +84,7 @@ public:
         bool enableVSync = true;
         uint32_t width = 1920;
         uint32_t height = 1080;
+        void* windowHandle = nullptr;      // Platform window handle for swapchain
     };
 
     Renderer(const Config& config);
@@ -197,7 +201,14 @@ public:
     /**
      * Get current command buffer
      */
-    RHI::IRHICommandBuffer* GetCommandBuffer() const { return commandBuffer; }
+    RHI::IRHICommandBuffer* GetCommandBuffer() const {
+        return currentFrameIndex < commandBuffers.size() ? commandBuffers[currentFrameIndex] : nullptr;
+    }
+
+    /**
+     * Get UIPass for 2D rendering
+     */
+    [[nodiscard]] UIPass* GetUIPass() const { return uiPass.get(); }
 
     // ========================================================================
     // Statistics
@@ -231,11 +242,12 @@ private:
     Config config;
     RHI::IRHIDevice* device = nullptr;
     RHI::IRHISwapchain* swapchain = nullptr;
-    RHI::IRHICommandBuffer* commandBuffer = nullptr;
+    std::vector<RHI::IRHICommandBuffer*> commandBuffers;  // One per frame in flight
 
     bool initialized = false;
     uint64_t frameNumber = 0;
     uint32_t currentFrameIndex = 0;
+    uint32_t currentSwapchainImageIndex = 0;
 
     // Render dimensions
     uint32_t renderWidth = 0;
@@ -250,6 +262,9 @@ private:
 
     // Internal render graph (optional, for default rendering)
     std::unique_ptr<RenderGraph> defaultRenderGraph;
+
+    // UI rendering pass
+    std::unique_ptr<UIPass> uiPass;
 
     // ========================================================================
     // Internal Methods

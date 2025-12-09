@@ -3,6 +3,7 @@
 #include "RenderPass.hpp"
 #include "../../rhi/RHITypes.hpp"
 #include <memory>
+#include <array>
 
 namespace CatEngine::Renderer {
 
@@ -115,9 +116,9 @@ public:
 
     /**
      * Update camera for skybox rendering
-     * @param camera Main camera
+     * @param camera Main camera (non-const due to lazy matrix updates)
      */
-    void UpdateCamera(const Camera* camera);
+    void UpdateCamera(Camera* camera);
 
     /**
      * Enable/disable sun disk rendering

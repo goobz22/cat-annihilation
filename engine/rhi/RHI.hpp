@@ -143,6 +143,19 @@ public:
     virtual void DestroyBuffer(IRHIBuffer* buffer) = 0;
 
     /**
+     * Map buffer memory for CPU access
+     * @param buffer Buffer to map
+     * @return Pointer to mapped memory, or nullptr on failure
+     */
+    virtual void* MapBuffer(IRHIBuffer* buffer) = 0;
+
+    /**
+     * Unmap buffer memory
+     * @param buffer Buffer to unmap
+     */
+    virtual void UnmapBuffer(IRHIBuffer* buffer) = 0;
+
+    /**
      * Create texture
      */
     virtual IRHITexture* CreateTexture(const TextureDesc& desc) = 0;
@@ -280,6 +293,12 @@ public:
     virtual void DestroyDescriptorPool(IRHIDescriptorPool* pool) = 0;
 
     /**
+     * Destroy descriptor set
+     * @param descriptorSet Descriptor set to destroy
+     */
+    virtual void DestroyDescriptorSet(IRHIDescriptorSet* descriptorSet) = 0;
+
+    /**
      * Create command buffer
      */
     virtual IRHICommandBuffer* CreateCommandBuffer() = 0;
@@ -341,5 +360,8 @@ IRHIDevice* CreateRHIDevice(const RHIDesc& desc);
  * Destroy RHI device instance
  */
 void DestroyRHIDevice(IRHIDevice* device);
+
+// Type alias for backward compatibility
+using IRHI = IRHIDevice;
 
 } // namespace CatEngine::RHI

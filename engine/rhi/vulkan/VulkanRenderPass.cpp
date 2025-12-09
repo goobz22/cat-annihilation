@@ -1,20 +1,10 @@
 #include "VulkanRenderPass.hpp"
+#include "VulkanDevice.hpp"
+#include "VulkanTexture.hpp"
 #include <stdexcept>
 #include <algorithm>
 
 namespace CatEngine::RHI {
-
-// Forward declare VulkanDevice interface we need
-class VulkanDevice {
-public:
-    virtual VkDevice GetDevice() const = 0;
-};
-
-// Forward declaration for texture view
-class VulkanTextureView {
-public:
-    virtual VkImageView GetHandle() const = 0;
-};
 
 // ============================================================================
 // VulkanRenderPass Implementation
@@ -138,10 +128,23 @@ VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& d
     if (vkCreateRenderPass(m_device->GetDevice(), &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create render pass");
     }
+    m_ownsHandle = true;
+}
+
+VulkanRenderPass::VulkanRenderPass(VulkanDevice* device, VkRenderPass existingRenderPass,
+                                   const std::vector<AttachmentDesc>& attachments,
+                                   const std::vector<SubpassDesc>& subpasses,
+                                   const char* debugName)
+    : m_device(device)
+    , m_renderPass(existingRenderPass)
+    , m_attachments(attachments)
+    , m_subpasses(subpasses)
+    , m_debugName(debugName ? debugName : "")
+    , m_ownsHandle(false) {  // We do NOT own this handle
 }
 
 VulkanRenderPass::~VulkanRenderPass() {
-    if (m_renderPass != VK_NULL_HANDLE) {
+    if (m_ownsHandle && m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(m_device->GetDevice(), m_renderPass, nullptr);
     }
 }

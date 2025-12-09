@@ -17,7 +17,15 @@ class VulkanTextureView;
  */
 class VulkanRenderPass : public IRHIRenderPass {
 public:
+    // Create a new render pass from description
     VulkanRenderPass(VulkanDevice* device, const RenderPassDesc& desc);
+    
+    // Wrap an existing VkRenderPass (does NOT take ownership - caller manages lifetime)
+    VulkanRenderPass(VulkanDevice* device, VkRenderPass existingRenderPass, 
+                     const std::vector<AttachmentDesc>& attachments,
+                     const std::vector<SubpassDesc>& subpasses,
+                     const char* debugName = nullptr);
+    
     ~VulkanRenderPass() override;
 
     VulkanRenderPass(const VulkanRenderPass&) = delete;
@@ -45,6 +53,7 @@ private:
     std::vector<AttachmentDesc> m_attachments;
     std::vector<SubpassDesc> m_subpasses;
     std::string m_debugName;
+    bool m_ownsHandle = true;  // If false, don't destroy in destructor
 };
 
 /**

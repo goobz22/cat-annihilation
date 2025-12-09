@@ -112,8 +112,8 @@ RHI::IRHIBuffer* RenderGraph::GetBuffer(ResourceHandle handle) {
 // Pass Declaration
 // ============================================================================
 
-RenderPass* RenderGraph::AddGraphicsPass(const std::string& name) {
-    auto* pass = new RenderPass(name, PassType::Graphics);
+RenderGraphPass* RenderGraph::AddGraphicsPass(const std::string& name) {
+    auto* pass = new RenderGraphPass(name, PassType::Graphics);
     pass->passID = nextPassID++;
     passes.push_back(pass);
     passNameMap[name] = pass->passID;
@@ -123,8 +123,8 @@ RenderPass* RenderGraph::AddGraphicsPass(const std::string& name) {
     return pass;
 }
 
-RenderPass* RenderGraph::AddComputePass(const std::string& name) {
-    auto* pass = new RenderPass(name, PassType::Compute);
+RenderGraphPass* RenderGraph::AddComputePass(const std::string& name) {
+    auto* pass = new RenderGraphPass(name, PassType::Compute);
     pass->passID = nextPassID++;
     passes.push_back(pass);
     passNameMap[name] = pass->passID;
@@ -134,8 +134,8 @@ RenderPass* RenderGraph::AddComputePass(const std::string& name) {
     return pass;
 }
 
-RenderPass* RenderGraph::AddTransferPass(const std::string& name) {
-    auto* pass = new RenderPass(name, PassType::Transfer);
+RenderGraphPass* RenderGraph::AddTransferPass(const std::string& name) {
+    auto* pass = new RenderGraphPass(name, PassType::Transfer);
     pass->passID = nextPassID++;
     passes.push_back(pass);
     passNameMap[name] = pass->passID;
@@ -145,7 +145,7 @@ RenderPass* RenderGraph::AddTransferPass(const std::string& name) {
     return pass;
 }
 
-RenderPass* RenderGraph::GetPass(const std::string& name) {
+RenderGraphPass* RenderGraph::GetPass(const std::string& name) {
     auto it = passNameMap.find(name);
     if (it != passNameMap.end()) {
         uint32_t passID = it->second;

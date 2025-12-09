@@ -65,14 +65,15 @@ struct ResourceUsage {
 };
 
 /**
- * Render pass in the render graph
+ * Render graph pass - represents a pass node in the render graph
+ * This is distinct from the RenderPass base class used for actual rendering passes
  */
-class RenderPass {
+class RenderGraphPass {
 public:
-    RenderPass(const std::string& name, PassType type)
+    RenderGraphPass(const std::string& name, PassType type)
         : name(name), type(type) {}
 
-    virtual ~RenderPass() = default;
+    virtual ~RenderGraphPass() = default;
 
     const std::string& GetName() const { return name; }
     PassType GetType() const { return type; }
@@ -263,22 +264,22 @@ public:
     /**
      * Add a graphics pass
      */
-    RenderPass* AddGraphicsPass(const std::string& name);
+    RenderGraphPass* AddGraphicsPass(const std::string& name);
 
     /**
      * Add a compute pass
      */
-    RenderPass* AddComputePass(const std::string& name);
+    RenderGraphPass* AddComputePass(const std::string& name);
 
     /**
      * Add a transfer pass
      */
-    RenderPass* AddTransferPass(const std::string& name);
+    RenderGraphPass* AddTransferPass(const std::string& name);
 
     /**
      * Get pass by name
      */
-    RenderPass* GetPass(const std::string& name);
+    RenderGraphPass* GetPass(const std::string& name);
 
     // ========================================================================
     // Execution
@@ -350,7 +351,7 @@ private:
     uint32_t nextResourceID = 1;  // 0 is invalid
 
     // Passes
-    std::vector<RenderPass*> passes;
+    std::vector<RenderGraphPass*> passes;
     std::unordered_map<std::string, uint32_t> passNameMap;
     uint32_t nextPassID = 0;
 

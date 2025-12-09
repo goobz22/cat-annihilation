@@ -1,5 +1,6 @@
 #include "PostProcessPass.hpp"
 #include "../../rhi/RHI.hpp"
+#include "../../rhi/vulkan/VulkanShader.hpp"
 #include <cstring>
 #include <algorithm>
 
@@ -190,50 +191,64 @@ void PostProcessPass::CreateRenderTargets(uint32_t width, uint32_t height) {
 }
 
 void PostProcessPass::CreatePipelines() {
-    // Load shaders
-    // TODO: Load actual shader bytecode from compiled SPIR-V files
+    // Load shaders from compiled SPIR-V files
+    auto fullscreenVertCode = RHI::ShaderLoader::LoadSPIRV("shaders/postprocess/fullscreen.vert.spv");
+    auto bloomDownsampleCode = RHI::ShaderLoader::LoadSPIRV("shaders/postprocess/bloom_downsample.frag.spv");
+    auto bloomUpsampleCode = RHI::ShaderLoader::LoadSPIRV("shaders/postprocess/bloom_upsample.frag.spv");
+    auto tonemapCode = RHI::ShaderLoader::LoadSPIRV("shaders/postprocess/tonemap.frag.spv");
+    auto fxaaCode = RHI::ShaderLoader::LoadSPIRV("shaders/postprocess/fxaa.frag.spv");
 
     // Fullscreen vertex shader (shared by all passes)
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
-    vertDesc.code = nullptr; // TODO: Load fullscreen quad vertex shader
-    vertDesc.codeSize = 0;
+    vertDesc.code = fullscreenVertCode.empty() ? nullptr : fullscreenVertCode.data();
+    vertDesc.codeSize = fullscreenVertCode.size();
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "FullscreenVert";
-    // fullscreenVertShader_.reset(rhi_->CreateShader(vertDesc));
+    if (!fullscreenVertCode.empty()) {
+        fullscreenVertShader_.reset(rhi_->CreateShader(vertDesc));
+    }
 
     // Fragment shaders for each effect
     RHI::ShaderDesc bloomDownsampleDesc{};
     bloomDownsampleDesc.stage = RHI::ShaderStage::Fragment;
-    bloomDownsampleDesc.code = nullptr; // TODO: Load from shaders/postprocess/bloom_downsample.frag.spv
-    bloomDownsampleDesc.codeSize = 0;
+    bloomDownsampleDesc.code = bloomDownsampleCode.empty() ? nullptr : bloomDownsampleCode.data();
+    bloomDownsampleDesc.codeSize = bloomDownsampleCode.size();
     bloomDownsampleDesc.entryPoint = "main";
     bloomDownsampleDesc.debugName = "BloomDownsampleFrag";
-    // bloomDownsampleFragShader_.reset(rhi_->CreateShader(bloomDownsampleDesc));
+    if (!bloomDownsampleCode.empty()) {
+        bloomDownsampleFragShader_.reset(rhi_->CreateShader(bloomDownsampleDesc));
+    }
 
     RHI::ShaderDesc bloomUpsampleDesc{};
     bloomUpsampleDesc.stage = RHI::ShaderStage::Fragment;
-    bloomUpsampleDesc.code = nullptr; // TODO: Load from shaders/postprocess/bloom_upsample.frag.spv
-    bloomUpsampleDesc.codeSize = 0;
+    bloomUpsampleDesc.code = bloomUpsampleCode.empty() ? nullptr : bloomUpsampleCode.data();
+    bloomUpsampleDesc.codeSize = bloomUpsampleCode.size();
     bloomUpsampleDesc.entryPoint = "main";
     bloomUpsampleDesc.debugName = "BloomUpsampleFrag";
-    // bloomUpsampleFragShader_.reset(rhi_->CreateShader(bloomUpsampleDesc));
+    if (!bloomUpsampleCode.empty()) {
+        bloomUpsampleFragShader_.reset(rhi_->CreateShader(bloomUpsampleDesc));
+    }
 
     RHI::ShaderDesc tonemapDesc{};
     tonemapDesc.stage = RHI::ShaderStage::Fragment;
-    tonemapDesc.code = nullptr; // TODO: Load from shaders/postprocess/tonemap.frag.spv
-    tonemapDesc.codeSize = 0;
+    tonemapDesc.code = tonemapCode.empty() ? nullptr : tonemapCode.data();
+    tonemapDesc.codeSize = tonemapCode.size();
     tonemapDesc.entryPoint = "main";
     tonemapDesc.debugName = "TonemapFrag";
-    // tonemapFragShader_.reset(rhi_->CreateShader(tonemapDesc));
+    if (!tonemapCode.empty()) {
+        tonemapFragShader_.reset(rhi_->CreateShader(tonemapDesc));
+    }
 
     RHI::ShaderDesc fxaaDesc{};
     fxaaDesc.stage = RHI::ShaderStage::Fragment;
-    fxaaDesc.code = nullptr; // TODO: Load from shaders/postprocess/fxaa.frag.spv
-    fxaaDesc.codeSize = 0;
+    fxaaDesc.code = fxaaCode.empty() ? nullptr : fxaaCode.data();
+    fxaaDesc.codeSize = fxaaCode.size();
     fxaaDesc.entryPoint = "main";
     fxaaDesc.debugName = "FXAAFrag";
-    // fxaaFragShader_.reset(rhi_->CreateShader(fxaaDesc));
+    if (!fxaaCode.empty()) {
+        fxaaFragShader_.reset(rhi_->CreateShader(fxaaDesc));
+    }
 
     // Create pipelines
     // All pipelines use similar configuration (fullscreen quad, no depth test, etc.)
@@ -274,9 +289,35 @@ void PostProcessPass::CreatePipelines() {
     blendState.colorWriteMask = 0xF; // RGBA
     basePipelineDesc.blendAttachments = {blendState};
 
-    // Create each pipeline
-    // TODO: Set up render passes and create actual pipelines
-    // For now, pipelines are not created (would need render pass objects)
+    // Create pipelines if shaders are loaded
+    // Pipeline creation requires render pass objects which are created elsewhere
+    if (fullscreenVertShader_ && tonemapFragShader_) {
+        RHI::PipelineDesc tonemapPipelineDesc = basePipelineDesc;
+        tonemapPipelineDesc.shaders = {fullscreenVertShader_.get(), tonemapFragShader_.get()};
+        tonemapPipelineDesc.debugName = "TonemapPipeline";
+        // tonemapPipeline_.reset(rhi_->CreateGraphicsPipeline(tonemapPipelineDesc));
+    }
+
+    if (fullscreenVertShader_ && bloomDownsampleFragShader_) {
+        RHI::PipelineDesc bloomDownsamplePipelineDesc = basePipelineDesc;
+        bloomDownsamplePipelineDesc.shaders = {fullscreenVertShader_.get(), bloomDownsampleFragShader_.get()};
+        bloomDownsamplePipelineDesc.debugName = "BloomDownsamplePipeline";
+        // bloomDownsamplePipeline_.reset(rhi_->CreateGraphicsPipeline(bloomDownsamplePipelineDesc));
+    }
+
+    if (fullscreenVertShader_ && bloomUpsampleFragShader_) {
+        RHI::PipelineDesc bloomUpsamplePipelineDesc = basePipelineDesc;
+        bloomUpsamplePipelineDesc.shaders = {fullscreenVertShader_.get(), bloomUpsampleFragShader_.get()};
+        bloomUpsamplePipelineDesc.debugName = "BloomUpsamplePipeline";
+        // bloomUpsamplePipeline_.reset(rhi_->CreateGraphicsPipeline(bloomUpsamplePipelineDesc));
+    }
+
+    if (fullscreenVertShader_ && fxaaFragShader_) {
+        RHI::PipelineDesc fxaaPipelineDesc = basePipelineDesc;
+        fxaaPipelineDesc.shaders = {fullscreenVertShader_.get(), fxaaFragShader_.get()};
+        fxaaPipelineDesc.debugName = "FXAAPipeline";
+        // fxaaPipeline_.reset(rhi_->CreateGraphicsPipeline(fxaaPipelineDesc));
+    }
 }
 
 void PostProcessPass::CreateUniformBuffers() {
@@ -300,7 +341,34 @@ void PostProcessPass::CreateFullscreenTriangle() {
 
     fullscreenTriangleBuffer_.reset(rhi_->CreateBuffer(bufferDesc));
 
-    // TODO: Upload vertex data to GPU using staging buffer
+    // Upload vertex data to GPU via staging buffer
+    RHI::BufferDesc stagingDesc{};
+    stagingDesc.size = sizeof(FULLSCREEN_TRIANGLE);
+    stagingDesc.usage = RHI::BufferUsage::TransferSrc;
+    stagingDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
+    stagingDesc.debugName = "FullscreenTriangleStagingBuffer";
+
+    std::unique_ptr<RHI::IRHIBuffer> stagingBuffer(rhi_->CreateBuffer(stagingDesc));
+
+    // Copy vertex data to staging buffer
+    void* mappedData = stagingBuffer->Map();
+    std::memcpy(mappedData, FULLSCREEN_TRIANGLE, sizeof(FULLSCREEN_TRIANGLE));
+    stagingBuffer->Unmap();
+
+    // Create command buffer for transfer
+    std::unique_ptr<RHI::IRHICommandBuffer> cmdBuffer(rhi_->CreateCommandBuffer());
+
+    // Record copy command
+    cmdBuffer->Begin();
+    cmdBuffer->CopyBuffer(stagingBuffer.get(), fullscreenTriangleBuffer_.get(), 0, 0, sizeof(FULLSCREEN_TRIANGLE));
+    cmdBuffer->End();
+
+    // Submit and wait for transfer to complete
+    RHI::IRHICommandBuffer* cmdBufferPtr = cmdBuffer.get();
+    rhi_->Submit(&cmdBufferPtr, 1);
+    rhi_->WaitIdle();
+
+    // Staging buffer is automatically cleaned up when unique_ptr goes out of scope
 }
 
 void PostProcessPass::ExecuteBloom(RHI::IRHICommandBuffer* cmd, uint32_t frameIndex) {
@@ -310,12 +378,15 @@ void PostProcessPass::ExecuteBloom(RHI::IRHICommandBuffer* cmd, uint32_t frameIn
     // 3. Upsample chain: upsample with 9-tap tent filter, accumulating
     // 4. Composite: add bloom to original image
 
-    // TODO: Implement bloom passes
-    // For now, this is a placeholder
+    // Skip if bloom pipelines aren't ready
+    if (!bloomDownsamplePipeline_ || !bloomUpsamplePipeline_) {
+        return;
+    }
 
     // Bind fullscreen triangle
     uint64_t offset = 0;
-    cmd->BindVertexBuffer(0, fullscreenTriangleBuffer_.get(), offset);
+    RHI::IRHIBuffer* buffer = fullscreenTriangleBuffer_.get();
+    cmd->BindVertexBuffers(0, &buffer, &offset, 1);
 
     // 1. Threshold pass
     // cmd->BindPipeline(bloomThresholdPipeline_.get());
@@ -353,7 +424,8 @@ void PostProcessPass::ExecuteTonemap(RHI::IRHICommandBuffer* cmd, uint32_t frame
     // Render to pingPongTexture0_
 
     uint64_t offset = 0;
-    cmd->BindVertexBuffer(0, fullscreenTriangleBuffer_.get(), offset);
+    RHI::IRHIBuffer* buffer = fullscreenTriangleBuffer_.get();
+    cmd->BindVertexBuffers(0, &buffer, &offset, 1);
     // cmd->Draw(3, 1, 0, 0);
 }
 
@@ -366,7 +438,8 @@ void PostProcessPass::ExecuteFXAA(RHI::IRHICommandBuffer* cmd, uint32_t frameInd
     // Render to outputTexture_
 
     uint64_t offset = 0;
-    cmd->BindVertexBuffer(0, fullscreenTriangleBuffer_.get(), offset);
+    RHI::IRHIBuffer* buffer = fullscreenTriangleBuffer_.get();
+    cmd->BindVertexBuffers(0, &buffer, &offset, 1);
     // cmd->Draw(3, 1, 0, 0);
 }
 

@@ -1,7 +1,9 @@
 #include "SkyboxPass.hpp"
 #include "../../rhi/RHI.hpp"
+#include "../../rhi/vulkan/VulkanShader.hpp"
+#include "../Camera.hpp"
 #include <cstring>
-#include <cmath>
+#include <array>
 
 namespace CatEngine::Renderer {
 
@@ -100,12 +102,17 @@ void SkyboxPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIn
 
     // Bind vertex buffer
     uint64_t offset = 0;
-    commandBuffer->BindVertexBuffer(0, skyboxVertexBuffer_.get(), offset);
+    RHI::IRHIBuffer* buffer = skyboxVertexBuffer_.get();
+    commandBuffer->BindVertexBuffers(0, &buffer, &offset, 1);
 
     // Bind descriptor set with uniforms and textures
-    // TODO: Bind descriptor set containing:
-    // - Uniform buffer with camera and atmosphere data
-    // - Cubemap sampler (if in cubemap mode)
+    // Descriptor set layout:
+    // - Binding 0: Uniform buffer with camera and atmosphere data
+    // - Binding 1: Cubemap sampler (if in cubemap mode)
+    // Note: Descriptor sets are created externally and managed by Renderer
+    // The actual binding would look like:
+    // RHI::IRHIDescriptorSet* sets[] = { descriptorSets_[frameIndex].get() };
+    // commandBuffer->BindDescriptorSets(RHI::PipelineBindPoint::Graphics, pipelineLayout, 0, sets, 1, nullptr, 0);
 
     // Draw skybox cube (36 vertices)
     commandBuffer->Draw(36, 1, 0, 0);
@@ -125,20 +132,48 @@ void SkyboxPass::Cleanup() {
     }
 }
 
-void SkyboxPass::UpdateCamera(const Camera* camera) {
-    // TODO: Extract view and projection matrices from camera
-    // Remove translation from view matrix (only rotation)
-    // For now, use identity matrices as placeholder
-
-    for (int i = 0; i < 16; ++i) {
-        uniforms_.viewMatrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
-        uniforms_.projMatrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+void SkyboxPass::UpdateCamera(Camera* camera) {
+    if (camera == nullptr) {
+        // Use identity matrices as fallback
+        for (int i = 0; i < 16; ++i) {
+            uniforms_.viewMatrix[i] = (i % 5 == 0) ? 1.0F : 0.0F;
+            uniforms_.projMatrix[i] = (i % 5 == 0) ? 1.0F : 0.0F;
+        }
+        uniforms_.cameraPosition[0] = 0.0F;
+        uniforms_.cameraPosition[1] = 0.0F;
+        uniforms_.cameraPosition[2] = 0.0F;
+        return;
     }
 
-    // TODO: Get camera position from camera
-    uniforms_.cameraPosition[0] = 0.0f;
-    uniforms_.cameraPosition[1] = 0.0f;
-    uniforms_.cameraPosition[2] = 0.0f;
+    // Get view matrix from camera and remove translation (keep only rotation)
+    // This makes the skybox appear infinitely far away
+    const Engine::mat4& viewMat = camera->GetViewMatrix();
+
+    // Copy view matrix to uniform array
+    // mat4 is column-major, copy each column
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            uniforms_.viewMatrix[(col * 4) + row] = viewMat[col][row];
+        }
+    }
+    // Zero out translation components (column 3, rows 0-2 in column-major = indices 12, 13, 14)
+    uniforms_.viewMatrix[12] = 0.0F;
+    uniforms_.viewMatrix[13] = 0.0F;
+    uniforms_.viewMatrix[14] = 0.0F;
+
+    // Copy projection matrix as-is
+    const Engine::mat4& projMat = camera->GetProjectionMatrix();
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            uniforms_.projMatrix[(col * 4) + row] = projMat[col][row];
+        }
+    }
+
+    // Get camera world position for atmosphere calculations
+    const Engine::vec3& camPos = camera->GetPosition();
+    uniforms_.cameraPosition[0] = camPos.x;
+    uniforms_.cameraPosition[1] = camPos.y;
+    uniforms_.cameraPosition[2] = camPos.z;
 }
 
 void SkyboxPass::CreateRenderPass() {
@@ -183,35 +218,43 @@ void SkyboxPass::CreateRenderPass() {
 }
 
 void SkyboxPass::CreatePipelines() {
-    // Load shaders
-    // TODO: Load actual shader bytecode from compiled SPIR-V files
+    // Load shaders from compiled SPIR-V files
+    auto skyboxVertCode = RHI::ShaderLoader::LoadSPIRV("shaders/sky/skybox.vert.spv");
+    auto skyboxFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/sky/skybox.frag.spv");
+    auto atmosphereFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/sky/atmosphere.frag.spv");
 
     // Vertex shader (shared by both modes)
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
-    vertDesc.code = nullptr; // TODO: Load from shaders/sky/skybox.vert.spv
-    vertDesc.codeSize = 0;
+    vertDesc.code = skyboxVertCode.empty() ? nullptr : skyboxVertCode.data();
+    vertDesc.codeSize = skyboxVertCode.size();
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "SkyboxVert";
-    // skyboxVertShader_.reset(rhi_->CreateShader(vertDesc));
+    if (!skyboxVertCode.empty()) {
+        skyboxVertShader_.reset(rhi_->CreateShader(vertDesc));
+    }
 
     // Fragment shader for cubemap mode
     RHI::ShaderDesc skyboxFragDesc{};
     skyboxFragDesc.stage = RHI::ShaderStage::Fragment;
-    skyboxFragDesc.code = nullptr; // TODO: Load from shaders/sky/skybox.frag.spv
-    skyboxFragDesc.codeSize = 0;
+    skyboxFragDesc.code = skyboxFragCode.empty() ? nullptr : skyboxFragCode.data();
+    skyboxFragDesc.codeSize = skyboxFragCode.size();
     skyboxFragDesc.entryPoint = "main";
     skyboxFragDesc.debugName = "SkyboxFrag";
-    // skyboxFragShader_.reset(rhi_->CreateShader(skyboxFragDesc));
+    if (!skyboxFragCode.empty()) {
+        skyboxFragShader_.reset(rhi_->CreateShader(skyboxFragDesc));
+    }
 
     // Fragment shader for procedural atmosphere
     RHI::ShaderDesc atmosphereFragDesc{};
     atmosphereFragDesc.stage = RHI::ShaderStage::Fragment;
-    atmosphereFragDesc.code = nullptr; // TODO: Load from shaders/sky/atmosphere.frag.spv
-    atmosphereFragDesc.codeSize = 0;
+    atmosphereFragDesc.code = atmosphereFragCode.empty() ? nullptr : atmosphereFragCode.data();
+    atmosphereFragDesc.codeSize = atmosphereFragCode.size();
     atmosphereFragDesc.entryPoint = "main";
     atmosphereFragDesc.debugName = "AtmosphereFrag";
-    // atmosphereFragShader_.reset(rhi_->CreateShader(atmosphereFragDesc));
+    if (!atmosphereFragCode.empty()) {
+        atmosphereFragShader_.reset(rhi_->CreateShader(atmosphereFragDesc));
+    }
 
     // Create cubemap pipeline
     {
@@ -313,9 +356,35 @@ void SkyboxPass::CreateSkyboxMesh() {
 
     skyboxVertexBuffer_.reset(rhi_->CreateBuffer(bufferDesc));
 
-    // TODO: Upload vertex data to GPU
-    // This requires creating a staging buffer and copying data
-    // For now, the buffer is created but not filled
+    // Upload vertex data to GPU via staging buffer
+    // Create staging buffer in host-visible memory
+    RHI::BufferDesc stagingDesc{};
+    stagingDesc.size = sizeof(SKYBOX_VERTICES);
+    stagingDesc.usage = RHI::BufferUsage::TransferSrc;
+    stagingDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
+    stagingDesc.debugName = "SkyboxStagingBuffer";
+
+    std::unique_ptr<RHI::IRHIBuffer> stagingBuffer(rhi_->CreateBuffer(stagingDesc));
+
+    // Copy vertex data to staging buffer
+    void* mappedData = stagingBuffer->Map();
+    std::memcpy(mappedData, SKYBOX_VERTICES, sizeof(SKYBOX_VERTICES));
+    stagingBuffer->Unmap();
+
+    // Create command buffer for transfer
+    std::unique_ptr<RHI::IRHICommandBuffer> cmdBuffer(rhi_->CreateCommandBuffer());
+
+    // Record copy command
+    cmdBuffer->Begin();
+    cmdBuffer->CopyBuffer(stagingBuffer.get(), skyboxVertexBuffer_.get(), 0, 0, sizeof(SKYBOX_VERTICES));
+    cmdBuffer->End();
+
+    // Submit and wait for transfer to complete
+    RHI::IRHICommandBuffer* cmdBufferPtr = cmdBuffer.get();
+    rhi_->Submit(&cmdBufferPtr, 1);
+    rhi_->WaitIdle();
+
+    // Staging buffer is automatically cleaned up when unique_ptr goes out of scope
 }
 
 void SkyboxPass::CreateUniformBuffers() {

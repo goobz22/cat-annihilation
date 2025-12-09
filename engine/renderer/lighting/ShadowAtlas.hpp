@@ -194,8 +194,9 @@ public:
 
     /**
      * Check if atlas has space for a given resolution
+     * Note: This may modify internal tracking state
      */
-    bool hasSpace(ShadowResolution resolution) const;
+    bool hasSpace(ShadowResolution resolution);
 
     // ========================================================================
     // Shadow Rendering
