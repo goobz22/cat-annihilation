@@ -16,7 +16,7 @@ namespace CUDA {
 struct DeviceProperties {
     std::string name;
     int deviceId;
-    cudaUUID uuid;
+    cudaUUID_t uuid;
     size_t totalGlobalMem;
     size_t sharedMemPerBlock;
     int multiProcessorCount;
@@ -61,7 +61,7 @@ public:
      * @param uuid The UUID from Vulkan device
      * @param fallbackToDefault If true, falls back to device 0 if UUID not found
      */
-    CudaContext(const cudaUUID& uuid, bool fallbackToDefault = true);
+    CudaContext(const cudaUUID_t& uuid, bool fallbackToDefault = true);
 
     /**
      * @brief Destructor - resets CUDA device
@@ -118,7 +118,7 @@ public:
      * @brief Static: Find device by UUID
      * @return Device ID if found, std::nullopt otherwise
      */
-    static std::optional<int> findDeviceByUUID(const cudaUUID& uuid);
+    static std::optional<int> findDeviceByUUID(const cudaUUID_t& uuid);
 
     /**
      * @brief Static: Check if CUDA is available

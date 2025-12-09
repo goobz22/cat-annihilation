@@ -88,8 +88,8 @@ PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&& other) noexcept {
         if (m_gpuContacts) cudaFree(m_gpuContacts);
         if (m_gpuContactCount) cudaFree(m_gpuContactCount);
 
-        // Move data
-        m_cudaContext = other.m_cudaContext;
+        // Move data (note: m_cudaContext is a reference and cannot be reassigned)
+        // Both PhysicsWorld instances should share the same CudaContext
         m_stream = std::move(other.m_stream);
         m_bodies = std::move(other.m_bodies);
         m_freeIndices = std::move(other.m_freeIndices);

@@ -2,6 +2,7 @@
 
 #include "../../math/Vector.hpp"
 #include "../../math/AABB.hpp"
+#include "../../math/Quaternion.hpp"
 #include <cuda_runtime.h>
 
 namespace CatEngine {
@@ -13,7 +14,8 @@ namespace Physics {
 enum class ColliderType : int {
     Sphere = 0,
     Box = 1,
-    Capsule = 2
+    Capsule = 2,
+    Heightfield = 3
 };
 
 /**

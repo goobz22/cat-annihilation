@@ -5,6 +5,17 @@ namespace CatEngine {
 namespace Physics {
 
 // ============================================================================
+// Host Helper Functions
+// ============================================================================
+
+// Host version of make_float3
+inline float3 host_make_float3(float x, float y, float z) {
+    float3 v;
+    v.x = x; v.y = y; v.z = z;
+    return v;
+}
+
+// ============================================================================
 // Device Helper Functions
 // ============================================================================
 
@@ -12,6 +23,18 @@ __device__ __forceinline__ float3 make_float3(float x, float y, float z) {
     float3 v;
     v.x = x; v.y = y; v.z = z;
     return v;
+}
+
+// Custom atomicMin for floats (not natively supported)
+__device__ __forceinline__ float atomicMinFloat(float* address, float val) {
+    int* address_as_int = (int*)address;
+    int old = *address_as_int, assumed;
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_int, assumed,
+                        __float_as_int(fminf(val, __int_as_float(assumed))));
+    } while (assumed != old);
+    return __int_as_float(old);
 }
 
 __device__ __forceinline__ float3 operator+(float3 a, float3 b) {
@@ -179,7 +202,7 @@ __global__ void raycastKernel(
     // Thread 0 of each block writes block's best result
     if (threadIdx_x == 0) {
         // Atomic min on distance to find global best
-        float oldDist = atomicMin(hitDistance, sharedBestDist[0]);
+        float oldDist = atomicMinFloat(hitDistance, sharedBestDist[0]);
         if (sharedBestDist[0] < oldDist) {
             atomicExch(hitBodyIndex, sharedBestIdx[0]);
             // Would also store hit point and normal here
@@ -228,8 +251,8 @@ void gpuRaycast(
     const int blockSize = 256;
     const int numBlocks = (bodies.count + blockSize - 1) / blockSize;
 
-    float3 rayOrigin = make_float3(ray.origin.x, ray.origin.y, ray.origin.z);
-    float3 rayDir = make_float3(ray.direction.x, ray.direction.y, ray.direction.z);
+    float3 rayOrigin = host_make_float3(ray.origin.x, ray.origin.y, ray.origin.z);
+    float3 rayDir = host_make_float3(ray.direction.x, ray.direction.y, ray.direction.z);
 
     raycastKernel<<<numBlocks, blockSize, 0, stream>>>(
         rayOrigin,

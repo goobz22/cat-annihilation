@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include "Collider.hpp"
+#include "RigidBody.hpp"
 
 namespace CatEngine {
 namespace Physics {

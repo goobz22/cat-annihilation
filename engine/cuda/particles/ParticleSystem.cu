@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cmath>
+#include <chrono>
 
 namespace CatEngine {
 namespace CUDA {
@@ -145,7 +146,11 @@ void ParticleSystem::initializeRandomStates() {
     int blockSize = 256;
     int numBlocks = (NUM_RAND_STATES + blockSize - 1) / blockSize;
 
-    unsigned long long seed = 1234ULL; // TODO: Use time-based seed
+    // Use time-based seed for random number generation
+    auto now = std::chrono::high_resolution_clock::now();
+    auto duration = now.time_since_epoch();
+    auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+    auto seed = static_cast<unsigned long long>(micros);
 
     initRandomStates<<<numBlocks, blockSize, 0, m_stream.get()>>>(
         m_randStates.get(),

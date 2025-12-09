@@ -38,7 +38,7 @@ CudaContext::CudaContext(int deviceId)
     initialize(deviceId);
 }
 
-CudaContext::CudaContext(const cudaUUID& uuid, bool fallbackToDefault)
+CudaContext::CudaContext(const cudaUUID_t& uuid, bool fallbackToDefault)
     : m_deviceId(0)
     , m_initialized(false)
 {
@@ -82,6 +82,13 @@ CudaContext& CudaContext::operator=(CudaContext&& other) noexcept {
 
 void CudaContext::initialize(int deviceId) {
     int deviceCount = getDeviceCount();
+
+    // No CUDA devices available
+    if (deviceCount == 0) {
+        throw CudaException(cudaErrorNoDevice, __FILE__, __LINE__);
+    }
+
+    // Invalid device ID
     if (deviceId < 0 || deviceId >= deviceCount) {
         throw CudaException(cudaErrorInvalidDevice, __FILE__, __LINE__);
     }
@@ -140,10 +147,23 @@ void CudaContext::reset() const {
 int CudaContext::getDeviceCount() {
     int count = 0;
     cudaError_t error = cudaGetDeviceCount(&count);
-    if (error == cudaErrorNoDevice || error == cudaErrorInsufficientDriver) {
+
+    // Handle various CUDA initialization errors gracefully
+    if (error == cudaErrorNoDevice ||
+        error == cudaErrorInsufficientDriver ||
+        error == cudaErrorInvalidValue ||
+        error == cudaErrorInitializationError ||
+        error == cudaErrorUnknown) {
+        // Reset CUDA error state and return 0 devices
+        cudaGetLastError();
         return 0;
     }
-    CUDA_CHECK(error);
+
+    // For other errors, check and potentially throw
+    if (error != cudaSuccess) {
+        CUDA_CHECK(error);
+    }
+
     return count;
 }
 
@@ -194,7 +214,7 @@ std::vector<DeviceProperties> CudaContext::getAllDevices() {
     return devices;
 }
 
-std::optional<int> CudaContext::findDeviceByUUID(const cudaUUID& uuid) {
+std::optional<int> CudaContext::findDeviceByUUID(const cudaUUID_t& uuid) {
     int count = getDeviceCount();
 
     for (int i = 0; i < count; ++i) {
@@ -204,7 +224,7 @@ std::optional<int> CudaContext::findDeviceByUUID(const cudaUUID& uuid) {
             continue;
         }
 
-        if (std::memcmp(&prop.uuid, &uuid, sizeof(cudaUUID)) == 0) {
+        if (std::memcmp(&prop.uuid, &uuid, sizeof(cudaUUID_t)) == 0) {
             return i;
         }
     }

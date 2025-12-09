@@ -4,6 +4,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/sort.h>
 #include <thrust/remove.h>
+#include <thrust/count.h>
 #include <thrust/execution_policy.h>
 #include <cmath>
 
@@ -79,12 +80,12 @@ __device__ inline float lerp(float a, float b, float t) {
 // Noise Functions
 // ============================================================================
 
-__device__ inline float hash(float n) {
-    return fract(sinf(n) * 43758.5453f);
-}
-
 __device__ inline float fract(float x) {
     return x - floorf(x);
+}
+
+__device__ inline float hash(float n) {
+    return fract(sinf(n) * 43758.5453f);
 }
 
 __device__ float noise3D(float3 p) {

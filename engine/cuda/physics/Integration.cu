@@ -37,6 +37,10 @@ __device__ __forceinline__ float3 operator*(float3 a, float3 b) {
     return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
 }
 
+__device__ __forceinline__ float4 operator*(float4 a, float s) {
+    return make_float4(a.x * s, a.y * s, a.z * s, a.w * s);
+}
+
 __device__ __forceinline__ float dot(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }

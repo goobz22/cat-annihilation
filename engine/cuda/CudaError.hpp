@@ -57,6 +57,11 @@ private:
     CUDA_CHECK(cudaGetLastError())
 
 /**
+ * @brief Alias for CUDA_CHECK_LAST_ERROR (backwards compatibility)
+ */
+#define CUDA_CHECK_LAST() CUDA_CHECK_LAST_ERROR()
+
+/**
  * @brief Convert CUDA error to string
  */
 inline const char* cudaErrorToString(cudaError_t error) {
