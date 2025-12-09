@@ -82,8 +82,6 @@ layout(set = 0, binding = 2) uniform LightData {
     SpotLight spotLights[128];
 } lights;
 
-#include "../common/constants.glsl"
-#include "../common/utils.glsl"
 #include "../common/brdf.glsl"
 #include "../shadows/pcf.glsl"
 

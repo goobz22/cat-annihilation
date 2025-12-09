@@ -4,7 +4,6 @@
 #define PCF_GLSL
 
 #include "../common/constants.glsl"
-#include "../common/utils.glsl"
 
 // 5x5 PCF kernel with Poisson disk sampling
 const vec2 poissonDisk[25] = vec2[](

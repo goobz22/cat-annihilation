@@ -34,8 +34,6 @@ layout(push_constant) uniform EnvironmentData {
     float maxReflectionLod;
 } environment;
 
-#include "../common/constants.glsl"
-#include "../common/utils.glsl"
 #include "../common/brdf.glsl"
 
 void main() {

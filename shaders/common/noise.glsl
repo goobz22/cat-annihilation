@@ -201,4 +201,17 @@ float turbulence(vec2 p, int octaves) {
     return value;
 }
 
+// Convenience aliases for common noise types
+float noise1D(float p) {
+    return perlinNoise(vec2(p, 0.0));
+}
+
+float noise2D(vec2 p) {
+    return perlinNoise(p);
+}
+
+float noise3D(vec3 p) {
+    return perlinNoise3D(p);
+}
+
 #endif // NOISE_GLSL

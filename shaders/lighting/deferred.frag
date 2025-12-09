@@ -86,8 +86,6 @@ layout(set = 1, binding = 6) buffer ClusterLightGrid {
     uvec2 data[]; // x = offset, y = count
 } clusterLightGrid;
 
-#include "../common/constants.glsl"
-#include "../common/utils.glsl"
 #include "../common/brdf.glsl"
 #include "../shadows/pcf.glsl"
 

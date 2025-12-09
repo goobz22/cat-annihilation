@@ -65,8 +65,6 @@ layout(set = 0, binding = 2) uniform LightData {
     DirectionalLight directionalLight;
 } lights;
 
-#include "../common/constants.glsl"
-#include "../common/utils.glsl"
 #include "../common/brdf.glsl"
 
 void main() {

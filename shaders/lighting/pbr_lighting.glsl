@@ -4,7 +4,6 @@
 #ifndef PBR_LIGHTING_GLSL
 #define PBR_LIGHTING_GLSL
 
-#include "../common/constants.glsl"
 #include "../common/brdf.glsl"
 
 // ============================================================================

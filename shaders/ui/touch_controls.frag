@@ -12,7 +12,9 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D controlTexture;  // Optional icon texture
 
-layout(push_constant) uniform TouchControlTransform {
+// Combined push_constant block (only one allowed per stage)
+layout(push_constant) uniform TouchControlData {
+    // Transform data
     layout(offset = 0) mat4 projection;
     layout(offset = 64) vec2 screenSize;
     layout(offset = 72) float globalOpacity;
@@ -21,10 +23,7 @@ layout(push_constant) uniform TouchControlTransform {
     layout(offset = 84) float pulseIntensity;
     layout(offset = 88) int controlType;
     layout(offset = 92) int isPressed;
-} transform;
-
-// Additional settings
-layout(push_constant) uniform TouchControlSettings {
+    // Settings data
     layout(offset = 96) vec4 tintColor;
     layout(offset = 112) float innerRadius;
     layout(offset = 116) float outerRadius;
@@ -34,7 +33,7 @@ layout(push_constant) uniform TouchControlSettings {
     layout(offset = 132) int showBorder;
     layout(offset = 136) float cooldownPercent;  // 0-1 for cooldown overlay
     layout(offset = 140) float glowIntensity;
-} settings;
+} data;
 
 const float PI = 3.14159265359;
 
@@ -89,75 +88,75 @@ void main() {
     vec4 finalColor = inColor;
     float alpha = inColor.a;
 
-    float feather = settings.featherAmount * transform.globalScale;
+    float feather = data.featherAmount * data.globalScale;
     float distance = length(inLocalPos);
 
     // === JOYSTICK BASE (Type 0) ===
-    if (transform.controlType == 0) {
+    if (data.controlType == 0) {
         // Outer ring
-        float ring = smoothRing(distance, settings.innerRadius * 0.8, settings.outerRadius, feather);
+        float ring = smoothRing(distance, data.innerRadius * 0.8, data.outerRadius, feather);
 
         // Inner fill with radial gradient
-        float innerCircle = smoothCircle(distance, settings.innerRadius * 0.8, feather);
-        float gradient = radialGradient(distance, settings.outerRadius);
+        float innerCircle = smoothCircle(distance, data.innerRadius * 0.8, feather);
+        float gradient = radialGradient(distance, data.outerRadius);
 
         finalColor.rgb = mix(finalColor.rgb, finalColor.rgb * 0.5, gradient * innerCircle);
         alpha *= max(ring, innerCircle * 0.3);
 
         // Border
-        if (settings.showBorder != 0) {
-            float border = smoothRing(distance, settings.outerRadius - settings.borderWidth, settings.outerRadius, feather * 0.5);
+        if (data.showBorder != 0) {
+            float border = smoothRing(distance, data.outerRadius - data.borderWidth, data.outerRadius, feather * 0.5);
             finalColor.rgb = mix(finalColor.rgb, vec3(1.0), border * 0.5);
             alpha = max(alpha, border * 0.8);
         }
     }
     // === JOYSTICK THUMB (Type 1) ===
-    else if (transform.controlType == 1) {
+    else if (data.controlType == 1) {
         // Solid circle with gradient
-        float circle = smoothCircle(distance, settings.innerRadius, feather);
-        float gradient = radialGradient(distance, settings.innerRadius);
+        float circle = smoothCircle(distance, data.innerRadius, feather);
+        float gradient = radialGradient(distance, data.innerRadius);
 
         finalColor.rgb = mix(finalColor.rgb * 0.7, finalColor.rgb, gradient);
         alpha *= circle;
 
         // Add glow when pressed
-        if (transform.isPressed != 0) {
-            finalColor.rgb = addGlow(finalColor.rgb, distance, settings.innerRadius, settings.glowIntensity);
+        if (data.isPressed != 0) {
+            finalColor.rgb = addGlow(finalColor.rgb, distance, data.innerRadius, data.glowIntensity);
         }
 
         // Border
-        if (settings.showBorder != 0) {
-            float border = smoothRing(distance, settings.innerRadius - settings.borderWidth, settings.innerRadius, feather * 0.5);
+        if (data.showBorder != 0) {
+            float border = smoothRing(distance, data.innerRadius - data.borderWidth, data.innerRadius, feather * 0.5);
             finalColor.rgb = mix(finalColor.rgb, vec3(1.0), border);
             alpha = max(alpha, border);
         }
     }
     // === BUTTON (Type 2) ===
-    else if (transform.controlType == 2) {
+    else if (data.controlType == 2) {
         // Main button circle
-        float circle = smoothCircle(distance, settings.outerRadius, feather);
-        float gradient = radialGradient(distance, settings.outerRadius);
+        float circle = smoothCircle(distance, data.outerRadius, feather);
+        float gradient = radialGradient(distance, data.outerRadius);
 
         // Apply gradient for depth
         finalColor.rgb = mix(finalColor.rgb * 0.6, finalColor.rgb, pow(gradient, 1.5));
         alpha *= circle;
 
         // Add glow when pressed
-        if (transform.isPressed != 0) {
-            finalColor.rgb = addGlow(finalColor.rgb, distance, settings.outerRadius, settings.glowIntensity * 0.5);
+        if (data.isPressed != 0) {
+            finalColor.rgb = addGlow(finalColor.rgb, distance, data.outerRadius, data.glowIntensity * 0.5);
             finalColor.rgb *= 1.2;  // Brighten when pressed
         }
 
         // Border
-        if (settings.showBorder != 0) {
-            float border = smoothRing(distance, settings.outerRadius - settings.borderWidth, settings.outerRadius, feather * 0.5);
+        if (data.showBorder != 0) {
+            float border = smoothRing(distance, data.outerRadius - data.borderWidth, data.outerRadius, feather * 0.5);
             finalColor.rgb = mix(finalColor.rgb, vec3(1.0), border * 0.7);
             alpha = max(alpha, border);
         }
 
         // Cooldown overlay
-        if (settings.cooldownPercent > 0.0) {
-            float cooldownMask = cooldownPie(inLocalPos, settings.cooldownPercent);
+        if (data.cooldownPercent > 0.0) {
+            float cooldownMask = cooldownPie(inLocalPos, data.cooldownPercent);
             if (cooldownMask > 0.5) {
                 finalColor.rgb *= 0.4;  // Darken cooldown area
                 finalColor.a *= 0.8;
@@ -165,14 +164,14 @@ void main() {
         }
 
         // Optional texture/icon
-        if (settings.useTexture != 0) {
+        if (data.useTexture != 0) {
             vec4 texColor = texture(controlTexture, inTexCoord);
             finalColor.rgb = mix(finalColor.rgb, texColor.rgb, texColor.a * 0.8);
         }
     }
 
     // Apply tint color
-    finalColor *= settings.tintColor;
+    finalColor *= data.tintColor;
     finalColor.a = alpha;
 
     // Discard fully transparent pixels

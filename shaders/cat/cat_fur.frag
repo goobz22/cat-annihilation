@@ -94,8 +94,6 @@ layout(set = 0, binding = 2) uniform LightData {
     PointLight pointLights[256];
 } lights;
 
-#include "../common/constants.glsl"
-#include "../common/utils.glsl"
 #include "../common/brdf.glsl"
 #include "../shadows/pcf.glsl"
 
@@ -117,11 +115,6 @@ const int PATTERN_MARBLED = 9;
 // ============================================================================
 // Noise Functions for Procedural Patterns
 // ============================================================================
-
-// Hash function for pseudo-random values
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
 
 // 2D Value noise
 float noise2D(vec2 p) {

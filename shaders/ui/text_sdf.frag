@@ -11,7 +11,7 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D sdfTexture;
 
 layout(push_constant) uniform TextSettings {
-    layout(offset = 88) vec4 outlineColor;
+    layout(offset = 96) vec4 outlineColor;
     float smoothing;      // Smoothing factor (depends on font size)
     float outlineWidth;   // Outline thickness (0.0 = no outline)
     float shadowOffset;   // Shadow offset (0.0 = no shadow)
