@@ -1,0 +1,57 @@
+CompileFlags:
+  CompilationDatabase: build/
+  Add:
+    # Use MSVC-compatible mode for Windows
+    - "--target=x86_64-pc-windows-msvc"
+    - "-fms-compatibility"
+    - "-fms-extensions"
+    - "-fdelayed-template-parsing"
+    # Add include paths
+    - "-IC:/VulkanSDK/1.4.328.1/Include"
+  Remove:
+    # Remove problematic flags
+    - "-W*"
+    - "/W*"
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - bugprone-*
+      - performance-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-magic-numbers
+      - cppcoreguidelines-avoid-magic-numbers
+      - readability-identifier-length
+      - cppcoreguidelines-pro-bounds-pointer-arithmetic
+      - cppcoreguidelines-pro-type-reinterpret-cast
+      - cppcoreguidelines-avoid-c-arrays
+      - modernize-avoid-c-arrays
+      - readability-function-cognitive-complexity
+      - readability-*
+      - cppcoreguidelines-*
+
+  # Suppress false positive errors from MSVC std library parsing
+  Suppress:
+    - "pp_file_not_found"
+    - "no_member"
+    - "typename_nested_not_found"
+    - "ovl_no_viable_function_in_call"
+    - "*_Enable_if*"
+    - "*char_traits*"
+    - "*pos_type*"
+    - "*char_type*"
+
+  UnusedIncludes: None
+
+Index:
+  Background: Build
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Hover:
+  ShowAKA: Yes

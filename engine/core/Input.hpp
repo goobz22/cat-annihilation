@@ -19,7 +19,7 @@ public:
     /**
      * @brief Key codes matching GLFW key definitions
      */
-    enum class Key : u16 {
+    enum class Key : i32 {
         Unknown = GLFW_KEY_UNKNOWN,
 
         // Printable keys
@@ -336,7 +336,7 @@ private:
     GLFWwindow* m_window;
 
     // Keyboard state
-    static constexpr u32 KEY_COUNT = static_cast<u32>(Key::KeyCount);
+    static constexpr size_t KEY_COUNT = static_cast<size_t>(Key::KeyCount);
     std::bitset<KEY_COUNT> m_keysCurrentFrame;
     std::bitset<KEY_COUNT> m_keysPreviousFrame;
 

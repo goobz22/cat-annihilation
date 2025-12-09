@@ -2,6 +2,7 @@
 #define ENGINE_CORE_WINDOW_HPP
 
 #include "Types.hpp"
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <string>
 #include <functional>

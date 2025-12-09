@@ -166,6 +166,53 @@ public:
      */
     void Flush();
 
+    /**
+     * @brief Static convenience methods for common log levels
+     */
+    template<typename... Args>
+    static void trace(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::TRACE, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void debug(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::DEBUG, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void info(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::INFO, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void warning(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::WARN, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void warn(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::WARN, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void error(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::ERROR, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    static void fatal(std::format_string<Args...> fmt, Args&&... args) {
+        GetInstance().Log(LogLevel::FATAL, __FILE__, __LINE__, fmt, std::forward<Args>(args)...);
+    }
+
+    // String overloads for simpler usage
+    static void trace(std::string_view msg) { GetInstance().Log(LogLevel::TRACE, msg, __FILE__, __LINE__); }
+    static void debug(std::string_view msg) { GetInstance().Log(LogLevel::DEBUG, msg, __FILE__, __LINE__); }
+    static void info(std::string_view msg) { GetInstance().Log(LogLevel::INFO, msg, __FILE__, __LINE__); }
+    static void warning(std::string_view msg) { GetInstance().Log(LogLevel::WARN, msg, __FILE__, __LINE__); }
+    static void warn(std::string_view msg) { GetInstance().Log(LogLevel::WARN, msg, __FILE__, __LINE__); }
+    static void error(std::string_view msg) { GetInstance().Log(LogLevel::ERROR, msg, __FILE__, __LINE__); }
+    static void fatal(std::string_view msg) { GetInstance().Log(LogLevel::FATAL, msg, __FILE__, __LINE__); }
+
 private:
     Logger();
     ~Logger();
@@ -225,5 +272,16 @@ private:
 #else
     #define LOG_FATAL(fmt, ...) ((void)0)
 #endif
+
+// Namespace alias for compatibility with Engine:: prefix
+namespace Engine {
+    using Logger = CatEngine::Logger;
+    using LogLevel = CatEngine::LogLevel;
+    using LogEntry = CatEngine::LogEntry;
+    using LogSink = CatEngine::LogSink;
+    using ConsoleSink = CatEngine::ConsoleSink;
+    using FileSink = CatEngine::FileSink;
+    using RingBufferSink = CatEngine::RingBufferSink;
+}
 
 #endif // CAT_ENGINE_LOGGER_HPP

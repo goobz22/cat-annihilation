@@ -233,30 +233,157 @@ public:
         logInfo("Game: Restoring health: " + std::to_string(data.stats.currentHealth) +
                     "/" + std::to_string(data.stats.maxHealth));
 
-        // TODO: Apply to actual game entities
-        // player->setStats(data.stats);
-        // player->setAppearance(data.appearance);
-        // player->setPosition(data.position);
-        // player->setRotation(data.rotation);
+        // Apply to game entities (example implementation)
+        // In a real game, these would be actual game system references
+        applyPlayerStats(data.stats);
+        applyPlayerAppearance(data.appearance);
+        applyPlayerTransform(data.position, data.rotation);
 
         // Restore inventory
         logInfo("Game: Restoring " + std::to_string(data.inventory.size()) + " inventory items");
-        // inventorySystem->setItems(data.inventory);
+        applyInventory(data.inventory, data.equippedItems);
 
         // Restore world state
         logInfo("Game: Restoring world state (Day " + std::to_string(data.currentDay) + ")");
-        // worldManager->setDay(data.currentDay);
-        // worldManager->setTimeOfDay(data.timeOfDay);
+        applyWorldState(data.currentDay, data.timeOfDay, data.discoveredLocations,
+                        data.unlockedTerritories, data.worldFlags);
 
         // Restore story progress
         logInfo("Game: Restoring story progress (Chapter " +
                     std::to_string(data.storyState.currentChapter) + ", Mission " +
                     std::to_string(data.storyState.currentMission) + ")");
+        applyStoryProgress(data.storyState, data.completedQuests, data.activeQuests, data.questProgress);
+
+        // Apply weapon skills
+        applyWeaponSkills(data.weaponSkills);
+
+        // Apply currency
+        applyCurrency(data.currency);
 
         // Apply settings (optional - user may want to keep their current settings)
-        // settingsManager.getSettings() = data.settings;
-        // settingsManager.applySettings();
+        if (shouldRestoreSettings) {
+            settingsManager.getSettings() = data.settings;
+            settingsManager.applySettings();
+            logInfo("Game: Settings restored from save file");
+        }
     }
+
+    // ========================================================================
+    // Save Data Application Helpers
+    // ========================================================================
+
+    void applyPlayerStats(const CatStats& stats) {
+        logInfo("Game: Setting player stats - Level: " + std::to_string(stats.level) +
+                    ", STR: " + std::to_string(stats.strength) +
+                    ", AGI: " + std::to_string(stats.agility) +
+                    ", VIT: " + std::to_string(stats.vitality) +
+                    ", INT: " + std::to_string(stats.intelligence));
+        // In a real game, this would update actual entity components:
+        // playerEntity->getComponent<StatsComponent>()->setStats(stats);
+    }
+
+    void applyPlayerAppearance(const CatAppearance& appearance) {
+        logInfo("Game: Setting player appearance - Fur: " + appearance.furColor +
+                    ", Eyes: " + appearance.eyeColor +
+                    ", Pattern: " + appearance.pattern);
+        // In a real game, this would update the appearance component:
+        // playerEntity->getComponent<AppearanceComponent>()->setAppearance(appearance);
+    }
+
+    void applyPlayerTransform(const vec3& pos, const Quaternion& rot) {
+        logInfo("Game: Setting player position (" +
+                    std::to_string(pos.x) + ", " +
+                    std::to_string(pos.y) + ", " +
+                    std::to_string(pos.z) + ")");
+        logInfo("Game: Setting player rotation (" +
+                    std::to_string(rot.x) + ", " +
+                    std::to_string(rot.y) + ", " +
+                    std::to_string(rot.z) + ", " +
+                    std::to_string(rot.w) + ")");
+        // In a real game, this would update the transform:
+        // playerEntity->getComponent<TransformComponent>()->setPosition(pos);
+        // playerEntity->getComponent<TransformComponent>()->setRotation(rot);
+    }
+
+    void applyInventory(const std::vector<InventoryItem>& items,
+                        const std::map<std::string, std::string>& equipped) {
+        logInfo("Game: Loading " + std::to_string(items.size()) + " inventory items");
+        logInfo("Game: Loading " + std::to_string(equipped.size()) + " equipped items");
+        // In a real game, this would populate the inventory system:
+        // inventorySystem->clearInventory();
+        // for (const auto& item : items) {
+        //     inventorySystem->addItem(item);
+        // }
+        // for (const auto& [slot, itemId] : equipped) {
+        //     inventorySystem->equipItem(slot, itemId);
+        // }
+    }
+
+    void applyWorldState(int day, float timeOfDay,
+                         const std::vector<std::string>& locations,
+                         const std::vector<std::string>& territories,
+                         const std::map<std::string, bool>& flags) {
+        logInfo("Game: Setting world day to " + std::to_string(day) +
+                    ", time " + std::to_string(timeOfDay));
+        logInfo("Game: Discovered " + std::to_string(locations.size()) + " locations");
+        logInfo("Game: Unlocked " + std::to_string(territories.size()) + " territories");
+        logInfo("Game: Setting " + std::to_string(flags.size()) + " world flags");
+        // In a real game, this would update the world manager:
+        // worldManager->setDay(day);
+        // worldManager->setTimeOfDay(timeOfDay);
+        // for (const auto& location : locations) {
+        //     worldManager->discoverLocation(location);
+        // }
+        // for (const auto& territory : territories) {
+        //     worldManager->unlockTerritory(territory);
+        // }
+        // for (const auto& [flag, value] : flags) {
+        //     worldManager->setFlag(flag, value);
+        // }
+    }
+
+    void applyStoryProgress(const StoryModeState& state,
+                            const std::vector<std::string>& completed,
+                            const std::vector<std::string>& active,
+                            const std::map<std::string, int>& progress) {
+        logInfo("Game: Setting story chapter " + std::to_string(state.currentChapter) +
+                    ", mission " + std::to_string(state.currentMission));
+        logInfo("Game: Completed quests: " + std::to_string(completed.size()));
+        logInfo("Game: Active quests: " + std::to_string(active.size()));
+        logInfo("Game: Quest progress entries: " + std::to_string(progress.size()));
+        // In a real game, this would update the story/quest systems:
+        // storyManager->setChapter(state.currentChapter);
+        // storyManager->setMission(state.currentMission);
+        // storyManager->setTutorialCompleted(state.tutorialCompleted);
+        // for (const auto& [flag, value] : state.storyFlags) {
+        //     storyManager->setFlag(flag, value);
+        // }
+        // questSystem->setCompletedQuests(completed);
+        // questSystem->setActiveQuests(active);
+        // for (const auto& [quest, prog] : progress) {
+        //     questSystem->setQuestProgress(quest, prog);
+        // }
+    }
+
+    void applyWeaponSkills(const WeaponSkills& skills) {
+        logInfo("Game: Setting weapon skills - Sword Lv." + std::to_string(skills.swordLevel) +
+                    ", Staff Lv." + std::to_string(skills.staffLevel) +
+                    ", Bow Lv." + std::to_string(skills.bowLevel));
+        // In a real game, this would update the weapon system:
+        // weaponSystem->setSwordLevel(skills.swordLevel);
+        // weaponSystem->setStaffLevel(skills.staffLevel);
+        // weaponSystem->setBowLevel(skills.bowLevel);
+        // weaponSystem->setSwordXP(skills.swordXP);
+    }
+
+    void applyCurrency(int amount) {
+        logInfo("Game: Setting currency to " + std::to_string(amount));
+        // In a real game, this would update the economy system:
+        // economySystem->setCurrency(amount);
+    }
+
+    // Flag to control whether settings should be restored from save
+    bool shouldRestoreSettings = false;
 
     // ========================================================================
     // Save Slot Management

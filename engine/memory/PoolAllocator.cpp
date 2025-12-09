@@ -1,4 +1,5 @@
 #include "PoolAllocator.hpp"
+#include "../core/Platform.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cassert>
@@ -15,7 +16,7 @@ PoolAllocator::PoolAllocator(size_t blockSize, size_t blockCount, bool threadSaf
     , m_mutex(threadSafe ? std::make_unique<std::mutex>() : nullptr)
 {
     // Allocate aligned memory
-    m_memory = std::aligned_alloc(alignof(std::max_align_t), m_blockSize * m_blockCount);
+    m_memory = CatEngine::aligned_alloc_compat(alignof(std::max_align_t), m_blockSize * m_blockCount);
     assert(m_memory && "Failed to allocate pool memory");
 
     initializeFreeList();
@@ -23,7 +24,7 @@ PoolAllocator::PoolAllocator(size_t blockSize, size_t blockCount, bool threadSaf
 
 PoolAllocator::~PoolAllocator() {
     if (m_memory) {
-        std::free(m_memory);
+        CatEngine::aligned_free_compat(m_memory);
         m_memory = nullptr;
     }
 }
@@ -50,7 +51,7 @@ PoolAllocator& PoolAllocator::operator=(PoolAllocator&& other) noexcept {
     if (this != &other) {
         // Free existing memory
         if (m_memory) {
-            std::free(m_memory);
+            CatEngine::aligned_free_compat(m_memory);
         }
 
         // Move data

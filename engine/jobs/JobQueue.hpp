@@ -4,12 +4,16 @@
 #include <atomic>
 #include <array>
 #include <optional>
+#include <mutex>
 
 namespace CatEngine {
 
 /**
- * Lock-free ring buffer job queue using atomic operations
+ * Thread-safe ring buffer job queue with mutex protection
  * Supports multiple producers and consumers with job stealing
+ *
+ * Note: Uses mutex instead of lock-free atomics because Job contains
+ * std::function which is not trivially copyable.
  */
 class JobQueue {
 public:
@@ -19,58 +23,35 @@ public:
         : m_top(0)
         , m_bottom(0)
     {
-        for (auto& job : m_jobs) {
-            job.store(Job{}, std::memory_order_relaxed);
-        }
     }
 
     /**
      * Push a job to the bottom of the queue (owner thread only)
      */
     void Push(const Job& job) {
-        int64_t b = m_bottom.load(std::memory_order_relaxed);
-        m_jobs[b % QUEUE_SIZE].store(job, std::memory_order_relaxed);
-
-        // Ensure job is written before updating bottom
-        std::atomic_thread_fence(std::memory_order_release);
-        m_bottom.store(b + 1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        int64_t b = m_bottom;
+        m_jobs[b % QUEUE_SIZE] = job;
+        m_bottom = b + 1;
     }
 
     /**
      * Pop a job from the bottom of the queue (owner thread only)
      */
     std::optional<Job> Pop() {
-        int64_t b = m_bottom.load(std::memory_order_relaxed) - 1;
-        m_bottom.store(b, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-
-        int64_t t = m_top.load(std::memory_order_relaxed);
-
-        if (t <= b) {
-            // Non-empty queue
-            Job job = m_jobs[b % QUEUE_SIZE].load(std::memory_order_relaxed);
-
-            if (t == b) {
-                // Last item in queue - race with stealers
-                if (!m_top.compare_exchange_strong(t, t + 1,
-                    std::memory_order_seq_cst,
-                    std::memory_order_relaxed)) {
-                    // Lost race, queue is empty
-                    m_bottom.store(b + 1, std::memory_order_relaxed);
-                    return std::nullopt;
-                }
-                m_bottom.store(b + 1, std::memory_order_relaxed);
-            }
-
-            if (job.IsValid()) {
-                return job;
-            }
-        } else {
+        if (m_top >= m_bottom) {
             // Queue is empty
-            m_bottom.store(b + 1, std::memory_order_relaxed);
+            return std::nullopt;
         }
 
+        m_bottom--;
+        Job job = m_jobs[m_bottom % QUEUE_SIZE];
+
+        if (job.IsValid()) {
+            return job;
+        }
         return std::nullopt;
     }
 
@@ -78,26 +59,19 @@ public:
      * Steal a job from the top of the queue (other threads)
      */
     std::optional<Job> Steal() {
-        int64_t t = m_top.load(std::memory_order_acquire);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        int64_t b = m_bottom.load(std::memory_order_acquire);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-        if (t < b) {
-            // Non-empty queue
-            Job job = m_jobs[t % QUEUE_SIZE].load(std::memory_order_relaxed);
-
-            if (!m_top.compare_exchange_strong(t, t + 1,
-                std::memory_order_seq_cst,
-                std::memory_order_relaxed)) {
-                // Lost race
-                return std::nullopt;
-            }
-
-            if (job.IsValid()) {
-                return job;
-            }
+        if (m_top >= m_bottom) {
+            // Queue is empty
+            return std::nullopt;
         }
 
+        Job job = m_jobs[m_top % QUEUE_SIZE];
+        m_top++;
+
+        if (job.IsValid()) {
+            return job;
+        }
         return std::nullopt;
     }
 
@@ -105,24 +79,23 @@ public:
      * Check if the queue is empty
      */
     bool IsEmpty() const {
-        int64_t b = m_bottom.load(std::memory_order_relaxed);
-        int64_t t = m_top.load(std::memory_order_relaxed);
-        return t >= b;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_top >= m_bottom;
     }
 
     /**
      * Get approximate size of the queue
      */
     size_t Size() const {
-        int64_t b = m_bottom.load(std::memory_order_relaxed);
-        int64_t t = m_top.load(std::memory_order_relaxed);
-        return static_cast<size_t>(std::max(int64_t(0), b - t));
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return static_cast<size_t>(std::max(int64_t(0), m_bottom - m_top));
     }
 
 private:
-    std::atomic<int64_t> m_top;
-    std::atomic<int64_t> m_bottom;
-    std::array<std::atomic<Job>, QUEUE_SIZE> m_jobs;
+    mutable std::mutex m_mutex;
+    int64_t m_top;
+    int64_t m_bottom;
+    std::array<Job, QUEUE_SIZE> m_jobs;
 };
 
 } // namespace CatEngine

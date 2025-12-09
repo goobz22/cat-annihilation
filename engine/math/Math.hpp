@@ -43,6 +43,15 @@ inline float degrees(float radians) {
     return radians * RAD_TO_DEG;
 }
 
+// Alias for radians (for compatibility)
+inline float degToRad(float degrees) {
+    return degrees * DEG_TO_RAD;
+}
+
+inline float radToDeg(float radians) {
+    return radians * RAD_TO_DEG;
+}
+
 inline bool approximately(float a, float b, float epsilon = EPSILON) {
     return std::abs(a - b) < epsilon;
 }

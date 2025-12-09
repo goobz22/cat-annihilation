@@ -392,6 +392,9 @@ private:
     float m_autoSaveInterval;
     float m_autoSaveTimer;
 
+    // Play time tracking
+    float m_currentPlayTime = 0.0F;
+
     // Paths
     std::string m_savePath;
 

@@ -91,9 +91,9 @@ void AISystem::updateNavigation(float dt) {
     auto query = ecs_->query<NavigationComponent, TransformComponent>();
 
     for (auto [entity, nav, transform] : query.view()) {
-        if (!nav.hasPath || nav.currentPath.isEmpty()) {
-            nav.reachedDestination = true;
-            nav.desiredVelocity = vec3::zero();
+        if (!nav->hasPath || nav->currentPath.isEmpty()) {
+            nav->reachedDestination = true;
+            nav->desiredVelocity = vec3::zero();
             continue;
         }
 
@@ -104,20 +104,20 @@ void AISystem::updateNavigation(float dt) {
         }
 
         // Calculate steering toward path
-        nav.desiredVelocity = SteeringBehaviors::followPath(
-            transform.position,
+        nav->desiredVelocity = SteeringBehaviors::followPath(
+            transform->position,
             velocity,
-            nav.currentPath,
-            nav.maxSpeed,
-            nav.arrivalRadius
+            nav->currentPath,
+            nav->maxSpeed,
+            nav->arrivalRadius
         );
 
         // Check if path is complete
-        if (nav.currentPath.isComplete) {
-            nav.hasPath = false;
-            nav.reachedDestination = true;
+        if (nav->currentPath.isComplete) {
+            nav->hasPath = false;
+            nav->reachedDestination = true;
         } else {
-            nav.reachedDestination = false;
+            nav->reachedDestination = false;
         }
     }
 }
@@ -135,55 +135,55 @@ void AISystem::updateSteering(float dt) {
     std::vector<vec3> allVelocities;
 
     for (auto [entity, nav, vel, transform] : query.view()) {
-        allPositions.push_back(transform.position);
-        allVelocities.push_back(vel.velocity);
+        allPositions.push_back(transform->position);
+        allVelocities.push_back(vel->velocity);
     }
 
     // Update steering for each entity
     size_t index = 0;
     for (auto [entity, nav, vel, transform] : query.view()) {
-        vec3 steering = nav.desiredVelocity * nav.seekWeight;
+        vec3 steering = nav->desiredVelocity * nav->seekWeight;
 
         // Add separation (avoid crowding neighbors)
-        if (nav.separationWeight > 0.001f) {
+        if (nav->separationWeight > 0.001f) {
             vec3 separation = SteeringBehaviors::separation(
-                transform.position, allPositions, 3.0f
+                transform->position, allPositions, 3.0f
             );
-            steering += separation * nav.separationWeight;
+            steering += separation * nav->separationWeight;
         }
 
         // Add cohesion (move toward center of neighbors)
-        if (nav.cohesionWeight > 0.001f) {
+        if (nav->cohesionWeight > 0.001f) {
             vec3 cohesion = SteeringBehaviors::cohesion(
-                transform.position, vel.velocity, allPositions, vel.maxSpeed, 10.0f
+                transform->position, vel->velocity, allPositions, vel->maxSpeed, 10.0f
             );
-            steering += cohesion * nav.cohesionWeight;
+            steering += cohesion * nav->cohesionWeight;
         }
 
         // Add alignment (match neighbor velocities)
-        if (nav.alignmentWeight > 0.001f) {
+        if (nav->alignmentWeight > 0.001f) {
             vec3 alignment = SteeringBehaviors::alignment(
-                vel.velocity, allVelocities, 10.0f
+                vel->velocity, allVelocities, 10.0f
             );
-            steering += alignment * nav.alignmentWeight;
+            steering += alignment * nav->alignmentWeight;
         }
 
         // Apply steering force
         vec3 acceleration = steering;
-        if (acceleration.lengthSquared() > vel.acceleration * vel.acceleration) {
-            acceleration = acceleration.normalized() * vel.acceleration;
+        if (acceleration.lengthSquared() > vel->acceleration * vel->acceleration) {
+            acceleration = acceleration.normalized() * vel->acceleration;
         }
 
         // Update velocity
-        vel.velocity += acceleration * dt;
+        vel->velocity += acceleration * dt;
 
         // Clamp to max speed
-        if (vel.velocity.lengthSquared() > vel.maxSpeed * vel.maxSpeed) {
-            vel.velocity = vel.velocity.normalized() * vel.maxSpeed;
+        if (vel->velocity.lengthSquared() > vel->maxSpeed * vel->maxSpeed) {
+            vel->velocity = vel->velocity.normalized() * vel->maxSpeed;
         }
 
         // Update position
-        transform.position += vel.velocity * dt;
+        transform->position += vel->velocity * dt;
 
         index++;
     }
@@ -202,12 +202,12 @@ std::vector<AISystem::AIEntityData> AISystem::gatherAIEntities() {
     for (auto [entity, ai] : query.view()) {
         AIEntityData data;
         data.entity = entity;
-        data.aiComponent = &ai;
+        data.aiComponent = ai;
         data.navComponent = ecs_->getComponent<NavigationComponent>(entity);
         data.transform = ecs_->getComponent<TransformComponent>(entity);
         data.velocity = ecs_->getComponent<VelocityComponent>(entity);
 
-        data.distanceToReference = calculatePriority(entity, &ai, data.transform);
+        data.distanceToReference = calculatePriority(entity, ai, data.transform);
 
         entities.push_back(data);
     }

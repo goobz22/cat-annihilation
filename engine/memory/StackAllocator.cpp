@@ -1,4 +1,5 @@
 #include "StackAllocator.hpp"
+#include "../core/Platform.hpp"
 #include <cstdlib>
 #include <cassert>
 #include <cstring>
@@ -13,7 +14,7 @@ StackAllocator::StackAllocator(size_t size, bool threadSafe)
     , m_mutex(threadSafe ? std::make_unique<std::mutex>() : nullptr)
 {
     // Allocate aligned memory
-    m_memory = std::aligned_alloc(alignof(std::max_align_t), size);
+    m_memory = CatEngine::aligned_alloc_compat(alignof(std::max_align_t), size);
     assert(m_memory && "Failed to allocate stack memory");
 
     // Zero initialize for safety
@@ -22,7 +23,7 @@ StackAllocator::StackAllocator(size_t size, bool threadSafe)
 
 StackAllocator::~StackAllocator() {
     if (m_memory) {
-        std::free(m_memory);
+        CatEngine::aligned_free_compat(m_memory);
         m_memory = nullptr;
     }
 }
@@ -47,7 +48,7 @@ StackAllocator& StackAllocator::operator=(StackAllocator&& other) noexcept {
     if (this != &other) {
         // Free existing memory
         if (m_memory) {
-            std::free(m_memory);
+            CatEngine::aligned_free_compat(m_memory);
         }
 
         // Move data

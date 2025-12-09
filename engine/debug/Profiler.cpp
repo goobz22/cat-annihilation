@@ -6,6 +6,8 @@
 
 namespace CatEngine {
 
+using Clock = std::chrono::high_resolution_clock;
+
 // ProfilerContext Implementation
 
 void ProfilerContext::PushScope(const std::string& name) {

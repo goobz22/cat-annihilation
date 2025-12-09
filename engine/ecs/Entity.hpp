@@ -13,9 +13,9 @@ namespace CatEngine {
 struct Entity {
     uint64_t id;
 
-    Entity() : id(0) {}
-    explicit Entity(uint64_t id) : id(id) {}
-    Entity(uint32_t index, uint32_t generation)
+    constexpr Entity() : id(0) {}
+    explicit constexpr Entity(uint64_t id) : id(id) {}
+    constexpr Entity(uint32_t index, uint32_t generation)
         : id(static_cast<uint64_t>(generation) << 32 | index) {}
 
     uint32_t index() const { return static_cast<uint32_t>(id & 0xFFFFFFFF); }

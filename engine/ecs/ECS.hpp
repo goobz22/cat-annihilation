@@ -91,7 +91,8 @@ public:
      * Add component to entity (move)
      */
     template<Component T>
-    T& addComponent(Entity entity, T&& component) {
+    std::enable_if_t<!std::is_lvalue_reference_v<T>, T&>
+    addComponent(Entity entity, T&& component) {
         auto* pool = getOrCreateComponentPool<T>();
         return pool->add(entity, std::move(component));
     }

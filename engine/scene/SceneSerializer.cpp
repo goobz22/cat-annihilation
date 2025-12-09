@@ -177,14 +177,140 @@ std::string JsonValue::toString(int indent) const {
 }
 
 JsonValue JsonValue::parse(const std::string& json) {
-    // Simplified JSON parser
-    // For production, use nlohmann/json or similar library
-    // This is a basic implementation for demonstration
-
+    // JSON parser implementation
     JsonValue result;
-    // TODO: Implement full JSON parser
-    // For now, return empty object
-    result.type_ = Type::Object;
+    size_t pos = 0;
+
+    // Skip whitespace
+    auto skipWhitespace = [&]() {
+        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+            pos++;
+        }
+    };
+
+    // Forward declarations for recursive parsing
+    std::function<JsonValue()> parseValue;
+    std::function<std::string()> parseString;
+    std::function<double()> parseNumber;
+
+    parseString = [&]() -> std::string {
+        std::string str;
+        if (pos >= json.size() || json[pos] != '"') return str;
+        pos++; // Skip opening quote
+
+        while (pos < json.size() && json[pos] != '"') {
+            if (json[pos] == '\\' && pos + 1 < json.size()) {
+                pos++;
+                switch (json[pos]) {
+                    case 'n': str += '\n'; break;
+                    case 't': str += '\t'; break;
+                    case 'r': str += '\r'; break;
+                    case '"': str += '"'; break;
+                    case '\\': str += '\\'; break;
+                    default: str += json[pos]; break;
+                }
+            } else {
+                str += json[pos];
+            }
+            pos++;
+        }
+        if (pos < json.size()) pos++; // Skip closing quote
+        return str;
+    };
+
+    parseNumber = [&]() -> double {
+        size_t start = pos;
+        if (pos < json.size() && json[pos] == '-') pos++;
+        while (pos < json.size() && (std::isdigit(json[pos]) || json[pos] == '.' || json[pos] == 'e' || json[pos] == 'E' || json[pos] == '+' || json[pos] == '-')) {
+            pos++;
+        }
+        return std::stod(json.substr(start, pos - start));
+    };
+
+    parseValue = [&]() -> JsonValue {
+        skipWhitespace();
+        if (pos >= json.size()) return JsonValue();
+
+        char c = json[pos];
+
+        // String
+        if (c == '"') {
+            return JsonValue(parseString());
+        }
+        // Number
+        if (c == '-' || std::isdigit(c)) {
+            return JsonValue(parseNumber());
+        }
+        // Object
+        if (c == '{') {
+            JsonValue obj = JsonValue::object();
+            pos++; // Skip '{'
+            skipWhitespace();
+            if (pos < json.size() && json[pos] == '}') {
+                pos++;
+                return obj;
+            }
+            while (pos < json.size()) {
+                skipWhitespace();
+                std::string key = parseString();
+                skipWhitespace();
+                if (pos < json.size() && json[pos] == ':') pos++;
+                skipWhitespace();
+                obj.set(key, parseValue());
+                skipWhitespace();
+                if (pos < json.size() && json[pos] == ',') {
+                    pos++;
+                } else {
+                    break;
+                }
+            }
+            skipWhitespace();
+            if (pos < json.size() && json[pos] == '}') pos++;
+            return obj;
+        }
+        // Array
+        if (c == '[') {
+            JsonValue arr = JsonValue::array();
+            pos++; // Skip '['
+            skipWhitespace();
+            if (pos < json.size() && json[pos] == ']') {
+                pos++;
+                return arr;
+            }
+            while (pos < json.size()) {
+                skipWhitespace();
+                arr.push(parseValue());
+                skipWhitespace();
+                if (pos < json.size() && json[pos] == ',') {
+                    pos++;
+                } else {
+                    break;
+                }
+            }
+            skipWhitespace();
+            if (pos < json.size() && json[pos] == ']') pos++;
+            return arr;
+        }
+        // Boolean true
+        if (json.substr(pos, 4) == "true") {
+            pos += 4;
+            return JsonValue(true);
+        }
+        // Boolean false
+        if (json.substr(pos, 5) == "false") {
+            pos += 5;
+            return JsonValue(false);
+        }
+        // Null
+        if (json.substr(pos, 4) == "null") {
+            pos += 4;
+            return JsonValue();
+        }
+
+        return JsonValue();
+    };
+
+    result = parseValue();
     return result;
 }
 
@@ -441,14 +567,24 @@ JsonValue SceneSerializer::serializeEntity(Entity entity, const ECS& ecs) {
     // Components array
     JsonValue components = JsonValue::array();
 
-    // Iterate through all registered component serializers
-    for (const auto& [typeId, serializer] : componentSerializers_) {
-        // Check if entity has this component type
-        // Note: This requires access to component pools
-        // In a real implementation, you'd query the ECS for component presence
-        // For now, we'll skip component serialization
-        // TODO: Implement component iteration through ECS
-    }
+    // Serialize components using registered component serializers
+    // Note: Full component serialization requires ECS to expose component iteration API.
+    // The serializer->serialize() method expects a pointer to component data.
+    // To implement this fully, ECS would need:
+    //   - A way to iterate all component types an entity has
+    //   - A way to get raw component data by type ID
+    // For now, serialization of known component types can be done explicitly:
+    (void)ecs;  // Suppress unused parameter warning
+    (void)entity;
+    // Component serialization would look like:
+    // for (const auto& [typeId, serializer] : componentSerializers_) {
+    //     if (void* data = ecs.getRawComponent(entity, typeId)) {
+    //         JsonValue componentJson = JsonValue::object();
+    //         componentJson["type"] = JsonValue(serializer->getTypeName());
+    //         componentJson["data"] = serializer->serialize(data);
+    //         components.push(componentJson);
+    //     }
+    // }
 
     json["components"] = components;
 
@@ -477,9 +613,24 @@ Entity SceneSerializer::deserializeEntity(const JsonValue& json, ECS& ecs) {
 
             std::string typeName = componentJson["type"].asString();
 
-            // Find serializer by type name
-            // TODO: Implement type name to type ID lookup
-            // For now, component deserialization is not fully implemented
+            // Find serializer by type name and deserialize component
+            for (const auto& [typeId, serializer] : componentSerializers_) {
+                if (serializer && std::string(serializer->getTypeName()) == typeName) {
+                    // Create component storage and deserialize
+                    std::vector<uint8_t> componentStorage(serializer->getComponentSize());
+                    void* componentData = componentStorage.data();
+
+                    // Deserialize the component data from JSON
+                    if (componentJson.has("data")) {
+                        serializer->deserialize(componentJson["data"], componentData);
+                    }
+
+                    // Note: The deserialized component would need to be added to the entity
+                    // through a type-erased ECS API like: ecs.addRawComponent(entity, typeId, componentData)
+                    // This requires ECS support for adding components by type ID
+                    break;
+                }
+            }
         }
     }
 

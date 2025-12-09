@@ -1,5 +1,6 @@
 #include "Input.hpp"
 #include <cstring>
+#include <stdexcept>
 
 namespace Engine {
 
@@ -28,8 +29,17 @@ void Input::update() {
     m_mousePreviousFrame = m_mouseCurrentFrame;
 
     // Update current keyboard state
+    // Note: GLFW keys start at 32 (GLFW_KEY_SPACE), keys 0-31 are invalid
+    // We only poll valid key ranges to avoid "Invalid key" errors
+    static constexpr int FIRST_VALID_KEY = 32;  // GLFW_KEY_SPACE
     for (u32 i = 0; i < KEY_COUNT; ++i) {
-        int state = glfwGetKey(m_window, static_cast<int>(i));
+        // Skip invalid key codes (GLFW keys start at 32)
+        int keyCode = static_cast<int>(i);
+        if (keyCode < FIRST_VALID_KEY) {
+            m_keysCurrentFrame[i] = false;
+            continue;
+        }
+        int state = glfwGetKey(m_window, keyCode);
         m_keysCurrentFrame[i] = (state == GLFW_PRESS || state == GLFW_REPEAT);
     }
 

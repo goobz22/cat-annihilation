@@ -21,14 +21,61 @@ find_package(CUDAToolkit REQUIRED)
 find_package(glfw3 QUIET)
 find_package(OpenAL QUIET)
 
-# If GLFW not found via package, try pkg-config
+# If GLFW not found, download and build it
 if(NOT glfw3_FOUND)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GLFW3 REQUIRED glfw3)
+    if(WIN32)
+        # Download pre-built GLFW for Windows
+        set(GLFW_VERSION "3.4")
+        set(GLFW_DIR ${CMAKE_SOURCE_DIR}/third_party/glfw-${GLFW_VERSION})
+        if(NOT EXISTS ${GLFW_DIR})
+            message(STATUS "Downloading GLFW ${GLFW_VERSION}...")
+            file(DOWNLOAD
+                "https://github.com/glfw/glfw/releases/download/${GLFW_VERSION}/glfw-${GLFW_VERSION}.bin.WIN64.zip"
+                ${CMAKE_SOURCE_DIR}/third_party/glfw.zip
+                SHOW_PROGRESS
+            )
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xzf ${CMAKE_SOURCE_DIR}/third_party/glfw.zip
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/third_party
+            )
+            file(RENAME ${CMAKE_SOURCE_DIR}/third_party/glfw-${GLFW_VERSION}.bin.WIN64 ${GLFW_DIR})
+            file(REMOVE ${CMAKE_SOURCE_DIR}/third_party/glfw.zip)
+        endif()
+        set(GLFW3_INCLUDE_DIRS ${GLFW_DIR}/include)
+        set(GLFW3_LIBRARIES ${GLFW_DIR}/lib-vc2022/glfw3.lib)
+        set(GLFW3_FOUND TRUE)
+    else()
+        # Linux: try pkg-config
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GLFW3 REQUIRED glfw3)
+    endif()
 endif()
 
 # Third-party directory
 set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
+
+# If OpenAL not found on Windows, use downloaded OpenAL-Soft
+if(WIN32 AND NOT OPENAL_FOUND)
+    set(OPENAL_VERSION "1.23.1")
+    # The downloaded zip extracts to openal-soft-VERSION-bin
+    set(OPENAL_DIR ${THIRD_PARTY_DIR}/openal-soft-${OPENAL_VERSION}-bin)
+    if(NOT EXISTS ${OPENAL_DIR})
+        message(STATUS "Downloading OpenAL-Soft ${OPENAL_VERSION}...")
+        file(DOWNLOAD
+            "https://github.com/kcat/openal-soft/releases/download/${OPENAL_VERSION}/openal-soft-${OPENAL_VERSION}-bin.zip"
+            ${THIRD_PARTY_DIR}/openal.zip
+            SHOW_PROGRESS
+        )
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E tar xzf ${THIRD_PARTY_DIR}/openal.zip
+            WORKING_DIRECTORY ${THIRD_PARTY_DIR}
+        )
+        file(REMOVE ${THIRD_PARTY_DIR}/openal.zip)
+    endif()
+    set(OPENAL_INCLUDE_DIR ${OPENAL_DIR}/include)
+    set(OPENAL_LIBRARY ${OPENAL_DIR}/libs/Win64/OpenAL32.lib)
+    set(OPENAL_FOUND TRUE)
+endif()
 
 # Download stb headers if not present
 if(NOT EXISTS ${THIRD_PARTY_DIR}/stb/stb_image.h)
@@ -47,8 +94,28 @@ endif()
 
 # Download GLM if not present
 if(NOT EXISTS ${THIRD_PARTY_DIR}/glm/glm/glm.hpp)
-    file(MAKE_DIRECTORY ${THIRD_PARTY_DIR}/glm)
-    message(STATUS "GLM not found - using engine math library instead")
+    message(STATUS "Downloading GLM...")
+    file(DOWNLOAD
+        "https://github.com/g-truc/glm/releases/download/1.0.1/glm-1.0.1-light.zip"
+        ${THIRD_PARTY_DIR}/glm.zip
+        SHOW_PROGRESS
+    )
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E tar xzf ${THIRD_PARTY_DIR}/glm.zip
+        WORKING_DIRECTORY ${THIRD_PARTY_DIR}
+    )
+    file(REMOVE ${THIRD_PARTY_DIR}/glm.zip)
+endif()
+
+# Download nlohmann/json if not present
+if(NOT EXISTS ${THIRD_PARTY_DIR}/nlohmann/json.hpp)
+    message(STATUS "Downloading nlohmann/json...")
+    file(MAKE_DIRECTORY ${THIRD_PARTY_DIR}/nlohmann)
+    file(DOWNLOAD
+        "https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp"
+        ${THIRD_PARTY_DIR}/nlohmann/json.hpp
+        SHOW_PROGRESS
+    )
 endif()
 
 # Include directories
@@ -64,6 +131,10 @@ include_directories(
 
 if(GLFW3_INCLUDE_DIRS)
     include_directories(${GLFW3_INCLUDE_DIRS})
+endif()
+
+if(OPENAL_INCLUDE_DIR)
+    include_directories(${OPENAL_INCLUDE_DIR})
 endif()
 
 # Compiler flags
@@ -82,6 +153,9 @@ set(ENGINE_CORE_SOURCES
     engine/core/Timer.cpp
     engine/core/Window.cpp
     engine/core/Input.cpp
+    engine/core/serialization.cpp
+    engine/core/save_system.cpp
+    engine/core/settings_manager.cpp
 )
 
 set(ENGINE_MEMORY_SOURCES
@@ -165,6 +239,7 @@ set(ENGINE_RENDERER_SOURCES
     engine/renderer/passes/SkyboxPass.cpp
     engine/renderer/passes/PostProcessPass.cpp
     engine/renderer/passes/UIPass.cpp
+    engine/renderer/BitmapFont.cpp
     engine/renderer/lighting/LightManager.cpp
     engine/renderer/lighting/ClusteredLighting.cpp
     engine/renderer/lighting/ShadowAtlas.cpp
@@ -205,7 +280,7 @@ set(ENGINE_CUDA_KERNELS
 )
 
 set(ENGINE_CUDA_PARTICLES_SOURCES
-    engine/cuda/particles/ParticleSystem.cpp
+    engine/cuda/particles/ParticleSystem.cu
 )
 
 # Game sources
@@ -217,6 +292,22 @@ set(GAME_SOURCES
     game/systems/ProjectileSystem.cpp
     game/systems/WaveSystem.cpp
     game/systems/HealthSystem.cpp
+    game/systems/cat_customization.cpp
+    game/systems/clan_territory.cpp
+    game/systems/combo_system.cpp
+    game/systems/damage_numbers.cpp
+    game/systems/day_night_cycle.cpp
+    game/systems/DialogSystem.cpp
+    game/systems/elemental_magic.cpp
+    game/systems/leveling_system.cpp
+    game/systems/MerchantSystem.cpp
+    game/systems/mobile_controls.cpp
+    game/systems/night_effects.cpp
+    game/systems/NPCSystem.cpp
+    game/systems/quest_system.cpp
+    game/systems/status_effects.cpp
+    game/systems/story_mode.cpp
+    game/systems/story_skills.cpp
     game/entities/CatEntity.cpp
     game/entities/DogEntity.cpp
     game/entities/ProjectileEntity.cpp
@@ -284,8 +375,12 @@ add_executable(CatAnnihilation
 
 target_link_libraries(CatAnnihilation PRIVATE
     CatEngine
-    pthread
 )
+
+# Link pthread on Linux only
+if(NOT WIN32)
+    target_link_libraries(CatAnnihilation PRIVATE pthread)
+endif()
 
 # Copy assets to build directory
 add_custom_command(TARGET CatAnnihilation POST_BUILD
@@ -302,15 +397,39 @@ add_custom_command(TARGET CatAnnihilation POST_BUILD
 )
 
 # Shader compilation (optional - compile GLSL to SPIR-V)
-find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/bin)
+find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
 if(GLSLC)
     message(STATUS "Found glslc: ${GLSLC}")
+
+    # Create output directory for compiled shaders
+    set(SHADER_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/shaders/compiled)
+    file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
+
+    # Collect all shader files
+    file(GLOB_RECURSE VERTEX_SHADERS ${CMAKE_SOURCE_DIR}/shaders/*.vert)
+    file(GLOB_RECURSE FRAGMENT_SHADERS ${CMAKE_SOURCE_DIR}/shaders/*.frag)
+    file(GLOB_RECURSE COMPUTE_SHADERS ${CMAKE_SOURCE_DIR}/shaders/*.comp)
+
+    set(ALL_SHADERS ${VERTEX_SHADERS} ${FRAGMENT_SHADERS} ${COMPUTE_SHADERS})
+    set(SPIRV_OUTPUTS "")
+
+    # Create compilation commands for each shader
+    foreach(SHADER ${ALL_SHADERS})
+        get_filename_component(SHADER_NAME ${SHADER} NAME)
+        set(SPIRV_OUTPUT ${SHADER_OUTPUT_DIR}/${SHADER_NAME}.spv)
+        list(APPEND SPIRV_OUTPUTS ${SPIRV_OUTPUT})
+
+        add_custom_command(
+            OUTPUT ${SPIRV_OUTPUT}
+            COMMAND ${GLSLC} -I${CMAKE_SOURCE_DIR}/shaders ${SHADER} -o ${SPIRV_OUTPUT}
+            DEPENDS ${SHADER}
+            COMMENT "Compiling shader ${SHADER_NAME}"
+            VERBATIM
+        )
+    endforeach()
+
     # Add custom target for shader compilation
-    add_custom_target(compile_shaders
-        COMMAND ${CMAKE_SOURCE_DIR}/shaders/compile_shaders.sh
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/shaders
-        COMMENT "Compiling shaders to SPIR-V"
-    )
+    add_custom_target(compile_shaders DEPENDS ${SPIRV_OUTPUTS})
     add_dependencies(CatAnnihilation compile_shaders)
 endif()
 

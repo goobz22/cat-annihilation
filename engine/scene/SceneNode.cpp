@@ -295,7 +295,8 @@ void SceneNode::visitDepthFirst(const std::function<void(SceneNode*)>& visitor) 
 void SceneNode::visitDepthFirst(const std::function<void(const SceneNode*)>& visitor) const {
     visitor(this);
     for (const auto& child : children_) {
-        child->visitDepthFirst(visitor);
+        const SceneNode* constChild = child.get();
+        constChild->visitDepthFirst(visitor);
     }
 }
 

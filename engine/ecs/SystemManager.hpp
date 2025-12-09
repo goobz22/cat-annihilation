@@ -36,8 +36,8 @@ public:
     T* createSystem(ECS* ecs, Args&&... args) {
         static_assert(std::is_base_of_v<System, T>, "T must derive from System");
 
-        auto system = std::make_unique<T>(std::forward<Args>(args)...);
-        T* systemPtr = system.get();
+        T* systemPtr = new T(std::forward<Args>(args)...);
+        std::unique_ptr<System> system(static_cast<System*>(systemPtr));
         registerSystem(std::move(system), ecs);
         return systemPtr;
     }

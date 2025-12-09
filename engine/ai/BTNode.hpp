@@ -59,11 +59,10 @@ public:
      */
     bool isRunning() const { return wasRunning_; }
 
-protected:
-    bool wasRunning_ = false;
-
+public:
     /**
      * Internal tick that handles enter/exit callbacks
+     * Called by parent nodes on their children
      */
     BTStatus tickInternal(float deltaTime, Blackboard& blackboard) {
         if (!wasRunning_) {
@@ -80,6 +79,9 @@ protected:
 
         return status;
     }
+
+protected:
+    bool wasRunning_ = false;
 };
 
 // ============================================================================

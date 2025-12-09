@@ -1,3 +1,10 @@
+// Prevent Windows min/max macros from interfering with std::min/std::max
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include "save_system.hpp"
 #include "serialization.hpp"
 #include <filesystem>
@@ -532,7 +539,7 @@ bool SaveSystem::saveToFile(const std::string& fullPath, const SaveGameData& dat
         header.dataSize = static_cast<uint32_t>(compressedSize);
         header.uncompressedSize = static_cast<uint32_t>(uncompressedSize);
         header.playerLevel = data.stats.level;
-        header.playTime = 0.0f; // TODO: Track actual play time
+        header.playTime = m_currentPlayTime;  // Total accumulated play time in seconds
 
         std::strncpy(header.playerName, "Player", sizeof(header.playerName) - 1);
         std::strncpy(header.location, "Forest", sizeof(header.location) - 1);

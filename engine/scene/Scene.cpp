@@ -56,7 +56,8 @@ void Scene::visitAllNodes(const std::function<void(SceneNode*)>& visitor) {
 }
 
 void Scene::visitAllNodes(const std::function<void(const SceneNode*)>& visitor) const {
-    rootNode_->visitDepthFirst(visitor);
+    const SceneNode* constRoot = rootNode_.get();
+    constRoot->visitDepthFirst(visitor);
 }
 
 // ============================================================================

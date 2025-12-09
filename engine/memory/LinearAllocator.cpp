@@ -1,4 +1,5 @@
 #include "LinearAllocator.hpp"
+#include "../core/Platform.hpp"
 #include <cstdlib>
 #include <cassert>
 #include <cstring>
@@ -15,7 +16,7 @@ LinearAllocator::LinearAllocator(size_t size, bool threadSafe)
     , m_mutex(threadSafe ? std::make_unique<std::mutex>() : nullptr)
 {
     // Allocate aligned memory
-    m_memory = std::aligned_alloc(alignof(std::max_align_t), size);
+    m_memory = CatEngine::aligned_alloc_compat(alignof(std::max_align_t), size);
     assert(m_memory && "Failed to allocate linear allocator memory");
 
     // Zero initialize for safety
@@ -24,7 +25,7 @@ LinearAllocator::LinearAllocator(size_t size, bool threadSafe)
 
 LinearAllocator::~LinearAllocator() {
     if (m_memory) {
-        std::free(m_memory);
+        CatEngine::aligned_free_compat(m_memory);
         m_memory = nullptr;
     }
 }
@@ -51,7 +52,7 @@ LinearAllocator& LinearAllocator::operator=(LinearAllocator&& other) noexcept {
     if (this != &other) {
         // Free existing memory
         if (m_memory) {
-            std::free(m_memory);
+            CatEngine::aligned_free_compat(m_memory);
         }
 
         // Move data

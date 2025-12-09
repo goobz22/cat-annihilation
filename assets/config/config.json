@@ -1,0 +1,62 @@
+{
+    "graphics": {
+        "windowWidth": 1920,
+        "windowHeight": 1080,
+        "fullscreen": false,
+        "vsync": true,
+        "borderless": false,
+        "shadowQuality": 2,
+        "textureQuality": 2,
+        "effectsQuality": 2,
+        "renderScale": 1.0,
+        "antialiasing": true,
+        "bloom": true,
+        "motionBlur": false,
+        "ambientOcclusion": true,
+        "shadows": true,
+        "maxFPS": 0,
+        "showFPS": false
+    },
+    "audio": {
+        "masterVolume": 1.0,
+        "musicVolume": 0.7,
+        "sfxVolume": 0.8,
+        "voiceVolume": 1.0,
+        "ambientVolume": 0.5,
+        "masterMuted": false,
+        "musicMuted": false,
+        "sfxMuted": false,
+        "audioDevice": "default"
+    },
+    "controls": {
+        "mouseSensitivity": 0.5,
+        "invertMouseY": false,
+        "mouseSmoothing": 0.1,
+        "gamepadSensitivity": 1.0,
+        "invertGamepadY": false,
+        "gamepadDeadzone": 0.15,
+        "gamepadVibration": true,
+        "keyMoveForward": 87,
+        "keyMoveBackward": 83,
+        "keyMoveLeft": 65,
+        "keyMoveRight": 68,
+        "keySprint": 340,
+        "keyJump": 32,
+        "keyCrouch": 341,
+        "keyAttack": -1,
+        "keyAltAttack": -2,
+        "keyInteract": 69,
+        "keyReload": 82,
+        "keyPause": 256
+    },
+    "gameplay": {
+        "difficulty": 1,
+        "showDamageNumbers": true,
+        "showCrosshair": true,
+        "screenShake": true,
+        "screenShakeIntensity": 1.0,
+        "autoPause": true
+    }
+}
+
+

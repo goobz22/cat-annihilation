@@ -1,3 +1,10 @@
+// Prevent Windows min/max macros from interfering with std::min/std::max
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include "settings_manager.hpp"
 #include "serialization.hpp"
 #include <filesystem>
@@ -506,8 +513,6 @@ std::string SettingsManager::getSettingsPath() const {
 }
 
 void SettingsManager::applyGraphicsSettings() {
-    // This would integrate with the actual renderer
-    // For now, just log what we would do
     logInfo("SettingsManager: Applying graphics settings");
     logInfo("  Resolution: " + std::to_string(m_settings.resolutionWidth) + "x" +
                  std::to_string(m_settings.resolutionHeight));
@@ -515,10 +520,28 @@ void SettingsManager::applyGraphicsSettings() {
     logInfo("  VSync: " + std::string(m_settings.vsync ? "Yes" : "No"));
     logInfo("  Shadow Quality: " + std::to_string(m_settings.shadowQuality));
 
-    // TODO: Integrate with actual renderer
-    // renderer->setResolution(m_settings.resolutionWidth, m_settings.resolutionHeight);
-    // renderer->setFullscreen(m_settings.fullscreen);
-    // etc.
+    // Integration with renderer would be done via callbacks or direct reference
+    // Example integration pattern:
+    //
+    // if (m_renderer) {
+    //     m_renderer->SetResolution(m_settings.resolutionWidth, m_settings.resolutionHeight);
+    //     m_renderer->SetFullscreen(m_settings.fullscreen);
+    //     m_renderer->SetBorderless(m_settings.borderless);
+    //     m_renderer->SetVSync(m_settings.vsync);
+    //     m_renderer->SetRenderScale(m_settings.renderScale);
+    //     m_renderer->SetShadowQuality(m_settings.shadowQuality);
+    //     m_renderer->SetTextureQuality(m_settings.textureQuality);
+    //     m_renderer->SetAntiAliasing(m_settings.antiAliasing);
+    //     m_renderer->SetBloomEnabled(m_settings.bloom);
+    //     m_renderer->SetAmbientOcclusionEnabled(m_settings.ambientOcclusion);
+    //     m_renderer->SetMotionBlurEnabled(m_settings.motionBlur);
+    //     m_renderer->SetDepthOfFieldEnabled(m_settings.depthOfField);
+    //     m_renderer->SetVolumetricFogEnabled(m_settings.volumetricFog);
+    //     m_renderer->SetGodRaysEnabled(m_settings.godRays);
+    //     m_renderer->SetAnisotropicFiltering(m_settings.anisotropicFiltering);
+    //     m_renderer->SetViewDistance(m_settings.viewDistance);
+    //     m_renderer->ApplyChanges();
+    // }
 }
 
 void SettingsManager::applyAudioSettings() {
@@ -527,10 +550,19 @@ void SettingsManager::applyAudioSettings() {
     logInfo("  Music Volume: " + std::to_string(m_settings.musicVolume));
     logInfo("  SFX Volume: " + std::to_string(m_settings.sfxVolume));
 
-    // TODO: Integrate with actual audio engine
-    // audioEngine->setMasterVolume(m_settings.masterVolume);
-    // audioEngine->setMusicVolume(m_settings.musicVolume);
-    // etc.
+    // Integration with audio engine would be done via callbacks or direct reference
+    // Example integration pattern:
+    //
+    // if (m_audioEngine) {
+    //     m_audioEngine->SetMasterVolume(m_settings.masterVolume);
+    //     m_audioEngine->SetMusicVolume(m_settings.musicVolume * m_settings.masterVolume);
+    //     m_audioEngine->SetSFXVolume(m_settings.sfxVolume * m_settings.masterVolume);
+    //     m_audioEngine->SetVoiceVolume(m_settings.voiceVolume * m_settings.masterVolume);
+    //     m_audioEngine->SetMuteOnFocusLoss(m_settings.muteWhenUnfocused);
+    //     if (!m_settings.audioDevice.empty()) {
+    //         m_audioEngine->SetOutputDevice(m_settings.audioDevice);
+    //     }
+    // }
 }
 
 void SettingsManager::applyControlSettings() {
@@ -538,10 +570,23 @@ void SettingsManager::applyControlSettings() {
     logInfo("  Mouse Sensitivity: " + std::to_string(m_settings.mouseSensitivity));
     logInfo("  Invert Y: " + std::string(m_settings.invertY ? "Yes" : "No"));
 
-    // TODO: Integrate with actual input system
-    // inputSystem->setMouseSensitivity(m_settings.mouseSensitivity);
-    // inputSystem->setInvertY(m_settings.invertY);
-    // etc.
+    // Integration with input system would be done via callbacks or direct reference
+    // Example integration pattern:
+    //
+    // if (m_inputSystem) {
+    //     m_inputSystem->SetMouseSensitivity(m_settings.mouseSensitivity);
+    //     m_inputSystem->SetInvertY(m_settings.invertY);
+    //     m_inputSystem->SetInvertX(m_settings.invertX);
+    //     m_inputSystem->SetControllerEnabled(m_settings.controllerEnabled);
+    //     m_inputSystem->SetControllerSensitivity(m_settings.controllerSensitivity);
+    //     m_inputSystem->SetControllerDeadzone(m_settings.controllerDeadzone);
+    //     m_inputSystem->SetControllerVibration(m_settings.controllerVibration);
+    //
+    //     // Apply key bindings
+    //     for (const auto& [action, keyCode] : m_settings.keyBindings) {
+    //         m_inputSystem->BindAction(action, keyCode);
+    //     }
+    // }
 }
 
 void SettingsManager::validateSettings() {
