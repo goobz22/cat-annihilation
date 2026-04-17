@@ -11,9 +11,13 @@
 #include "../engine/core/Logger.hpp"
 #include "../engine/core/Config.hpp"
 #include "../engine/rhi/vulkan/VulkanRHI.hpp"
+#include "../engine/rhi/vulkan/VulkanSwapchain.hpp"
+#include "../engine/rhi/vulkan/VulkanDevice.hpp"
 #include "../engine/renderer/Renderer.hpp"
+#include "../engine/renderer/passes/UIPass.hpp"
 #include "../engine/audio/AudioEngine.hpp"
 #include "../engine/cuda/CudaContext.hpp"
+#include "../engine/ui/ImGuiLayer.hpp"
 #include "config/GameConfig.hpp"
 #include "config/GameplayConfig.hpp"
 #include "config/BalanceConfig.hpp"
@@ -168,6 +172,43 @@ int main(int argc, char* argv[]) {
     Engine::Logger::info("Renderer initialized");
 
     // ========================================================================
+    // Initialize Dear ImGui (shares the UI render pass with our UIPass).
+    // ========================================================================
+    Engine::ImGuiLayer imguiLayer;
+    {
+        auto* vulkanSwapchain = static_cast<CatEngine::RHI::VulkanSwapchain*>(renderer->GetSwapchain());
+        auto* vulkanDevice = rhi->GetDevice();
+        if (vulkanSwapchain == nullptr || vulkanDevice == nullptr) {
+            Engine::Logger::error("ImGui init: missing Vulkan swapchain or device");
+            return 1;
+        }
+
+        Engine::ImGuiLayer::InitInfo imguiInit{};
+        imguiInit.window = window.getHandle();
+        imguiInit.instance = rhi->GetInstance();
+        imguiInit.physicalDevice = vulkanDevice->GetPhysicalDevice();
+        imguiInit.device = vulkanDevice->GetVkDevice();
+        imguiInit.graphicsQueueFamily = vulkanDevice->GetQueueFamilyIndices().graphics.value_or(0);
+        imguiInit.graphicsQueue = vulkanDevice->GetGraphicsQueue();
+        imguiInit.renderPass = vulkanSwapchain->GetUIRenderPass();
+        imguiInit.minImageCount = 2;
+        imguiInit.imageCount = vulkanSwapchain->GetImageCount();
+        imguiInit.regularFontPath = "assets/fonts/OpenSans-Regular.ttf";
+        imguiInit.boldFontPath = "assets/fonts/OpenSans-Bold.ttf";
+
+        if (!imguiLayer.Init(imguiInit)) {
+            Engine::Logger::error("Failed to initialize ImGui layer");
+            return 1;
+        }
+        Engine::Logger::info("ImGui layer initialized");
+
+        // Hand the layer to the UIPass so it draws inside the existing UI render pass.
+        if (auto* uiPass = renderer->GetUIPass()) {
+            uiPass->SetImGuiLayer(&imguiLayer);
+        }
+    }
+
+    // ========================================================================
     // Initialize CUDA Context
     // ========================================================================
     std::cout << "[main] Creating CUDA context..." << std::endl;
@@ -204,7 +245,7 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Create Cat Annihilation Game Instance
     // ========================================================================
-    auto game = std::make_unique<CatGame::CatAnnihilation>(&input, renderer.get(), audioEngine.get());
+    auto game = std::make_unique<CatGame::CatAnnihilation>(&input, renderer.get(), audioEngine.get(), &imguiLayer);
     if (!game->initialize()) {
         Engine::Logger::error("Failed to initialize Cat Annihilation game");
         return 1;
@@ -261,6 +302,9 @@ int main(int argc, char* argv[]) {
 
         // Update input
         input.update();
+
+        // Start a new ImGui frame so update() can emit widgets via MainMenu etc.
+        imguiLayer.BeginFrame();
 
         if (frameCount < 5) {
             std::cout << "[main] Frame " << frameCount << " - updating game..." << std::endl;
@@ -334,6 +378,9 @@ int main(int argc, char* argv[]) {
     // Shutdown game (this will shutdown all game systems)
     game->shutdown();
     game.reset();
+
+    // ImGui owns Vulkan descriptors; tear it down before the device goes away.
+    imguiLayer.Shutdown();
 
     // Shutdown engine systems in reverse order
     audioEngine->shutdown();

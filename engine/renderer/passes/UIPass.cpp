@@ -5,6 +5,7 @@
 #include "../../rhi/vulkan/VulkanCommandBuffer.hpp"
 #include "../../rhi/vulkan/VulkanRenderPass.hpp"
 #include "../Renderer.hpp"
+#include "../../ui/ImGuiLayer.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -80,9 +81,11 @@ void UIPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex)
         return;
     }
     
-    if (batchedCommands_.empty()) {
+    const bool hasLegacyQuads = !batchedCommands_.empty();
+    const bool hasImGuiFrame = (imguiLayer_ != nullptr);
+    if (!hasLegacyQuads && !hasImGuiFrame) {
         if (executeCount <= 5) {
-            std::cout << "[UIPass::Execute] SKIPPED - no batched commands\n";
+            std::cout << "[UIPass::Execute] SKIPPED - no UI work this frame\n";
             std::cout.flush();
         }
         return;
@@ -177,11 +180,14 @@ void UIPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex)
         std::cout.flush();
     }
 
-    // Bind vertex and index buffers
-    uint64_t offset = 0;
-    RHI::IRHIBuffer* vertexBuffer = vertexBuffers_[frameIndex].get();
-    commandBuffer->BindVertexBuffers(0, &vertexBuffer, &offset, 1);
-    commandBuffer->BindIndexBuffer(indexBuffers_[frameIndex].get(), offset, RHI::IndexType::UInt16);
+    // Bind vertex and index buffers only if we actually have legacy UI geometry —
+    // an ImGui-only frame has no UIPass vertices and the binding would hit empty buffers.
+    if (hasLegacyQuads) {
+        uint64_t offset = 0;
+        RHI::IRHIBuffer* vertexBuffer = vertexBuffers_[frameIndex].get();
+        commandBuffer->BindVertexBuffers(0, &vertexBuffer, &offset, 1);
+        commandBuffer->BindIndexBuffer(indexBuffers_[frameIndex].get(), offset, RHI::IndexType::UInt16);
+    }
 
     if (executeCount <= 5) {
         std::cout << "[UIPass::Execute] Drawing " << batchedCommands_.size() << " batched commands...\n";
@@ -239,7 +245,12 @@ void UIPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex)
         std::cout << "[UIPass::Execute] === DRAW LOOP END (" << drawCommands_.size() << " draw calls) ===\n";
         std::cout.flush();
     }
-    
+
+    // ImGui draws on top within the same render pass, if an ImGuiLayer is attached.
+    if (imguiLayer_ != nullptr) {
+        imguiLayer_->RenderDrawData(vkCmd);
+    }
+
     // End render pass
     vkCmdEndRenderPass(vkCmd);
     
@@ -336,31 +347,35 @@ void UIPass::DrawQuad(const QuadDesc& desc) {
     uint32_t vertexStart = static_cast<uint32_t>(vertices_.size());
 
     // Top-left
-    vertices_.push_back({
+    vertices_.push_back(UIVertex{
         {desc.x, desc.y},
         {desc.uvX, desc.uvY},
-        {desc.r, desc.g, desc.b, desc.a}
+        {desc.r, desc.g, desc.b, desc.a},
+        0.0F
     });
 
     // Top-right
-    vertices_.push_back({
+    vertices_.push_back(UIVertex{
         {desc.x + desc.width, desc.y},
         {desc.uvX + desc.uvWidth, desc.uvY},
-        {desc.r, desc.g, desc.b, desc.a}
+        {desc.r, desc.g, desc.b, desc.a},
+        0.0F
     });
 
     // Bottom-right
-    vertices_.push_back({
+    vertices_.push_back(UIVertex{
         {desc.x + desc.width, desc.y + desc.height},
         {desc.uvX + desc.uvWidth, desc.uvY + desc.uvHeight},
-        {desc.r, desc.g, desc.b, desc.a}
+        {desc.r, desc.g, desc.b, desc.a},
+        0.0F
     });
 
     // Bottom-left
-    vertices_.push_back({
+    vertices_.push_back(UIVertex{
         {desc.x, desc.y + desc.height},
         {desc.uvX, desc.uvY + desc.uvHeight},
-        {desc.r, desc.g, desc.b, desc.a}
+        {desc.r, desc.g, desc.b, desc.a},
+        0.0F
     });
 
     // Create 6 indices for 2 triangles
@@ -388,14 +403,14 @@ void UIPass::DrawQuad(const QuadDesc& desc) {
 }
 
 void UIPass::DrawText(const TextDesc& desc) {
-    if (!frameInProgress_ || !desc.text || desc.text[0] == '\0') {
-        return;
-    }
+    // Text is now handled by Dear ImGui (see engine/ui/ImGuiLayer + game/ui/MainMenu).
+    // Legacy callers (HUD, PauseMenu, inventory, etc.) still invoke DrawText via the
+    // old bitmap path — keep the signature to avoid cascading edits, but emit nothing.
+    // TODO: migrate remaining screens to ImGui and delete this method entirely.
+    (void)desc;
+    return;
 
-    // Text uses shader-based font rendering
-    // Character code is encoded in UV.x as: charCode + 100 (so UV.x > 50 = text)
-    // UV.y encodes the position within the glyph (0-1)
-
+    // Unreachable legacy body retained below in case we need to re-enable quickly.
     float cursorX = desc.x;
     float cursorY = desc.y;
     const float glyphWidth = desc.fontSize * 0.6f;   // Approximate width
@@ -428,40 +443,44 @@ void UIPass::DrawText(const TextDesc& desc) {
         // Skip non-printable
         if (c < 32) continue;
 
-        // Encode: UV.x = charCode + 100 (signals text to shader)
-        //         UV.y = packed: integer part = row (0-4), fractional = column (0-1)
-        float charCodeUV = static_cast<float>(c) + 100.0f;
+        // UV.x varies across width (col), UV.y varies across height (row),
+        // each in [0, 1). charCode is flat across the glyph quad.
+        // Using 0.9999 instead of 1.0 at the far edge keeps int(uv*5) in [0, 4].
+        constexpr float kMaxUv = 0.9999F;
+        float charCode = static_cast<float>(c);
 
-        // Create quad vertices for this glyph
-        // We encode position as: UV.y = row.column where row is 0-4 and column is 0.0-1.0
         uint32_t baseVertex = static_cast<uint32_t>(vertices_.size());
 
-        // Top-left: row=0, col=0
-        vertices_.push_back({
+        // Top-left: col=0, row=0
+        vertices_.push_back(UIVertex{
             {cursorX, cursorY},
-            {charCodeUV, 0.0f},  // row 0, col 0
-            {desc.r, desc.g, desc.b, desc.a}
+            {0.0F, 0.0F},
+            {desc.r, desc.g, desc.b, desc.a},
+            charCode
         });
 
-        // Top-right: row=0, col=1
-        vertices_.push_back({
+        // Top-right: col=1, row=0
+        vertices_.push_back(UIVertex{
             {cursorX + glyphWidth, cursorY},
-            {charCodeUV, 0.99f},  // row 0, col ~1
-            {desc.r, desc.g, desc.b, desc.a}
+            {kMaxUv, 0.0F},
+            {desc.r, desc.g, desc.b, desc.a},
+            charCode
         });
 
-        // Bottom-right: row=4, col=1
-        vertices_.push_back({
+        // Bottom-right: col=1, row=1
+        vertices_.push_back(UIVertex{
             {cursorX + glyphWidth, cursorY + glyphHeight},
-            {charCodeUV, 4.99f},  // row 4, col ~1
-            {desc.r, desc.g, desc.b, desc.a}
+            {kMaxUv, kMaxUv},
+            {desc.r, desc.g, desc.b, desc.a},
+            charCode
         });
 
-        // Bottom-left: row=4, col=0
-        vertices_.push_back({
+        // Bottom-left: col=0, row=1
+        vertices_.push_back(UIVertex{
             {cursorX, cursorY + glyphHeight},
-            {charCodeUV, 4.0f},  // row 4, col 0
-            {desc.r, desc.g, desc.b, desc.a}
+            {0.0F, kMaxUv},
+            {desc.r, desc.g, desc.b, desc.a},
+            charCode
         });
 
         // Create indices for two triangles
@@ -581,8 +600,14 @@ void UIPass::CreatePipelines() {
         colorAttr.format = RHI::TextureFormat::RGBA32_SFLOAT; // vec4 color
         colorAttr.offset = offsetof(UIVertex, color);
 
+        RHI::VertexAttribute charCodeAttr{};
+        charCodeAttr.location = 3;
+        charCodeAttr.binding = 0;
+        charCodeAttr.format = RHI::TextureFormat::R32_SFLOAT; // float charCode
+        charCodeAttr.offset = offsetof(UIVertex, charCode);
+
         pipelineDesc.vertexInput.bindings = {vertexBinding};
-        pipelineDesc.vertexInput.attributes = {posAttr, uvAttr, colorAttr};
+        pipelineDesc.vertexInput.attributes = {posAttr, uvAttr, colorAttr, charCodeAttr};
 
         pipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
 
@@ -661,8 +686,14 @@ void UIPass::CreatePipelines() {
         colorAttr.format = RHI::TextureFormat::RGBA32_SFLOAT;
         colorAttr.offset = offsetof(UIVertex, color);
 
+        RHI::VertexAttribute charCodeAttr{};
+        charCodeAttr.location = 3;
+        charCodeAttr.binding = 0;
+        charCodeAttr.format = RHI::TextureFormat::R32_SFLOAT;
+        charCodeAttr.offset = offsetof(UIVertex, charCode);
+
         pipelineDesc.vertexInput.bindings = {vertexBinding};
-        pipelineDesc.vertexInput.attributes = {posAttr, uvAttr, colorAttr};
+        pipelineDesc.vertexInput.attributes = {posAttr, uvAttr, colorAttr, charCodeAttr};
 
         pipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
 

@@ -8,6 +8,10 @@
 #include <array>
 #include <unordered_map>
 
+namespace Engine {
+class ImGuiLayer;
+}
+
 namespace CatEngine::Renderer {
 
 /**
@@ -40,8 +44,9 @@ public:
      */
     struct UIVertex {
         float position[2];  // Screen space position (pixels)
-        float uv[2];        // Texture coordinates
+        float uv[2];        // For quads: texture coords. For text: col/row both in [0, 1) across the glyph.
         float color[4];     // RGBA color (multiplied with texture)
+        float charCode;     // 0 for quads; ASCII code for text glyphs (same on all 4 corners of a glyph quad).
     };
 
     /**
@@ -125,6 +130,11 @@ public:
     void Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex) override;
     void Cleanup() override;
     const char* GetName() const override { return "UIPass"; }
+
+    // Optional ImGui hook. If set, Execute() calls imguiLayer->RenderDrawData(vkCmd)
+    // after the quad/text draw loop but before vkCmdEndRenderPass, so ImGui paints
+    // on top of the engine's own UI quads within the same render pass.
+    void SetImGuiLayer(::Engine::ImGuiLayer* imguiLayer) { imguiLayer_ = imguiLayer; }
 
     /**
      * Handle window resize
@@ -252,6 +262,9 @@ private:
 
     // Frame state
     bool frameInProgress_ = false;
+
+    // Optional ImGui hook (not owned) — drawn inside our active UI render pass.
+    ::Engine::ImGuiLayer* imguiLayer_ = nullptr;
 };
 
 } // namespace CatEngine::Renderer
