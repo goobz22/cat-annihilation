@@ -1,5 +1,6 @@
 #include "Renderer.hpp"
 #include "passes/UIPass.hpp"
+#include "passes/ScenePass.hpp"
 #include "../rhi/vulkan/VulkanRHI.hpp"
 #include "../rhi/vulkan/VulkanSwapchain.hpp"
 #include "../rhi/vulkan/VulkanCommandBuffer.hpp"
@@ -69,6 +70,19 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
     uiPass->OnResize(renderWidth, renderHeight);
     std::cout << "[Renderer] UI pass created and initialized" << std::endl;
 
+    std::cout << "[Renderer] Creating scene pass..." << std::endl;
+    // Create scene pass for 3D rendering (terrain, entities)
+    {
+        auto* vulkanDevice = static_cast<RHI::VulkanRHI*>(device)->GetDevice();
+        auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
+        scenePass = std::make_unique<ScenePass>();
+        if (!scenePass->Setup(vulkanDevice, vulkanSwapchain)) {
+            std::cerr << "[Renderer] ScenePass setup failed" << std::endl;
+            return false;
+        }
+    }
+    std::cout << "[Renderer] Scene pass created" << std::endl;
+
     initialized = true;
     return true;
 }
@@ -100,6 +114,12 @@ void Renderer::Shutdown() {
 
     // Reset render graph
     defaultRenderGraph.reset();
+
+    // Reset scene pass (before swapchain/device teardown)
+    if (scenePass) {
+        scenePass->Shutdown();
+        scenePass.reset();
+    }
 
     // Reset UI pass
     uiPass.reset();
@@ -432,6 +452,11 @@ void Renderer::OnResize(uint32_t width, uint32_t height) {
     // Resize UI pass
     if (uiPass) {
         uiPass->OnResize(width, height);
+    }
+
+    // Resize scene pass (recreates depth buffer + framebuffers)
+    if (scenePass) {
+        scenePass->OnResize(width, height);
     }
 
     // Rebuild render graph (if it depends on render target size)

@@ -11,6 +11,7 @@ namespace CatEngine::Renderer {
 
 // Forward declaration
 class UIPass;
+class ScenePass;
 
 /**
  * Frame resource management
@@ -210,6 +211,19 @@ public:
      */
     [[nodiscard]] UIPass* GetUIPass() const { return uiPass.get(); }
 
+    /**
+     * Get ScenePass for 3D world rendering
+     */
+    [[nodiscard]] ScenePass* GetScenePass() const { return scenePass.get(); }
+
+    /**
+     * Get the swapchain image index currently being rendered (valid between
+     * BeginFrame and EndFrame).
+     */
+    [[nodiscard]] uint32_t GetCurrentSwapchainImageIndex() const {
+        return currentSwapchainImageIndex;
+    }
+
     // ========================================================================
     // Statistics
     // ========================================================================
@@ -265,6 +279,9 @@ private:
 
     // UI rendering pass
     std::unique_ptr<UIPass> uiPass;
+
+    // 3D scene rendering pass (terrain etc.)
+    std::unique_ptr<ScenePass> scenePass;
 
     // ========================================================================
     // Internal Methods

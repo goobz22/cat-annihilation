@@ -125,6 +125,8 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/game
     ${THIRD_PARTY_DIR}
     ${THIRD_PARTY_DIR}/stb
+    ${THIRD_PARTY_DIR}/imgui
+    ${THIRD_PARTY_DIR}/imgui/backends
     ${Vulkan_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}
 )
@@ -239,6 +241,7 @@ set(ENGINE_RENDERER_SOURCES
     engine/renderer/passes/SkyboxPass.cpp
     engine/renderer/passes/PostProcessPass.cpp
     engine/renderer/passes/UIPass.cpp
+    engine/renderer/passes/ScenePass.cpp
     engine/renderer/BitmapFont.cpp
     engine/renderer/lighting/LightManager.cpp
     engine/renderer/lighting/ClusteredLighting.cpp
@@ -281,6 +284,18 @@ set(ENGINE_CUDA_KERNELS
 
 set(ENGINE_CUDA_PARTICLES_SOURCES
     engine/cuda/particles/ParticleSystem.cu
+)
+
+# Dear ImGui (vendored in third_party/imgui) + Vulkan/GLFW backends.
+# Compiled as part of CatEngine so any consumer gets the same instance.
+set(IMGUI_SOURCES
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_vulkan.cpp
+    third_party/imgui/backends/imgui_impl_glfw.cpp
+    engine/ui/ImGuiLayer.cpp
 )
 
 # Game sources
@@ -346,6 +361,7 @@ add_library(CatEngine STATIC
     ${ENGINE_CUDA_PHYSICS_SOURCES}
     ${ENGINE_CUDA_PARTICLES_SOURCES}
     ${ENGINE_CUDA_KERNELS}
+    ${IMGUI_SOURCES}
 )
 
 target_link_libraries(CatEngine PUBLIC
