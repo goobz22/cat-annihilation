@@ -227,6 +227,12 @@ private:
     // Host-side temporary buffers
     std::vector<float> m_radiiBuffer;
 
+    // Device mirror of m_radiiBuffer, uploaded each step before broadphase.
+    // (The previous code passed the CPU pointer straight to CUDA kernels,
+    // which triggers cudaErrorIllegalAddress as soon as broadphase runs.)
+    float* m_radiiDevice = nullptr;
+    int m_radiiDeviceCapacity = 0;
+
     // Physics parameters
     PhysicsParams m_params;
     float m_fixedTimestep;

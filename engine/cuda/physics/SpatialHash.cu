@@ -19,17 +19,19 @@ __device__ __forceinline__ int3 getGridCell(float3 pos, float cellSize) {
     );
 }
 
-__device__ __forceinline__ uint32_t hashCell(int3 cell, int gridSize) {
-    // Simple spatial hash function
+__device__ __forceinline__ uint32_t hashCell(int3 cell, int gridSize, uint32_t hashMask) {
+    // Simple spatial hash function. gridSize wraps the per-axis cell index
+    // into a bounded range; hashMask then folds the XOR-mixed hash into
+    // the bucket table (size = hashMask + 1, power of 2).
     const uint32_t p1 = 73856093;
     const uint32_t p2 = 19349663;
     const uint32_t p3 = 83492791;
 
-    int x = cell.x & (gridSize - 1);  // Wrap to grid size (assumes power of 2)
+    int x = cell.x & (gridSize - 1);  // assumes gridSize is power of 2
     int y = cell.y & (gridSize - 1);
     int z = cell.z & (gridSize - 1);
 
-    return ((x * p1) ^ (y * p2) ^ (z * p3)) & (gridSize * gridSize * gridSize - 1);
+    return ((x * p1) ^ (y * p2) ^ (z * p3)) & hashMask;
 }
 
 // ============================================================================
@@ -46,6 +48,7 @@ __global__ void computeHashesKernel(
     uint32_t* cellIndices,
     float cellSize,
     int gridSize,
+    uint32_t hashMask,
     int count
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -53,7 +56,7 @@ __global__ void computeHashesKernel(
 
     float3 pos = positions[idx];
     int3 cell = getGridCell(pos, cellSize);
-    uint32_t hash = hashCell(cell, gridSize);
+    uint32_t hash = hashCell(cell, gridSize, hashMask);
 
     cellHashes[idx] = hash;
     cellIndices[idx] = idx;
@@ -103,6 +106,7 @@ __global__ void findPairsKernel(
     int maxPairs,
     float cellSize,
     int gridSize,
+    uint32_t hashMask,
     int count
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -119,7 +123,7 @@ __global__ void findPairsKernel(
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
                 int3 neighborCell = make_int3(cell.x + dx, cell.y + dy, cell.z + dz);
-                uint32_t neighborHash = hashCell(neighborCell, gridSize);
+                uint32_t neighborHash = hashCell(neighborCell, gridSize, hashMask);
 
                 uint32_t start = cellStarts[neighborHash];
                 uint32_t end = cellEnds[neighborHash];
@@ -182,6 +186,7 @@ void buildSpatialHash(
         hashData.cellIndices,
         hashData.cellSize,
         hashData.gridSize,
+        hashData.hashMask,
         count
     );
     CUDA_CHECK_LAST();
@@ -230,6 +235,7 @@ void findCollisionPairs(
         pairs.maxPairs,
         hashData.cellSize,
         hashData.gridSize,
+        hashData.hashMask,
         count
     );
     CUDA_CHECK_LAST();
@@ -240,20 +246,32 @@ GpuSpatialHashData allocateSpatialHashData(int maxBodies, float cellSize) {
     data.count = maxBodies;
     data.cellSize = cellSize;
 
-    // Use next power of 2 for grid size
-    data.gridSize = 1;
-    while (data.gridSize < maxBodies) {
-        data.gridSize *= 2;
-    }
-    data.hashTableSize = data.gridSize * data.gridSize * data.gridSize;
+    // Wrap factor for per-axis cell coordinates. Fixed at 256 — covers the
+    // 512-unit world at cellSize=2.0 without aliasing, and is not a function
+    // of maxBodies (which is what caused the prior gridSize^3 overflow).
+    data.gridSize = 256;
 
-    // Allocate memory
-    CUDA_CHECK(cudaMalloc(&data.cellHashes, maxBodies * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&data.cellIndices, maxBodies * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&data.cellStarts, data.hashTableSize * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&data.cellEnds, data.hashTableSize * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&data.tempHashes, maxBodies * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&data.tempIndices, maxBodies * sizeof(uint32_t)));
+    // Bucket count: at least 1024, otherwise 2× maxBodies rounded up to a
+    // power of 2. Fits comfortably in memory (1M bodies → 8 MB of cell
+    // tables), and the mask-based modulo stays exact.
+    uint32_t desiredBuckets = static_cast<uint32_t>(maxBodies) * 2u;
+    if (desiredBuckets < 1024u) desiredBuckets = 1024u;
+    data.hashTableSize = 1u;
+    while (data.hashTableSize < desiredBuckets) {
+        data.hashTableSize <<= 1;
+    }
+    data.hashMask = data.hashTableSize - 1u;
+
+    // Allocate memory — use size_t arithmetic to avoid any 32-bit overflow.
+    const size_t bodyBytes = static_cast<size_t>(maxBodies) * sizeof(uint32_t);
+    const size_t tableBytes = static_cast<size_t>(data.hashTableSize) * sizeof(uint32_t);
+
+    CUDA_CHECK(cudaMalloc(&data.cellHashes, bodyBytes));
+    CUDA_CHECK(cudaMalloc(&data.cellIndices, bodyBytes));
+    CUDA_CHECK(cudaMalloc(&data.cellStarts, tableBytes));
+    CUDA_CHECK(cudaMalloc(&data.cellEnds, tableBytes));
+    CUDA_CHECK(cudaMalloc(&data.tempHashes, bodyBytes));
+    CUDA_CHECK(cudaMalloc(&data.tempIndices, bodyBytes));
 
     return data;
 }

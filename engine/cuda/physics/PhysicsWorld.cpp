@@ -30,6 +30,10 @@ PhysicsWorld::PhysicsWorld(CUDA::CudaContext& cudaContext, int maxBodies, int ma
     CUDA_CHECK(cudaMalloc(&m_gpuContacts, maxContacts * sizeof(GpuContactManifold)));
     CUDA_CHECK(cudaMalloc(&m_gpuContactCount, sizeof(int)));
 
+    // Device mirror for body radii (used by broadphase kernels — must live on GPU).
+    CUDA_CHECK(cudaMalloc(&m_radiiDevice, static_cast<size_t>(maxBodies) * sizeof(float)));
+    m_radiiDeviceCapacity = maxBodies;
+
     // Reserve CPU memory
     m_bodies.reserve(maxBodies);
     m_radiiBuffer.reserve(maxBodies);
@@ -49,6 +53,7 @@ PhysicsWorld::~PhysicsWorld() {
 
     if (m_gpuContacts) cudaFree(m_gpuContacts);
     if (m_gpuContactCount) cudaFree(m_gpuContactCount);
+    if (m_radiiDevice) cudaFree(m_radiiDevice);
 }
 
 PhysicsWorld::PhysicsWorld(PhysicsWorld&& other) noexcept
@@ -62,6 +67,8 @@ PhysicsWorld::PhysicsWorld(PhysicsWorld&& other) noexcept
     , m_gpuContacts(other.m_gpuContacts)
     , m_gpuContactCount(other.m_gpuContactCount)
     , m_radiiBuffer(std::move(other.m_radiiBuffer))
+    , m_radiiDevice(other.m_radiiDevice)
+    , m_radiiDeviceCapacity(other.m_radiiDeviceCapacity)
     , m_params(other.m_params)
     , m_fixedTimestep(other.m_fixedTimestep)
     , m_accumulator(other.m_accumulator)
@@ -76,6 +83,8 @@ PhysicsWorld::PhysicsWorld(PhysicsWorld&& other) noexcept
     other.m_collisionPairs = {};
     other.m_gpuContacts = nullptr;
     other.m_gpuContactCount = nullptr;
+    other.m_radiiDevice = nullptr;
+    other.m_radiiDeviceCapacity = 0;
 }
 
 PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&& other) noexcept {
@@ -87,6 +96,7 @@ PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&& other) noexcept {
         freeCollisionPairs(m_collisionPairs);
         if (m_gpuContacts) cudaFree(m_gpuContacts);
         if (m_gpuContactCount) cudaFree(m_gpuContactCount);
+        if (m_radiiDevice) cudaFree(m_radiiDevice);
 
         // Move data (note: m_cudaContext is a reference and cannot be reassigned)
         // Both PhysicsWorld instances should share the same CudaContext
@@ -99,6 +109,8 @@ PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&& other) noexcept {
         m_gpuContacts = other.m_gpuContacts;
         m_gpuContactCount = other.m_gpuContactCount;
         m_radiiBuffer = std::move(other.m_radiiBuffer);
+        m_radiiDevice = other.m_radiiDevice;
+        m_radiiDeviceCapacity = other.m_radiiDeviceCapacity;
         m_params = other.m_params;
         m_fixedTimestep = other.m_fixedTimestep;
         m_accumulator = other.m_accumulator;
@@ -114,6 +126,8 @@ PhysicsWorld& PhysicsWorld::operator=(PhysicsWorld&& other) noexcept {
         other.m_collisionPairs = {};
         other.m_gpuContacts = nullptr;
         other.m_gpuContactCount = nullptr;
+        other.m_radiiDevice = nullptr;
+        other.m_radiiDeviceCapacity = 0;
     }
     return *this;
 }
@@ -206,47 +220,53 @@ void PhysicsWorld::stepSimulation(float dt) {
     // 3. Apply gravity and forces
     applyForces(m_gpuBodies, m_params, m_stream);
 
-    // 4. Build spatial hash (broadphase)
-    buildSpatialHash(
-        m_gpuBodies.positions,
-        m_radiiBuffer.data(), // This should be on GPU, need to upload
-        bodyCount,
-        m_spatialHash,
-        m_stream
-    );
-
-    // 5. Find collision pairs
-    findCollisionPairs(
-        m_gpuBodies.positions,
-        m_radiiBuffer.data(), // This should be on GPU
-        bodyCount,
-        m_spatialHash,
-        m_collisionPairs,
-        m_stream
-    );
-
-    // Get pair count
+    // Skip broad/narrow-phase work when there is at most one body — a single body
+    // cannot collide with itself and the kernels aren't hardened for n < 2
+    // (they crashed with cudaErrorIllegalAddress on the 1-player startup case).
     int pairCount = 0;
-    CUDA_CHECK(cudaMemcpyAsync(&pairCount, m_collisionPairs.count, sizeof(int),
-                               cudaMemcpyDeviceToHost, m_stream));
-    m_stream.synchronize();
-
-    // 6. Narrow-phase collision detection
-    narrowPhaseCollision(
-        m_gpuBodies,
-        m_collisionPairs.pairs,
-        std::min(pairCount, m_collisionPairs.maxPairs),
-        m_gpuContacts,
-        m_gpuContactCount,
-        m_maxContacts,
-        m_stream
-    );
-
-    // Get contact count
     int contactCount = 0;
-    CUDA_CHECK(cudaMemcpyAsync(&contactCount, m_gpuContactCount, sizeof(int),
-                               cudaMemcpyDeviceToHost, m_stream));
-    m_stream.synchronize();
+
+    if (bodyCount >= 2) {
+        // 4. Build spatial hash (broadphase)
+        buildSpatialHash(
+            m_gpuBodies.positions,
+            m_radiiDevice,
+            bodyCount,
+            m_spatialHash,
+            m_stream
+        );
+
+        // 5. Find collision pairs
+        findCollisionPairs(
+            m_gpuBodies.positions,
+            m_radiiDevice,
+            bodyCount,
+            m_spatialHash,
+            m_collisionPairs,
+            m_stream
+        );
+
+        // Get pair count
+        CUDA_CHECK(cudaMemcpyAsync(&pairCount, m_collisionPairs.count, sizeof(int),
+                                   cudaMemcpyDeviceToHost, m_stream));
+        m_stream.synchronize();
+
+        // 6. Narrow-phase collision detection
+        narrowPhaseCollision(
+            m_gpuBodies,
+            m_collisionPairs.pairs,
+            std::min(pairCount, m_collisionPairs.maxPairs),
+            m_gpuContacts,
+            m_gpuContactCount,
+            m_maxContacts,
+            m_stream
+        );
+
+        // Get contact count
+        CUDA_CHECK(cudaMemcpyAsync(&contactCount, m_gpuContactCount, sizeof(int),
+                                   cudaMemcpyDeviceToHost, m_stream));
+        m_stream.synchronize();
+    }
 
     // 7. Integrate velocities
     integrateVelocities(m_gpuBodies, m_params, m_stream);
@@ -360,6 +380,19 @@ void PhysicsWorld::uploadToGpu() {
                                bodyCount * sizeof(float3), cudaMemcpyHostToDevice, m_stream));
     CUDA_CHECK(cudaMemcpyAsync(m_gpuBodies.flags, flags.data(),
                                bodyCount * sizeof(uint32_t), cudaMemcpyHostToDevice, m_stream));
+
+    // Mirror the per-body radii onto the device so broadphase/narrow-phase kernels
+    // receive a real device pointer (std::vector::data() is host memory and crashes
+    // on first access inside a CUDA kernel with cudaErrorIllegalAddress).
+    if (bodyCount > m_radiiDeviceCapacity) {
+        if (m_radiiDevice != nullptr) {
+            cudaFree(m_radiiDevice);
+        }
+        CUDA_CHECK(cudaMalloc(&m_radiiDevice, static_cast<size_t>(bodyCount) * sizeof(float)));
+        m_radiiDeviceCapacity = bodyCount;
+    }
+    CUDA_CHECK(cudaMemcpyAsync(m_radiiDevice, m_radiiBuffer.data(),
+                               bodyCount * sizeof(float), cudaMemcpyHostToDevice, m_stream));
 
     m_needsUpload = false;
 }

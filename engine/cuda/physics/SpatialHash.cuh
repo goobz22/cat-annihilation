@@ -8,6 +8,14 @@ namespace Physics {
 
 /**
  * @brief GPU data structures for spatial hashing
+ *
+ * gridSize and hashTableSize are decoupled:
+ *   gridSize     — power-of-2 wrap for grid coordinates (cell = pos & (gridSize-1))
+ *   hashTableSize — power-of-2 bucket count sized to body population
+ * The previous design used `hashTableSize = gridSize^3`, which overflowed a
+ * uint32 the moment maxBodies crossed a few thousand (gridSize pow2 ≥ maxBodies
+ * gives gridSize^3 in the trillions). The cellStarts/cellEnds allocation then
+ * became a 0-byte buffer and every kernel write fired cudaErrorIllegalAddress.
  */
 struct GpuSpatialHashData {
     // Hash table data
@@ -22,8 +30,9 @@ struct GpuSpatialHashData {
 
     // Grid parameters
     float cellSize;
-    int gridSize;               // Number of cells per dimension
-    uint32_t hashTableSize;     // Total hash table size
+    int gridSize;               // Wrap factor for grid coordinates (power of 2)
+    uint32_t hashTableSize;     // Bucket count (power of 2)
+    uint32_t hashMask;          // hashTableSize - 1 (for fast modulo)
 
     // Number of bodies
     int count;
