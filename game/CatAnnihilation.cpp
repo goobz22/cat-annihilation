@@ -1,13 +1,43 @@
 #include "CatAnnihilation.hpp"
 #include "entities/CatEntity.hpp"
 #include "components/GameComponents.hpp"
+#include "components/EnemyComponent.hpp"
 #include "config/GameplayConfig.hpp"
 #include "../engine/core/Logger.hpp"
 #include "../engine/math/Vector.hpp"
+#include "../engine/math/Matrix.hpp"
+#include "../engine/math/Math.hpp"
 #include "../engine/cuda/particles/ParticleEmitter.hpp"
+#include "../engine/renderer/passes/ScenePass.hpp"
+#include "../engine/rhi/vulkan/VulkanCommandBuffer.hpp"
+#include "world/GameWorld.hpp"
+#include "world/Terrain.hpp"
+#include "ui/WavePopup.hpp"
+
+#include "imgui.h"
+#include <cmath>
 #include <iostream>
 
 namespace CatGame {
+
+namespace {
+
+// Vulkan-convention perspective: RH, depth [0,1], Y flipped via negative
+// element at (1,1) so we can consume Engine::mat4::lookAt (OpenGL RH view)
+// without a viewport Y-flip.
+Engine::mat4 makeVulkanPerspective(float fovyRad, float aspect,
+                                   float nearZ, float farZ) {
+    const float f = 1.0f / std::tan(fovyRad * 0.5f);
+    Engine::mat4 m(0.0f);
+    m[0][0] = f / aspect;
+    m[1][1] = -f;
+    m[2][2] = farZ / (nearZ - farZ);
+    m[2][3] = -1.0f;
+    m[3][2] = (nearZ * farZ) / (nearZ - farZ);
+    return m;
+}
+
+} // namespace
 
 // ============================================================================
 // Constructor / Destructor
@@ -15,10 +45,12 @@ namespace CatGame {
 
 CatAnnihilation::CatAnnihilation(Engine::Input* input,
                                  CatEngine::Renderer::Renderer* renderer,
-                                 CatEngine::AudioEngine* audioEngine)
+                                 CatEngine::AudioEngine* audioEngine,
+                                 Engine::ImGuiLayer* imguiLayer)
     : input_(input)
     , renderer_(renderer)
     , audioEngine_(audioEngine)
+    , imguiLayer_(imguiLayer)
     , playerEntity_(CatEngine::NULL_ENTITY)
 {
     Engine::Logger::info("CatAnnihilation game class created");
@@ -96,6 +128,19 @@ void CatAnnihilation::initializeSystems() {
     enemyAISystem_ = ecs_.createSystem<EnemyAISystem>(25);
     waveSystem_ = ecs_.createSystem<WaveSystem>(30);
 
+    // Tune wave pacing so the first round is actually survivable: fewer
+    // enemies, spawned over a longer window, farther from the player.
+    if (waveSystem_ != nullptr) {
+        WaveConfig waveConfig;
+        waveConfig.baseEnemyCount = 3;
+        waveConfig.enemyCountMultiplier = 2.0f;  // 3 / 5 / 7 / 9 / 11
+        waveConfig.spawnDelay = 1.5f;            // one dog per 1.5 s
+        waveConfig.transitionDelay = 5.0f;       // breathing room between waves
+        waveConfig.minSpawnDistance = 25.0f;
+        waveConfig.spawnRadius = 40.0f;
+        waveSystem_->setConfig(waveConfig);
+    }
+
     Engine::Logger::info("Core gameplay systems created");
 
     // Advanced gameplay systems (standalone)
@@ -134,6 +179,46 @@ void CatAnnihilation::initializeSystems() {
     // Initialize game world
     gameWorld_ = std::make_unique<GameWorld>(*cudaContext_, *physicsWorld_);
     gameWorld_->initialize();
+
+    // Wire player control system to terrain + combat so the cat stays on the
+    // heightfield and left-click actually drives CombatSystem::performAttack.
+    if (playerControlSystem_ != nullptr) {
+        playerControlSystem_->setCombatSystem(combatSystem_);
+        if (gameWorld_ != nullptr) {
+            playerControlSystem_->setTerrain(gameWorld_->getTerrain());
+        }
+    }
+
+    // HealthSystem publishes enemy/player deaths through a plain callback —
+    // wire it here so the score ticks up on dog kills and the state machine
+    // transitions to GameOver when the player's HP reaches zero.
+    if (healthSystem_ != nullptr) {
+        healthSystem_->setOnEntityDeath([this](CatEngine::Entity entity, bool isEnemy) {
+            if (isEnemy) {
+                ++enemiesKilled_;
+                Engine::Logger::info("[kill] Enemy died. Total kills: " +
+                                     std::to_string(enemiesKilled_));
+            } else if (entity == playerEntity_) {
+                Engine::Logger::info("[death] Player died, → GameOver");
+                setState(GameState::GameOver);
+            }
+        });
+    }
+
+    // Run a short campaign — finishing wave 5 flips the state machine to
+    // Victory so the end-screen overlay appears.
+    if (waveSystem_ != nullptr) {
+        waveSystem_->setOnWaveStart([](int wave) {
+            Engine::Logger::info("[wave] Starting wave " + std::to_string(wave));
+        });
+        waveSystem_->setOnWaveComplete([this](int waveNumber) {
+            waveNumber_ = waveNumber;
+            Engine::Logger::info("[wave] Completed wave " + std::to_string(waveNumber));
+            if (waveNumber >= 5 && currentState_ == GameState::Playing) {
+                setState(GameState::Victory);
+            }
+        });
+    }
 
     // Initialize game audio
     gameAudio_ = std::make_unique<Game::GameAudio>(*audioEngine_);
@@ -200,19 +285,33 @@ void CatAnnihilation::initializeUI() {
     pauseMenu_ = std::make_unique<Game::PauseMenu>(*input_, *gameAudio_);
     pauseMenu_->initialize();
 
-    // Setup UI callbacks
-    if (mainMenu_ != nullptr) {
-        mainMenu_->setStartGameCallback([this]() {
+    // Setup UI callbacks. GameUI owns the MainMenu that actually receives input and
+    // is drawn on screen, so wire the callbacks + ImGui layer onto that instance.
+    // mainMenu_ is legacy/duplicate and stays dormant (no render, no callbacks).
+    if (gameUI_ != nullptr) {
+        auto& activeMenu = gameUI_->getMainMenu();
+        activeMenu.setStartGameCallback([this]() {
             startNewGame(false); // Start arcade mode
         });
-
-        mainMenu_->setContinueCallback([this]() {
+        activeMenu.setContinueCallback([this]() {
             continueGame();
         });
-
-        mainMenu_->setQuitCallback([]() {
-            // Handled by main loop
+        activeMenu.setQuitCallback([]() {
+            // Handled by main loop (ESC/quit button closes window)
         });
+        if (imguiLayer_ != nullptr) {
+            activeMenu.setImGuiLayer(imguiLayer_);
+            gameUI_->getHUD().setImGuiLayer(imguiLayer_);
+            gameUI_->getWavePopup().setImGuiLayer(imguiLayer_);
+        }
+    }
+
+    // Also wire the ImGui layer onto the legacy mainMenu_/hud_/pauseMenu_ instances
+    // even though they aren't rendered — keeps the setter symmetric if anything else
+    // decides to render them later.
+    if (imguiLayer_ != nullptr) {
+        if (mainMenu_ != nullptr)  { mainMenu_->setImGuiLayer(imguiLayer_); }
+        if (hud_ != nullptr)       { hud_->setImGuiLayer(imguiLayer_); }
     }
 
     if (pauseMenu_ != nullptr) {
@@ -227,6 +326,10 @@ void CatAnnihilation::initializeUI() {
         pauseMenu_->setQuitCallback([]() {
             // Handled by main loop
         });
+
+        if (imguiLayer_ != nullptr) {
+            pauseMenu_->setImGuiLayer(imguiLayer_);
+        }
     }
 
     Engine::Logger::info("UI systems initialized");
@@ -406,64 +509,30 @@ void CatAnnihilation::update(float dt) {
 }
 
 void CatAnnihilation::updateSystems(float dt) {
-    // 1. Handle input
     handleInput();
 
-    // 2. Day/night cycle
-    if (dayNightSystem_ != nullptr) {
-        dayNightSystem_->update(dt);
-    }
+    if (dayNightSystem_ != nullptr) { dayNightSystem_->update(dt); }
 
-    // 3. Dialog system (can pause other systems)
     if (dialogSystem_ != nullptr && dialogSystem_->isInDialog()) {
         dialogSystem_->update(dt);
-        return; // Don't update other systems during dialog
+        return;
     }
 
-    // 4. NPC updates
-    if (npcSystem_ != nullptr) {
-        npcSystem_->update(dt);
-    }
-
-    // 5. Update all ECS systems (player, combat, enemies, projectiles, health, waves)
+    if (npcSystem_ != nullptr) { npcSystem_->update(dt); }
     ecs_.update(dt);
+    if (questSystem_ != nullptr) { questSystem_->update(dt); }
+    if (storyModeSystem_ != nullptr && isStoryMode_) { storyModeSystem_->update(dt); }
+    if (magicSystem_ != nullptr) { magicSystem_->update(dt); }
+    if (levelingSystem_ != nullptr) { levelingSystem_->update(dt); }
 
-    // 6. Quest progress checks
-    if (questSystem_ != nullptr) {
-        questSystem_->update(dt);
-    }
+    // CUDA physics — re-enabled after the SpatialHash hashTableSize overflow fix
+    // (gridSize^3 was overflowing uint32 to 0, producing 0-byte cellStarts/cellEnds
+    // allocations and cudaErrorIllegalAddress on the first broadphase write).
+    if (physicsWorld_ != nullptr) { physicsWorld_->step(dt); }
 
-    // 7. Story mode progression
-    if (storyModeSystem_ != nullptr && isStoryMode_) {
-        storyModeSystem_->update(dt);
-    }
+    if (particleSystem_ != nullptr) { particleSystem_->update(dt); }
+    if (gameWorld_ != nullptr) { gameWorld_->update(dt); }
 
-    // 8. Magic system
-    if (magicSystem_ != nullptr) {
-        magicSystem_->update(dt);
-    }
-
-    // 9. Leveling/XP
-    if (levelingSystem_ != nullptr) {
-        levelingSystem_->update(dt);
-    }
-
-    // 10. Physics step
-    if (physicsWorld_ != nullptr) {
-        physicsWorld_->step(dt);
-    }
-
-    // 11. Particle updates
-    if (particleSystem_ != nullptr) {
-        particleSystem_->update(dt);
-    }
-
-    // 12. World updates
-    if (gameWorld_ != nullptr) {
-        gameWorld_->update(dt);
-    }
-
-    // Update game time
     gameTime_ += dt;
 }
 
@@ -472,26 +541,43 @@ void CatAnnihilation::updateUI(float dt) {
         gameUI_->update(dt);
     }
 
-    // Update HUD if playing
-    if (currentState_ == GameState::Playing && hud_ != nullptr) {
-        hud_->update(dt);
+    // Update HUD during Playing. The visible HUD lives inside GameUI — the
+    // free-standing `hud_` member is a legacy duplicate that isn't rendered.
+    if (currentState_ == GameState::Playing && gameUI_ != nullptr) {
+        auto& activeHud = gameUI_->getHUD();
 
-        // Update HUD with player stats
         if (ecs_.isAlive(playerEntity_)) {
-            // Get player health component
             auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
             if (healthComp != nullptr) {
-                hud_->setHealth(healthComp->currentHealth, healthComp->maxHealth);
+                activeHud.setHealth(healthComp->currentHealth, healthComp->maxHealth);
             }
 
-            // Update other HUD elements
-            hud_->setWave(waveNumber_);
-            hud_->setScore(enemiesKilled_); // Use score to display enemies killed
+            // Drive wave + remaining-dog display straight from the authoritative
+            // WaveSystem state — the old waveNumber_ member only got bumped on
+            // wave-complete events, so the HUD stayed on "WAVE 0  Dogs 0/0"
+            // for the entire first wave.
+            if (waveSystem_ != nullptr) {
+                const int liveWave = waveSystem_->getCurrentWave();
+                activeHud.setWave(static_cast<uint32_t>(std::max(liveWave, 1)));
+                const int remaining = waveSystem_->getEnemiesRemaining();
+                const int total = waveSystem_->getConfig().baseEnemyCount +
+                    (std::max(liveWave, 1) - 1) *
+                    static_cast<int>(waveSystem_->getConfig().enemyCountMultiplier);
+                activeHud.setEnemyCount(static_cast<uint32_t>(std::max(remaining, 0)),
+                                        static_cast<uint32_t>(std::max(total, 0)));
+            }
+            activeHud.setScore(static_cast<uint32_t>(enemiesKilled_));
         }
     }
 }
 
 void CatAnnihilation::handleInput() {
+    // Route input to the active UI screen (main menu, pause menu, wave popup, etc.)
+    // before anything else so menu nav (Up/Down/Enter, mouse clicks) can register.
+    if (gameUI_ != nullptr) {
+        gameUI_->handleInput();
+    }
+
     // Check for pause
     if (input_->isKeyPressed(Engine::Input::Key::Escape)) {
         if (currentState_ == GameState::Playing) {
@@ -568,6 +654,94 @@ void CatAnnihilation::render() {
         std::cout.flush();
     }
 
+    // ---- 3D scene pass (terrain etc.) -------------------------------------
+    //
+    // Runs first so ImGui/UI composites on top. We drive a slow orbital camera
+    // for the initial revision — there's no player-follow camera component yet.
+    // Terrain is uploaded once, lazily, the first time it's available.
+    if (currentState_ == GameState::Playing) {
+        auto* scenePass = renderer_->GetScenePass();
+        if (scenePass != nullptr && gameWorld_ != nullptr) {
+            if (!terrainUploadedToScenePass_) {
+                const auto* terrain = gameWorld_->getTerrain();
+                if (terrain != nullptr && !terrain->getVertices().empty()) {
+                    scenePass->SetTerrain(*terrain);
+                    terrainUploadedToScenePass_ = true;
+                }
+            }
+
+            // Third-person camera follows the player. PlayerControlSystem's
+            // camera state is driven by mouse-look + cameraFollowSpeed and
+            // already handles rotation + smoothing; we just consume it here.
+            Engine::vec3 camPos;
+            Engine::vec3 camFwd;
+            Engine::vec3 camTarget;
+            bool haveCamera = false;
+            if (playerControlSystem_ != nullptr && ecs_.isAlive(playerEntity_)) {
+                camPos = playerControlSystem_->getCameraPosition();
+                camFwd = playerControlSystem_->getCameraForward();
+                camTarget = camPos + camFwd;
+                haveCamera = true;
+            }
+            // Fallback: static overview if the player isn't alive yet
+            if (!haveCamera) {
+                camPos = Engine::vec3(0.0F, 120.0F, 260.0F);
+                camTarget = Engine::vec3(0.0F, 20.0F, 0.0F);
+            }
+
+            const float aspect = (screenHeight > 0)
+                ? static_cast<float>(screenWidth) / static_cast<float>(screenHeight)
+                : 1.0f;
+            Engine::mat4 view = Engine::mat4::lookAt(camPos, camTarget,
+                                                     Engine::vec3(0.0F, 1.0F, 0.0F));
+            Engine::mat4 proj = makeVulkanPerspective(
+                60.0f * Engine::Math::DEG_TO_RAD, aspect, 0.1f, 2000.0f);
+            Engine::mat4 viewProj = proj * view;
+
+            // Build entity draw list — cat (green tall box) + dogs (red cubes
+            // sized by EnemyType). Walks the ECS each frame; trivial at wave
+            // populations (< 100 enemies typical).
+            std::vector<CatEngine::Renderer::ScenePass::EntityDraw> entityDraws;
+            entityDraws.reserve(64);
+            if (ecs_.isAlive(playerEntity_)) {
+                auto* t = ecs_.getComponent<Engine::Transform>(playerEntity_);
+                if (t != nullptr) {
+                    CatEngine::Renderer::ScenePass::EntityDraw d;
+                    d.position = t->position + Engine::vec3(0.0F, 0.75F, 0.0F);
+                    d.halfExtents = Engine::vec3(0.5F, 0.75F, 0.9F);
+                    d.color = Engine::vec3(0.45F, 0.85F, 0.35F); // green cat
+                    entityDraws.push_back(d);
+                }
+            }
+            ecs_.forEach<EnemyComponent, Engine::Transform>(
+                [&](CatEngine::Entity /*e*/, EnemyComponent* enemy, Engine::Transform* t) {
+                    if (t == nullptr || enemy == nullptr) return;
+                    CatEngine::Renderer::ScenePass::EntityDraw d;
+                    float sz = 0.6F;
+                    Engine::vec3 tint(0.85F, 0.22F, 0.22F); // default dog red
+                    switch (enemy->type) {
+                        case EnemyType::BigDog:   sz = 0.95F; tint = Engine::vec3(0.8F, 0.15F, 0.15F); break;
+                        case EnemyType::FastDog:  sz = 0.45F; tint = Engine::vec3(1.0F, 0.55F, 0.15F); break;
+                        case EnemyType::BossDog:  sz = 1.4F;  tint = Engine::vec3(0.65F, 0.05F, 0.65F); break;
+                        case EnemyType::Dog:
+                        default: break;
+                    }
+                    d.position = t->position + Engine::vec3(0.0F, sz, 0.0F);
+                    d.halfExtents = Engine::vec3(sz, sz, sz * 1.2F);
+                    d.color = tint;
+                    entityDraws.push_back(d);
+                });
+
+            auto* sceneCmdBuffer = renderer_->GetCommandBuffer();
+            if (sceneCmdBuffer != nullptr) {
+                auto* vkCmd = static_cast<CatEngine::RHI::VulkanCommandBuffer*>(
+                    sceneCmdBuffer)->GetHandle();
+                uint32_t imageIndex = renderer_->GetCurrentSwapchainImageIndex();
+                scenePass->Execute(vkCmd, imageIndex, viewProj, entityDraws);
+            }
+        }
+    }
+
     // Begin UI frame - MUST be called before any DrawQuad/DrawText calls
     uiPass->BeginFrame();
 
@@ -589,17 +763,13 @@ void CatAnnihilation::render() {
         hud_->render(*uiPass, screenWidth, screenHeight);
     }
 
-    // Render menu
-    if (mainMenu_ != nullptr && currentState_ == GameState::MainMenu) {
-        if (renderCallCount <= 5) {
-            std::cout << "[CatAnnihilation::render] rendering mainMenu_... state=" << static_cast<int>(currentState_) << "\n";
-            std::cout.flush();
-        }
-        mainMenu_->render(*uiPass, screenWidth, screenHeight);
-        if (renderCallCount <= 5) {
-            std::cout << "[CatAnnihilation::render] mainMenu_->render() DONE\n";
-            std::cout.flush();
-        }
+    // MainMenu is rendered by gameUI_ above; the mainMenu_ member is legacy/unused.
+
+    // Game Over / Victory overlay — emitted here as ImGui widgets so the
+    // UIPass composite step picks them up in the same render pass.
+    if (imguiLayer_ != nullptr &&
+        (currentState_ == GameState::GameOver || currentState_ == GameState::Victory)) {
+        renderEndScreenOverlay(screenWidth, screenHeight);
     }
 
     // Render pause menu
@@ -738,6 +908,18 @@ void CatAnnihilation::setState(GameState newState) {
     // Enter new state
     onStateEnter(newState);
 
+    // Keep GameUI's state machine in sync — without this, the menu keeps rendering
+    // after we transition to Playing (and the HUD never appears).
+    if (gameUI_ != nullptr) {
+        switch (newState) {
+            case GameState::MainMenu:  gameUI_->setGameState(Game::GameState::MainMenu);  break;
+            case GameState::Playing:   gameUI_->setGameState(Game::GameState::Playing);   break;
+            case GameState::Paused:    gameUI_->setGameState(Game::GameState::Paused);    break;
+            case GameState::GameOver:  gameUI_->setGameState(Game::GameState::GameOver);  break;
+            case GameState::Victory:   gameUI_->setGameState(Game::GameState::Victory);   break;
+        }
+    }
+
     Engine::Logger::info("Game state changed to: " + std::to_string(static_cast<int>(newState)));
 }
 
@@ -767,6 +949,13 @@ void CatAnnihilation::onStateEnter(GameState state) {
             // Enable player controls
             if (playerControlSystem_ != nullptr) {
                 playerControlSystem_->setControlEnabled(true);
+            }
+
+            // Kick off the wave loop once, on first entry into Playing.
+            // WaveSystem::startWaves guards itself with a `wavesStarted_` flag,
+            // so subsequent pause/resume cycles don't restart from wave 1.
+            if (waveSystem_ != nullptr) {
+                waveSystem_->startWaves();
             }
 
             // Start gameplay music
@@ -1099,13 +1288,38 @@ bool CatAnnihilation::loadGame(int slotIndex) {
 // ============================================================================
 
 void CatAnnihilation::createPlayer() {
-    // Create player cat entity at spawn position
+    // Spawn on top of the terrain at the world origin. Without the terrain
+    // height lookup the player lands at y=0 — which can be beneath the
+    // generated heightfield — and ends up clipped inside the world.
     Engine::vec3 spawnPosition(0.0F, 0.0F, 0.0F);
-    playerEntity_ = CatEntity::create(ecs_, spawnPosition);
+    if (gameWorld_ != nullptr) {
+        const auto* terrain = gameWorld_->getTerrain();
+        if (terrain != nullptr) {
+            spawnPosition.y = terrain->getHeightAt(0.0F, 0.0F);
+        }
+    }
+    // Beefy survival-game stats: enough HP + damage to realistically clear
+    // five waves on the first attempt, still tense because dog counts scale
+    // (wave 5 = 11 dogs). Fast-swing sword (attackSpeed 3 -> cooldown 0.33s).
+    playerEntity_ = CatEntity::createCustom(ecs_, spawnPosition,
+                                            /*maxHealth*/ 400.0f,
+                                            /*moveSpeed*/ 12.0f,
+                                            /*attackDamage*/ 60.0f);
+    if (auto* combat = ecs_.getComponent<CombatComponent>(playerEntity_)) {
+        combat->attackSpeed = 3.0f;       // 0.33 s cooldown
+        combat->attackRange = 4.0f;       // a touch wider than default
+    }
 
     // Set player entity in control system
     if (playerControlSystem_ != nullptr) {
         playerControlSystem_->setPlayerEntity(playerEntity_);
+    }
+
+    // Wave system spawns enemies around the player; it early-returns on an
+    // invalid playerEntity_, so it has to be told about the player before any
+    // wave starts.
+    if (waveSystem_ != nullptr) {
+        waveSystem_->setPlayer(playerEntity_);
     }
 
     Engine::Logger::info("Player entity created");
@@ -1251,6 +1465,73 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
 
     // Spawn death particles at entity position
     spawnDeathParticles(deathPosition);
+}
+
+void CatAnnihilation::renderEndScreenOverlay(uint32_t screenWidth, uint32_t screenHeight) {
+    if (imguiLayer_ == nullptr) return;
+
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
+    const bool victory = (currentState_ == GameState::Victory);
+
+    // Full-screen dim overlay + centered title/subtitle
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.70F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings;
+
+    ImGui::Begin("##EndScreenOverlay", nullptr, kFlags);
+
+    if (auto* titleFont = imguiLayer_->GetTitleFont()) {
+        ImGui::PushFont(titleFont);
+    }
+    const char* title = victory ? "VICTORY" : "YOU DIED";
+    const ImVec2 titleSize = ImGui::CalcTextSize(title);
+    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, height * 0.30F));
+    const ImVec4 titleColor = victory
+        ? ImVec4(0.95F, 0.88F, 0.30F, 1.0F)
+        : ImVec4(0.90F, 0.15F, 0.15F, 1.0F);
+    ImGui::TextColored(titleColor, "%s", title);
+    if (imguiLayer_->GetTitleFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    if (auto* boldFont = imguiLayer_->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    char summary[128];
+    std::snprintf(summary, sizeof(summary),
+                  "Wave %d   Enemies killed %d",
+                  waveSystem_ != nullptr ? waveSystem_->getCurrentWave() : 0,
+                  enemiesKilled_);
+    const ImVec2 summarySize = ImGui::CalcTextSize(summary);
+    ImGui::SetCursorPos(ImVec2((width - summarySize.x) * 0.5F, height * 0.30F + titleSize.y + 28.0F));
+    ImGui::TextColored(ImVec4(1.0F, 1.0F, 1.0F, 0.92F), "%s", summary);
+    if (imguiLayer_->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    if (auto* regularFont = imguiLayer_->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const char* prompt = "Press R or Enter to restart   \u2022   Esc for main menu";
+    const ImVec2 promptSize = ImGui::CalcTextSize(prompt);
+    ImGui::SetCursorPos(ImVec2((width - promptSize.x) * 0.5F, height * 0.55F));
+    ImGui::TextColored(ImVec4(0.85F, 0.85F, 0.90F, 0.85F), "%s", prompt);
+    if (imguiLayer_->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 void CatAnnihilation::onWaveComplete(const WaveCompleteEvent& event) {

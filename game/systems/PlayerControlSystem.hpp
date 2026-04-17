@@ -8,6 +8,9 @@
 
 namespace CatGame {
 
+class Terrain;
+
+
 /**
  * PlayerControlSystem - Handles player input and controls
  *
@@ -107,6 +110,12 @@ public:
      */
     void setCombatSystem(class CombatSystem* combatSystem);
 
+    /**
+     * Set terrain reference so the player stays on the heightfield instead of
+     * clipping against the old hard-coded y=0 ground plane.
+     */
+    void setTerrain(const Terrain* terrain) { terrain_ = terrain; }
+
 private:
     // Input processing
     void processMovementInput(float dt);
@@ -136,6 +145,7 @@ private:
     CatEngine::Entity playerEntity_;
     bool controlEnabled_ = true;
     class CombatSystem* combatSystem_ = nullptr;
+    const Terrain* terrain_ = nullptr;
 
     // Camera parameters
     Engine::vec3 cameraOffset_ = Engine::vec3(0.0f, 5.0f, 10.0f);  // Default third-person offset

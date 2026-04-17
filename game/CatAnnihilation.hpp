@@ -5,6 +5,7 @@
 #include "../engine/core/Input.hpp"
 #include "../engine/renderer/Renderer.hpp"
 #include "../engine/audio/AudioEngine.hpp"
+#include "../engine/ui/ImGuiLayer.hpp"
 #include "../engine/cuda/physics/PhysicsWorld.hpp"
 #include "../engine/cuda/particles/ParticleSystem.hpp"
 #include "systems/PlayerControlSystem.hpp"
@@ -84,7 +85,8 @@ public:
      */
     explicit CatAnnihilation(Engine::Input* input,
                             CatEngine::Renderer::Renderer* renderer,
-                            CatEngine::AudioEngine* audioEngine);
+                            CatEngine::AudioEngine* audioEngine,
+                            Engine::ImGuiLayer* imguiLayer);
 
     /**
      * Destructor
@@ -339,6 +341,9 @@ private:
     void onEntityDeath(const EntityDeathEvent& event);
     void onWaveComplete(const WaveCompleteEvent& event);
 
+    // Draw the GameOver / Victory overlay via ImGui (composited by UIPass).
+    void renderEndScreenOverlay(uint32_t screenWidth, uint32_t screenHeight);
+
     // ========================================================================
     // Core Systems
     // ========================================================================
@@ -347,6 +352,7 @@ private:
     Engine::Input* input_;
     CatEngine::Renderer::Renderer* renderer_;
     CatEngine::AudioEngine* audioEngine_;
+    Engine::ImGuiLayer* imguiLayer_ = nullptr;
     GameEventBus eventBus_;
 
     // CUDA context (shared between physics and particles)
@@ -420,6 +426,9 @@ private:
 
     // Initialization flag
     bool initialized_ = false;
+
+    // Has the terrain mesh been handed to the ScenePass yet?
+    bool terrainUploadedToScenePass_ = false;
 };
 
 } // namespace CatGame

@@ -1,8 +1,10 @@
 #include "PlayerControlSystem.hpp"
 #include "CombatSystem.hpp"
 #include "../components/GameComponents.hpp"
+#include "../world/Terrain.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/math/Math.hpp"
+#include "../../engine/core/Logger.hpp"
 #include <cmath>
 
 namespace CatGame {
@@ -141,10 +143,15 @@ void PlayerControlSystem::processMovementInput(float dt) {
     // Update position based on velocity
     transform->position += movement->velocity * dt;
 
-    // Simple ground collision (assume ground at y = 0)
-    if (transform->position.y <= 0.0f && movement->velocity.y < 0.0f) {
-        transform->position.y = 0.0f;
-        movement->land(0.0f);
+    // Ground collision — follow the terrain heightfield when one is wired,
+    // otherwise fall back to the y=0 plane so standalone tests still work.
+    float groundY = 0.0f;
+    if (terrain_ != nullptr) {
+        groundY = terrain_->getHeightAt(transform->position.x, transform->position.z);
+    }
+    if (transform->position.y <= groundY && movement->velocity.y <= 0.0f) {
+        transform->position.y = groundY;
+        movement->land(groundY);
     }
 
     // Update health component invincibility
@@ -214,14 +221,9 @@ void PlayerControlSystem::processAttackInput() {
                      input_->isKeyDown(Engine::Input::Key::RightShift);
 
     if (attackInput) {
-        // Start attack
-        if (combat->startAttack()) {
-            // Track combo if combat system is available
-            if (combatSystem_) {
-                // Heavy attack if shift is held
-                std::string attackType = shiftHeld ? "H" : "L";
-                combatSystem_->performAttack(playerEntity_, attackType);
-            }
+        if (combat->startAttack() && combatSystem_ != nullptr) {
+            std::string attackType = shiftHeld ? "H" : "L";
+            combatSystem_->performAttack(playerEntity_, attackType);
         }
     }
 }

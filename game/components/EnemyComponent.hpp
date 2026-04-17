@@ -34,11 +34,12 @@ struct EnemyComponent {
     // Target tracking
     CatEngine::Entity target;
 
-    // Behavior parameters
-    float aggroRange = 15.0f;      // Detection range
+    // Behavior parameters — aggroRange is generous so dogs always close on the
+    // player in this arena-survival build regardless of WaveSystem spawn radius.
+    float aggroRange = 80.0f;      // Detection range
     float attackRange = 2.0f;       // Range to start attacking
     float attackDamage = 10.0f;     // Damage per attack
-    float attackCooldown = 1.0f;    // Seconds between attacks
+    float attackCooldown = 1.2f;    // Seconds between attacks
     float attackCooldownTimer = 0.0f;
 
     // State timing
