@@ -1,41 +1,55 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
+# Build directories
+/build/
 /out/
+/cmake-build-*/
 
-# production
-/build
+# IDE and editor files
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+.idea/
 
-# misc
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.o
+*.obj
+
+# SPIR-V compiled shaders (regenerated from source)
+*.spv
+
+# Third-party libraries (downloaded separately)
+/third_party/glfw*/
+/third_party/glm/
+/third_party/nlohmann/
+/third_party/openal-soft*/
+/third_party/stb/
+/third_party/imgui/
+/third_party/vulkan/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS files
 .DS_Store
-*.pem
+Thumbs.db
+nul
 
-# debug
+# Logs
+*.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Asset intermediates
+/assets/shaders/
+
+# Legacy Node.js files (if any remain)
+/node_modules/
+/.next/
 .env*
-
-# vercel
-.vercel
-
-# typescript
 *.tsbuildinfo
-next-env.d.ts
