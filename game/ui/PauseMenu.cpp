@@ -1,6 +1,9 @@
 #include "PauseMenu.hpp"
 #include "../audio/GameAudio.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/ui/ImGuiLayer.hpp"
+
+#include "imgui.h"
 
 namespace Game {
 
@@ -122,25 +125,146 @@ void PauseMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
     m_screenWidth = screenWidth;
     m_screenHeight = screenHeight;
 
-    // Update button positions based on screen size
-    float centerX = static_cast<float>(screenWidth) / 2.0F;
-    float buttonWidth = 250.0F;
-    float buttonHeight = 50.0F;
-    float startY = static_cast<float>(screenHeight) * 0.35F;
+    (void)uiPass; // legacy helpers below are unreachable; unused in the ImGui path
 
-    for (size_t i = 0; i < m_buttons.size(); ++i) {
-        m_buttons[i].position[0] = centerX - (buttonWidth / 2.0F);
-        m_buttons[i].position[1] = startY + (static_cast<float>(i) * 60.0F);
-        m_buttons[i].size[0] = buttonWidth;
-        m_buttons[i].size[1] = buttonHeight;
+    // Require the ImGui layer — the legacy UIPass path is dead now (same as MainMenu).
+    if (m_imguiLayer == nullptr) {
+        return;
     }
 
-    renderBackground(uiPass);
-    renderTitle(uiPass);
-    renderButtons(uiPass);
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
 
+    // ------------------------------------------------------------- Dim overlay
+    // Full-screen transparent window that darkens the 3D scene behind.
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.55F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+
+    constexpr ImGuiWindowFlags kOverlayFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings;
+
+    ImGui::Begin("##PauseMenuOverlay", nullptr, kOverlayFlags);
+
+    // --------------------------------------------------------------- Title
+    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+        ImGui::PushFont(titleFont);
+    }
+    const char* titleText = "PAUSED";
+    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
+    const float titleY = height * 0.22F;
+    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+    ImGui::TextColored(ImVec4(1.00F, 0.92F, 0.55F, 1.00F), "%s", titleText);
+    if (m_imguiLayer->GetTitleFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // -------------------------------------------------------------- Buttons
+    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    constexpr float buttonWidth = 340.0F;
+    constexpr float buttonHeight = 56.0F;
+    constexpr float buttonSpacing = 14.0F;
+    float cursorY = height * 0.36F;
+    const float buttonX = (width - buttonWidth) * 0.5F;
+
+    const bool confirmBlocking = m_confirmationActive;
+    ImGui::BeginDisabled(confirmBlocking);
+
+    for (size_t i = 0; i < m_buttons.size(); ++i) {
+        auto& button = m_buttons[i];
+        button.position[0] = buttonX;
+        button.position[1] = cursorY;
+        button.size[0] = buttonWidth;
+        button.size[1] = buttonHeight;
+
+        ImGui::SetCursorPos(ImVec2(buttonX, cursorY));
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::BeginDisabled(!button.enabled);
+        if (ImGui::Button(button.text.c_str(), ImVec2(buttonWidth, buttonHeight))) {
+            m_audio.playMenuClick();
+            if (button.callback) {
+                button.callback();
+            }
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::EndDisabled();
+        ImGui::PopID();
+
+        button.hovered = hovered;
+        if (hovered) {
+            m_hoveredButtonIndex = static_cast<int32_t>(i);
+        }
+        cursorY += buttonHeight + buttonSpacing;
+    }
+
+    ImGui::EndDisabled();
+
+    if (m_imguiLayer->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    // ----------------------------------------------------- Confirmation modal
     if (m_confirmationActive) {
-        renderConfirmationDialog(uiPass);
+        constexpr float dlgWidth = 460.0F;
+        constexpr float dlgHeight = 170.0F;
+        ImGui::SetNextWindowPos(
+            ImVec2((width - dlgWidth) * 0.5F, (height - dlgHeight) * 0.5F));
+        ImGui::SetNextWindowSize(ImVec2(dlgWidth, dlgHeight));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14F, 0.14F, 0.20F, 0.98F));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0F);
+
+        constexpr ImGuiWindowFlags kDlgFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+
+        ImGui::Begin("##PauseConfirmDialog", nullptr, kDlgFlags);
+
+        if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+            ImGui::PushFont(boldFont);
+        }
+        const ImVec2 msgSize = ImGui::CalcTextSize(m_confirmationMessage.c_str());
+        ImGui::SetCursorPos(ImVec2((dlgWidth - msgSize.x) * 0.5F, 24.0F));
+        ImGui::TextUnformatted(m_confirmationMessage.c_str());
+        if (m_imguiLayer->GetBoldFont() != nullptr) {
+            ImGui::PopFont();
+        }
+
+        constexpr float btnW = 130.0F;
+        constexpr float btnH = 44.0F;
+        constexpr float btnGap = 24.0F;
+        const float btnsY = dlgHeight - btnH - 22.0F;
+        const float btnsTotal = btnW * 2.0F + btnGap;
+        const float btnsX = (dlgWidth - btnsTotal) * 0.5F;
+
+        ImGui::SetCursorPos(ImVec2(btnsX, btnsY));
+        if (ImGui::Button("Yes (Y)", ImVec2(btnW, btnH))) {
+            m_audio.playMenuClick();
+            if (m_confirmationCallback) {
+                m_confirmationCallback();
+            }
+            hideConfirmation();
+        }
+        ImGui::SetCursorPos(ImVec2(btnsX + btnW + btnGap, btnsY));
+        if (ImGui::Button("No (N)", ImVec2(btnW, btnH))) {
+            m_audio.playMenuClick();
+            hideConfirmation();
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
     }
 }
 

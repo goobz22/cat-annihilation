@@ -8,6 +8,8 @@
 #include <string>
 #include <array>
 
+namespace Engine { class ImGuiLayer; }
+
 namespace Game {
 
 class GameAudio;
@@ -105,6 +107,11 @@ public:
      */
     void setVersionString(const std::string& version) { m_versionString = version; }
 
+    /**
+     * @brief Attach the ImGui layer (used for fonts). Optional.
+     */
+    void setImGuiLayer(Engine::ImGuiLayer* imguiLayer) { m_imguiLayer = imguiLayer; }
+
 private:
     /**
      * @brief Menu button structure
@@ -175,6 +182,9 @@ private:
     uint32_t m_screenHeight = 1080;
 
     bool m_initialized = false;
+
+    // Optional ImGui layer (not owned). When set, render() builds widgets via ImGui.
+    Engine::ImGuiLayer* m_imguiLayer = nullptr;
 };
 
 } // namespace Game

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <string>
 
+namespace Engine { class ImGuiLayer; }
+
 namespace Game {
 
 class GameAudio;
@@ -133,6 +135,11 @@ public:
      * @param fps Current frames per second
      */
     void setFPS(float fps);
+
+    /**
+     * @brief Attach the ImGui layer (used for fonts and widget rendering). Optional.
+     */
+    void setImGuiLayer(Engine::ImGuiLayer* imguiLayer) { m_imguiLayer = imguiLayer; }
 
     // ========================================================================
     // Notification System
@@ -299,6 +306,9 @@ private:
     static std::array<float, 4> getNotificationColor(NotificationType type);
 
     bool m_initialized = false;
+
+    // Optional ImGui layer (not owned). When set, render() emits ImGui widgets.
+    Engine::ImGuiLayer* m_imguiLayer = nullptr;
 };
 
 } // namespace Game

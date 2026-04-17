@@ -1,8 +1,13 @@
 #include "HUD.hpp"
 #include "../audio/GameAudio.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/ui/ImGuiLayer.hpp"
+
+#include "imgui.h"
+
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 
 namespace Game {
 
@@ -79,39 +84,188 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
         return;
     }
 
-    // Cache screen dimensions
     m_screenWidth = screenWidth;
     m_screenHeight = screenHeight;
 
-    // Render low health warning first (background layer)
-    if (m_lowHealthWarning) {
-        renderLowHealthWarning(uiPass);
+    // All HUD rendering goes through Dear ImGui now — proper fonts, drawlist
+    // primitives, and immediate-mode layout. UIPass quads aren't used.
+    (void)uiPass;
+    if (m_imguiLayer == nullptr) {
+        return;
     }
 
-    // Render damage indicators
-    renderDamageIndicators(uiPass);
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
+    const float healthRatio = (m_maxHealth > 0.0F)
+        ? std::clamp(m_currentHealth / m_maxHealth, 0.0F, 1.0F)
+        : 0.0F;
 
-    // Render main HUD elements
-    renderHealthBar(uiPass);
-    renderWaveCounter(uiPass);
-    renderEnemyCounter(uiPass);
-    renderScore(uiPass);
+    ImFont* regular = m_imguiLayer->GetRegularFont();
+    ImFont* bold = m_imguiLayer->GetBoldFont();
 
-    // Render crosshair (center of screen)
+    // Full-screen transparent overlay for the HUD so we can place widgets anywhere.
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
+
+    constexpr ImGuiWindowFlags kOverlayFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs;
+
+    ImGui::Begin("##HUDOverlay", nullptr, kOverlayFlags);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+
+    // -------------------------------------------------- Health bar (bottom-left).
+    // Keep well clear of the Windows taskbar in windowed mode — the client area can
+    // be ~40px shorter than the reported screenHeight.
+    {
+        const float barWidth = 360.0F;
+        const float barHeight = 32.0F;
+        const float x = 32.0F;
+        const float y = height - barHeight - 120.0F;
+        const ImU32 bgColor = IM_COL32(20, 20, 30, 200);
+        const ImU32 fillColor = (healthRatio < 0.3F)
+            ? IM_COL32(230, 60, 50, 230)
+            : IM_COL32(60, 200, 90, 230);
+        const ImU32 borderColor = IM_COL32(255, 255, 255, 160);
+
+        draw->AddRectFilled(ImVec2(x, y), ImVec2(x + barWidth, y + barHeight), bgColor, 6.0F);
+        draw->AddRectFilled(ImVec2(x, y), ImVec2(x + barWidth * healthRatio, y + barHeight), fillColor, 6.0F);
+        draw->AddRect(ImVec2(x, y), ImVec2(x + barWidth, y + barHeight), borderColor, 6.0F, 0, 2.0F);
+
+        if (regular != nullptr) {
+            ImGui::PushFont(regular);
+        }
+        char label[64];
+        std::snprintf(label, sizeof(label), "HP  %d / %d",
+                      static_cast<int>(m_currentHealth), static_cast<int>(m_maxHealth));
+        const ImVec2 labelSize = ImGui::CalcTextSize(label);
+        draw->AddText(ImVec2(x + (barWidth - labelSize.x) * 0.5F, y + (barHeight - labelSize.y) * 0.5F),
+                      IM_COL32(255, 255, 255, 240), label);
+        if (regular != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    // ---------------------------------------------- Wave / enemies (top-center)
+    {
+        if (bold != nullptr) {
+            ImGui::PushFont(bold);
+        }
+        char waveText[64];
+        std::snprintf(waveText, sizeof(waveText), "WAVE  %u", m_currentWave);
+        const ImVec2 waveSize = ImGui::CalcTextSize(waveText);
+        draw->AddText(ImVec2((width - waveSize.x) * 0.5F, 20.0F),
+                      IM_COL32(255, 220, 80, 255), waveText);
+        if (bold != nullptr) {
+            ImGui::PopFont();
+        }
+
+        if (regular != nullptr) {
+            ImGui::PushFont(regular);
+        }
+        char enemyText[64];
+        std::snprintf(enemyText, sizeof(enemyText), "Dogs remaining: %u / %u",
+                      m_remainingEnemies, m_totalEnemies);
+        const ImVec2 enemySize = ImGui::CalcTextSize(enemyText);
+        draw->AddText(ImVec2((width - enemySize.x) * 0.5F, 20.0F + waveSize.y + 4.0F),
+                      IM_COL32(220, 220, 230, 220), enemyText);
+        if (regular != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    // ------------------------------------------------------- Score (top-right)
+    {
+        if (bold != nullptr) {
+            ImGui::PushFont(bold);
+        }
+        char scoreText[64];
+        std::snprintf(scoreText, sizeof(scoreText), "SCORE  %u", m_score);
+        const ImVec2 scoreSize = ImGui::CalcTextSize(scoreText);
+        draw->AddText(ImVec2(width - scoreSize.x - 24.0F, 20.0F),
+                      IM_COL32(255, 255, 255, 240), scoreText);
+        if (bold != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    // ----------------------------------------------------- Combo under score
+    if (m_combo > 1) {
+        if (regular != nullptr) {
+            ImGui::PushFont(regular);
+        }
+        char comboText[48];
+        std::snprintf(comboText, sizeof(comboText), "Combo x%u", m_combo);
+        const ImVec2 comboSize = ImGui::CalcTextSize(comboText);
+        draw->AddText(ImVec2(width - comboSize.x - 24.0F, 60.0F),
+                      IM_COL32(255, 180, 40, 230), comboText);
+        if (regular != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    // -------------------------------------------------------- Crosshair (center)
     if (m_showCrosshair) {
-        renderCrosshair(uiPass);
+        const float cx = width * 0.5F;
+        const float cy = height * 0.5F;
+        const ImU32 crossColor = IM_COL32(255, 255, 255, 180);
+        draw->AddLine(ImVec2(cx - 10.0F, cy), ImVec2(cx - 3.0F, cy), crossColor, 2.0F);
+        draw->AddLine(ImVec2(cx + 3.0F, cy), ImVec2(cx + 10.0F, cy), crossColor, 2.0F);
+        draw->AddLine(ImVec2(cx, cy - 10.0F), ImVec2(cx, cy - 3.0F), crossColor, 2.0F);
+        draw->AddLine(ImVec2(cx, cy + 3.0F), ImVec2(cx, cy + 10.0F), crossColor, 2.0F);
     }
 
-    // Render damage numbers
-    renderDamageNumbers(uiPass);
-
-    // Render FPS counter (if enabled)
+    // --------------------------------------------------- FPS counter (top-left)
     if (m_showFPS) {
-        renderFPS(uiPass);
+        if (regular != nullptr) {
+            ImGui::PushFont(regular);
+        }
+        char fpsText[32];
+        std::snprintf(fpsText, sizeof(fpsText), "%.0f FPS", m_fps);
+        draw->AddText(ImVec2(16.0F, 16.0F), IM_COL32(180, 180, 200, 220), fpsText);
+        if (regular != nullptr) {
+            ImGui::PopFont();
+        }
     }
 
-    // Render notifications
-    renderNotifications(uiPass);
+    // ------------------------------------- Low-health vignette (pulses red)
+    if (m_lowHealthWarning) {
+        const float pulse = (std::sin(m_lowHealthPulse * 6.0F) * 0.5F) + 0.5F;
+        const ImU32 vignette = IM_COL32(180, 30, 30, static_cast<int>(60 + pulse * 80));
+        draw->AddRect(ImVec2(0.0F, 0.0F), ImVec2(width, height), vignette, 0.0F, 0, 40.0F);
+    }
+
+    // --------------------------------------- Notifications (top-left column)
+    {
+        if (regular != nullptr) {
+            ImGui::PushFont(regular);
+        }
+        float notifY = 80.0F;
+        for (const auto& notification : m_notifications) {
+            const float fade = std::clamp(1.0F - (notification.elapsed / notification.duration), 0.0F, 1.0F);
+            const auto baseColor = getNotificationColor(notification.type);
+            const ImU32 color = IM_COL32(
+                static_cast<int>(baseColor[0] * 255.0F),
+                static_cast<int>(baseColor[1] * 255.0F),
+                static_cast<int>(baseColor[2] * 255.0F),
+                static_cast<int>(baseColor[3] * 255.0F * fade));
+            draw->AddText(ImVec2(24.0F, notifY), color, notification.message.c_str());
+            notifY += 26.0F;
+        }
+        if (regular != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
 }
 
 // ============================================================================

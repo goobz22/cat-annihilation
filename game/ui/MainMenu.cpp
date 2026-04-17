@@ -1,6 +1,10 @@
 #include "MainMenu.hpp"
 #include "../audio/GameAudio.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/ui/ImGuiLayer.hpp"
+
+#include "imgui.h"
+
 #include <cmath>
 #include <iostream>
 
@@ -114,28 +118,119 @@ void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth,
         return;
     }
 
-    // Cache screen dimensions
     m_screenWidth = screenWidth;
     m_screenHeight = screenHeight;
 
-    // Update button positions based on screen size
-    float centerX = static_cast<float>(screenWidth) / 2.0F;
-    float buttonStartY = (static_cast<float>(screenHeight) / 2.0F) - 40.0F;
-    float buttonWidth = 250.0F;
-    float buttonHeight = 50.0F;
-    float buttonSpacing = 60.0F;
+    // Keep the atmospheric background (gradient + animated stars) as UIPass quads —
+    // those render fine and don't involve the old bitmap-font path.
+    renderBackground(uiPass);
 
-    for (size_t i = 0; i < m_buttons.size(); ++i) {
-        m_buttons[i].position[0] = centerX - buttonWidth / 2.0F;
-        m_buttons[i].position[1] = buttonStartY + static_cast<float>(i) * buttonSpacing;
-        m_buttons[i].size[0] = buttonWidth;
-        m_buttons[i].size[1] = buttonHeight;
+    // Everything else (title, buttons, version) is now built with Dear ImGui so we
+    // get real typography, keyboard nav, and hover/focus states for free.
+    if (m_imguiLayer == nullptr) {
+        return;
     }
 
-    renderBackground(uiPass);
-    renderTitle(uiPass);
-    renderButtons(uiPass);
-    renderVersion(uiPass);
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
+
+    // Full-screen transparent window that hosts the title + buttons.
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+
+    constexpr ImGuiWindowFlags kOverlayFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBackground;
+
+    ImGui::Begin("##MainMenuOverlay", nullptr, kOverlayFlags);
+
+    // ------------------------------------------------------------------ Title
+    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+        ImGui::PushFont(titleFont);
+    }
+    const char* titleText = "CAT ANNIHILATION";
+    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
+    const float titleY = height * 0.18F;
+    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
+    if (m_imguiLayer->GetTitleFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // --------------------------------------------------------------- Subtitle
+    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const char* subtitleText = "Survive the Waves";
+    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
+    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
+    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
+    if (m_imguiLayer->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // ----------------------------------------------------------------- Buttons
+    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    const float buttonWidth = 360.0F;
+    const float buttonHeight = 60.0F;
+    const float buttonSpacing = 16.0F;
+    const float totalButtonsHeight = (buttonHeight + buttonSpacing) * static_cast<float>(m_buttons.size()) - buttonSpacing;
+    float cursorY = height * 0.48F;
+    const float buttonX = (width - buttonWidth) * 0.5F;
+
+    for (size_t i = 0; i < m_buttons.size(); ++i) {
+        auto& button = m_buttons[i];
+        ImGui::SetCursorPos(ImVec2(buttonX, cursorY));
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::BeginDisabled(!button.enabled);
+        if (ImGui::Button(button.text.c_str(), ImVec2(buttonWidth, buttonHeight))) {
+            m_audio.playMenuClick();
+            if (button.callback) {
+                button.callback();
+            }
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::EndDisabled();
+        ImGui::PopID();
+
+        button.hovered = hovered;
+        if (hovered) {
+            m_hoveredButtonIndex = static_cast<int32_t>(i);
+        }
+        cursorY += buttonHeight + buttonSpacing;
+    }
+    // Suppress unused-variable warning while also documenting layout intent.
+    (void)totalButtonsHeight;
+    if (m_imguiLayer->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // ----------------------------------------------------------------- Version
+    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const ImVec2 versionSize = ImGui::CalcTextSize(m_versionString.c_str());
+    ImGui::SetCursorPos(ImVec2(width - versionSize.x - 20.0F, height - versionSize.y - 12.0F));
+    ImGui::TextColored(ImVec4(0.55F, 0.55F, 0.60F, 0.8F), "%s", m_versionString.c_str());
+
+    const char* credits = "Made with CatEngine";
+    ImGui::SetCursorPos(ImVec2(20.0F, height - ImGui::CalcTextSize(credits).y - 12.0F));
+    ImGui::TextColored(ImVec4(0.45F, 0.45F, 0.55F, 0.7F), "%s", credits);
+    if (m_imguiLayer->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 void MainMenu::handleInput() {

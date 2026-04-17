@@ -1,6 +1,10 @@
 #include "WavePopup.hpp"
 #include "../audio/GameAudio.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/ui/ImGuiLayer.hpp"
+
+#include "imgui.h"
+
 #include <cmath>
 #include <algorithm>
 
@@ -79,22 +83,128 @@ void WavePopup::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
         return;
     }
 
-    // Cache screen dimensions
     m_screenWidth = screenWidth;
     m_screenHeight = screenHeight;
+    (void)uiPass; // Legacy helpers (renderWaveComplete/renderCountdown) are unreachable.
 
-    switch (m_state) {
-        case PopupState::WaveComplete:
-            renderWaveComplete(uiPass);
-            break;
-
-        case PopupState::Countdown:
-            renderCountdown(uiPass);
-            break;
-
-        default:
-            break;
+    if (m_imguiLayer == nullptr) {
+        return;
     }
+
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
+
+    // Fullscreen transparent window with a dim overlay tinted by the fade alpha.
+    const float overlayAlpha =
+        (m_state == PopupState::WaveComplete ? 0.60F : 0.50F) * m_fadeAlpha;
+
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, overlayAlpha));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+
+    constexpr ImGuiWindowFlags kOverlayFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoInputs; // popup is passive — WavePopup::handleInput drives it
+
+    ImGui::Begin("##WavePopupOverlay", nullptr, kOverlayFlags);
+
+    if (m_state == PopupState::WaveComplete) {
+        // ----- Title: "WAVE N COMPLETE!" (yellow, title font)
+        if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+            ImGui::PushFont(titleFont);
+        }
+        const std::string title = "WAVE " + std::to_string(m_completedWave) + " COMPLETE!";
+        const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
+        const float titleY = height * 0.36F;
+        ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+        ImGui::TextColored(ImVec4(1.0F, 0.80F, 0.05F, m_fadeAlpha), "%s", title.c_str());
+        if (m_imguiLayer->GetTitleFont() != nullptr) {
+            ImGui::PopFont();
+        }
+
+        // ----- Stats block
+        if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+            ImGui::PushFont(regularFont);
+        }
+        float y = titleY + titleSize.y + 32.0F;
+        auto writeCentered = [&](const std::string& str, ImVec4 color) {
+            const ImVec2 sz = ImGui::CalcTextSize(str.c_str());
+            ImGui::SetCursorPos(ImVec2((width - sz.x) * 0.5F, y));
+            ImGui::TextColored(color, "%s", str.c_str());
+            y += sz.y + 8.0F;
+        };
+        writeCentered("Enemies Killed: " + std::to_string(m_enemiesKilled),
+                      ImVec4(1.0F, 1.0F, 1.0F, m_fadeAlpha));
+        writeCentered("Time: " + std::to_string(static_cast<int>(m_timeTaken)) + "s",
+                      ImVec4(1.0F, 1.0F, 1.0F, m_fadeAlpha));
+        y += 12.0F;
+        writeCentered("Next Wave: " + std::to_string(m_nextWaveEnemyCount) + " Enemies",
+                      ImVec4(0.80F, 0.80F, 1.0F, m_fadeAlpha));
+        if (m_imguiLayer->GetRegularFont() != nullptr) {
+            ImGui::PopFont();
+        }
+
+        // ----- Blinking prompt
+        const float promptAlpha =
+            (std::sin(m_animationTimer * 4.0F) + 1.0F) * 0.5F * m_fadeAlpha;
+        const char* prompt = "Press SPACE to continue";
+        const ImVec2 pSize = ImGui::CalcTextSize(prompt);
+        ImGui::SetCursorPos(ImVec2((width - pSize.x) * 0.5F, y + 40.0F));
+        ImGui::TextColored(ImVec4(0.85F, 0.85F, 0.90F, promptAlpha), "%s", prompt);
+
+    } else if (m_state == PopupState::Countdown) {
+        // ----- "WAVE N"
+        if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+            ImGui::PushFont(titleFont);
+        }
+        const std::string title = "WAVE " + std::to_string(m_startingWave);
+        const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
+        const float titleY = height * 0.36F;
+        ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+        ImGui::TextColored(ImVec4(1.0F, 0.80F, 0.05F, m_fadeAlpha), "%s", title.c_str());
+        if (m_imguiLayer->GetTitleFont() != nullptr) {
+            ImGui::PopFont();
+        }
+
+        // ----- "N Enemies Incoming"
+        if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+            ImGui::PushFont(boldFont);
+        }
+        const std::string subtitle = std::to_string(m_waveEnemyCount) + " Enemies Incoming";
+        const ImVec2 subSize = ImGui::CalcTextSize(subtitle.c_str());
+        ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 10.0F));
+        ImGui::TextColored(ImVec4(1.0F, 0.55F, 0.20F, m_fadeAlpha), "%s", subtitle.c_str());
+        if (m_imguiLayer->GetBoldFont() != nullptr) {
+            ImGui::PopFont();
+        }
+
+        // ----- Big countdown number, red in the last 3 seconds
+        const float remaining = std::max(0.0F, m_countdownDuration - m_countdownTimer);
+        const int countNum = static_cast<int>(std::ceil(remaining));
+        const ImVec4 countColor = (remaining <= 3.0F)
+            ? ImVec4(1.0F, 0.2F, 0.2F, m_fadeAlpha)
+            : ImVec4(1.0F, 1.0F, 1.0F, m_fadeAlpha);
+
+        if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+            ImGui::PushFont(titleFont);
+        }
+        const std::string numStr = std::to_string(countNum);
+        const ImVec2 numSize = ImGui::CalcTextSize(numStr.c_str());
+        ImGui::SetCursorPos(ImVec2((width - numSize.x) * 0.5F, height * 0.55F));
+        ImGui::TextColored(countColor, "%s", numStr.c_str());
+        if (m_imguiLayer->GetTitleFont() != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 void WavePopup::handleInput() {
