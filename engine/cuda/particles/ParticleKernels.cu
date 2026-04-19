@@ -2,10 +2,15 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
 #include <thrust/sort.h>
 #include <thrust/remove.h>
 #include <thrust/count.h>
+#include <thrust/copy.h>
+#include <thrust/gather.h>
+#include <thrust/sequence.h>
 #include <thrust/execution_policy.h>
+#include <thrust/functional.h>
 #include <cmath>
 
 namespace CatEngine {
@@ -413,7 +418,7 @@ __global__ void computeParticleDepths(
 }
 
 // ============================================================================
-// Compaction (using Thrust)
+// Compaction — full stream compaction across all particle SoA arrays
 // ============================================================================
 
 struct IsAlive {
@@ -422,41 +427,168 @@ struct IsAlive {
     }
 };
 
+namespace {
+
+// Permute every particle SoA array using the supplied sorted/compacted index
+// list. Allocates one set of device temp buffers, runs thrust::gather per
+// array, copies back, and frees. Called by both compactParticles and
+// sortParticles; keeps the two paths on one memory-management code path.
+void permuteParticleArrays(
+    GpuParticles& particles,
+    const thrust::device_ptr<const uint32_t>& indices,
+    int count,
+    cudaStream_t stream
+) {
+    if (count <= 0) return;
+
+    const size_t f3Bytes = static_cast<size_t>(count) * sizeof(float3);
+    const size_t f4Bytes = static_cast<size_t>(count) * sizeof(float4);
+    const size_t f1Bytes = static_cast<size_t>(count) * sizeof(float);
+
+    float3*  tmpPos          = nullptr;
+    float3*  tmpVel          = nullptr;
+    float4*  tmpColor        = nullptr;
+    float*   tmpLifetime     = nullptr;
+    float*   tmpMaxLifetime  = nullptr;
+    float*   tmpSize         = nullptr;
+    float*   tmpRotation     = nullptr;
+
+    cudaMalloc(&tmpPos,          f3Bytes);
+    cudaMalloc(&tmpVel,          f3Bytes);
+    cudaMalloc(&tmpColor,        f4Bytes);
+    cudaMalloc(&tmpLifetime,     f1Bytes);
+    cudaMalloc(&tmpMaxLifetime,  f1Bytes);
+    cudaMalloc(&tmpSize,         f1Bytes);
+    cudaMalloc(&tmpRotation,     f1Bytes);
+
+    auto policy = thrust::cuda::par.on(stream);
+    auto idxBegin = indices;
+    auto idxEnd   = indices + count;
+
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float3>(particles.positions),
+        thrust::device_ptr<float3>(tmpPos));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float3>(particles.velocities),
+        thrust::device_ptr<float3>(tmpVel));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float4>(particles.colors),
+        thrust::device_ptr<float4>(tmpColor));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float>(particles.lifetimes),
+        thrust::device_ptr<float>(tmpLifetime));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float>(particles.maxLifetimes),
+        thrust::device_ptr<float>(tmpMaxLifetime));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float>(particles.sizes),
+        thrust::device_ptr<float>(tmpSize));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float>(particles.rotations),
+        thrust::device_ptr<float>(tmpRotation));
+
+    cudaMemcpyAsync(particles.positions,    tmpPos,         f3Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.velocities,   tmpVel,         f3Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.colors,       tmpColor,       f4Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.lifetimes,    tmpLifetime,    f1Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.maxLifetimes, tmpMaxLifetime, f1Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.sizes,        tmpSize,        f1Bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.rotations,    tmpRotation,    f1Bytes, cudaMemcpyDeviceToDevice, stream);
+
+    cudaStreamSynchronize(stream);
+
+    cudaFree(tmpPos);
+    cudaFree(tmpVel);
+    cudaFree(tmpColor);
+    cudaFree(tmpLifetime);
+    cudaFree(tmpMaxLifetime);
+    cudaFree(tmpSize);
+    cudaFree(tmpRotation);
+}
+
+} // anonymous namespace
+
 void compactParticles(
     GpuParticles& particles,
     int& compactedCount,
     cudaStream_t stream
 ) {
-    // Use Thrust to compact particles
-    // This is a simplified version - a production system would use
-    // stream compaction on all arrays simultaneously
+    if (particles.count <= 0) {
+        compactedCount = 0;
+        return;
+    }
 
-    thrust::device_ptr<uint32_t> alivePtr(particles.alive);
-    thrust::device_ptr<float3> posPtr(particles.positions);
-    thrust::device_ptr<float3> velPtr(particles.velocities);
-    thrust::device_ptr<float4> colorPtr(particles.colors);
-    thrust::device_ptr<float> lifetimePtr(particles.lifetimes);
-    thrust::device_ptr<float> maxLifetimePtr(particles.maxLifetimes);
-    thrust::device_ptr<float> sizePtr(particles.sizes);
-    thrust::device_ptr<float> rotationPtr(particles.rotations);
+    auto policy = thrust::cuda::par.on(stream);
 
-    // Count alive particles
-    compactedCount = thrust::count_if(
-        thrust::cuda::par.on(stream),
-        alivePtr,
-        alivePtr + particles.count,
+    // Build an index sequence [0, 1, ..., count-1] and copy only those indices
+    // whose matching alive[i] is non-zero into a compact list. The resulting
+    // list is the permutation that gathers alive particles to the front.
+    thrust::device_vector<uint32_t> indices(particles.count);
+    thrust::sequence(policy, indices.begin(), indices.end());
+
+    thrust::device_vector<uint32_t> compactIndices(particles.count);
+    thrust::device_ptr<uint32_t> aliveBegin(particles.alive);
+
+    auto compactEnd = thrust::copy_if(
+        policy,
+        indices.begin(), indices.end(),
+        aliveBegin,
+        compactIndices.begin(),
         IsAlive()
     );
 
-    // In a real implementation, we'd use stream compaction to remove dead particles
-    // and pack the arrays. For now, this is left as an exercise.
-    // A proper implementation would use:
-    // - Thrust copy_if with a zip_iterator
-    // - Or a custom CUDA kernel with prefix sum
+    compactedCount = static_cast<int>(compactEnd - compactIndices.begin());
+
+    if (compactedCount == 0) {
+        // All dead — zero the alive flags across the full range.
+        cudaMemsetAsync(
+            particles.alive,
+            0,
+            static_cast<size_t>(particles.count) * sizeof(uint32_t),
+            stream
+        );
+        particles.count = 0;
+        return;
+    }
+
+    if (compactedCount == particles.count) {
+        // Nothing to do — every slot is alive and already dense.
+        return;
+    }
+
+    // Gather each SoA array through the compact index list into temp buffers,
+    // then copy the compact result back in place. Per-compaction allocations
+    // are acceptable since the particle system schedules compaction every
+    // `compactionFrequency` frames (default 60).
+    thrust::device_ptr<const uint32_t> compactPtr(
+        thrust::raw_pointer_cast(compactIndices.data())
+    );
+    permuteParticleArrays(particles, compactPtr, compactedCount, stream);
+
+    // Mark the tail as dead so future emission slots start in a known state.
+    cudaMemsetAsync(
+        particles.alive + compactedCount,
+        0,
+        static_cast<size_t>(particles.count - compactedCount) * sizeof(uint32_t),
+        stream
+    );
+
+    // Set the leading region's alive flags to 1 — gather wrote whatever the
+    // source alive values were at the gathered indices, which is already 1 for
+    // every compacted slot, so this is a cheap re-assertion that keeps the
+    // invariant explicit.
+    cudaMemsetAsync(
+        particles.alive,
+        0x01,
+        static_cast<size_t>(compactedCount) * sizeof(uint32_t),
+        stream
+    );
+
+    particles.count = compactedCount;
 }
 
 // ============================================================================
-// Sorting (using Thrust)
+// Sorting — sort all particle arrays by depth via an index permutation
 // ============================================================================
 
 void sortParticles(
@@ -464,26 +596,32 @@ void sortParticles(
     float* depths,
     cudaStream_t stream
 ) {
-    // Sort particles by depth (back-to-front for alpha blending)
-    // This is a simplified version - a production system would use
-    // a permutation array and apply it to all particle data
+    if (particles.count <= 0) return;
+
+    auto policy = thrust::cuda::par.on(stream);
+
+    // Build an index array [0..count-1] and sort it by depth (descending for
+    // back-to-front alpha blending). thrust::sort_by_key rewrites the indices
+    // array so that indices[i] is the original particle index that should end
+    // up at slot i after sorting.
+    thrust::device_vector<uint32_t> indices(particles.count);
+    thrust::sequence(policy, indices.begin(), indices.end());
 
     thrust::device_ptr<float> depthPtr(depths);
-
-    // Sort indices by depth
-    // In a real implementation, we'd create an index array and sort that,
-    // then permute all particle arrays using the sorted indices.
-    // For now, we just sort depths directly.
-
-    thrust::sort(
-        thrust::cuda::par.on(stream),
+    thrust::sort_by_key(
+        policy,
         depthPtr,
         depthPtr + particles.count,
-        thrust::greater<float>() // Back-to-front
+        indices.begin(),
+        thrust::greater<float>()
     );
 
-    // Note: A complete implementation would use thrust::sort_by_key
-    // with a zip_iterator to sort all particle data arrays together
+    // Permute every particle SoA array using the sorted index list so all
+    // per-particle attributes remain consistent with the depth ordering.
+    thrust::device_ptr<const uint32_t> sortedPtr(
+        thrust::raw_pointer_cast(indices.data())
+    );
+    permuteParticleArrays(particles, sortedPtr, particles.count, stream);
 }
 
 } // namespace CUDA
