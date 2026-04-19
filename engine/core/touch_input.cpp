@@ -1,7 +1,16 @@
 #include "touch_input.hpp"
 #include "Logger.hpp"
+#include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+
+// MSVC does not expose the POSIX M_PI macro by default, so using it across
+// platforms is an inconsistency landmine. The C++20 <numbers> header gives
+// us a compile-time constant that works on every target.
+namespace {
+constexpr float kPi = static_cast<float>(std::numbers::pi);
+} // namespace
 
 namespace Engine {
 
@@ -402,10 +411,12 @@ void TouchInput::updateRotationGesture() {
         m_currentRotation.center = center;
         m_currentRotation.currentAngle = angle;
 
-        // Calculate delta with wrap-around handling
+        // Calculate delta with wrap-around handling. Rotation angles wrap at
+        // ±π, so a delta outside that range actually crossed the boundary
+        // and should be folded back into [-π, π] before being accumulated.
         float delta = angle - previousAngle;
-        if (delta > M_PI) delta -= 2.0f * M_PI;
-        if (delta < -M_PI) delta += 2.0f * M_PI;
+        if (delta > kPi) delta -= 2.0f * kPi;
+        if (delta < -kPi) delta += 2.0f * kPi;
 
         m_currentRotation.deltaAngle = delta;
         m_currentRotation.totalRotation += delta;
