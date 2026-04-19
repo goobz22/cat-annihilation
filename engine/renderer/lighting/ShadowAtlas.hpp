@@ -5,7 +5,9 @@
 #include "LightManager.hpp"
 #include "../../math/Vector.hpp"
 #include "../../math/Matrix.hpp"
+#include "../../rhi/RHI.hpp"
 #include "../../rhi/RHITexture.hpp"
+#include "../../rhi/RHICommandBuffer.hpp"
 #include <vector>
 #include <memory>
 #include <optional>
@@ -111,9 +113,11 @@ public:
 
     /**
      * Initialize the shadow atlas
-     * Creates the atlas texture
+     * Creates the atlas depth texture and matching texture view via the RHI device.
+     * @param device RHI device used to allocate GPU resources
+     * @param atlasSize Square atlas dimensions in pixels (default: 4096)
      */
-    bool initialize();
+    bool initialize(CatEngine::RHI::IRHIDevice* device, uint32_t atlasSize = 4096);
 
     /**
      * Shutdown and release resources
@@ -182,6 +186,11 @@ public:
     CatEngine::RHI::IRHITexture* getAtlasTexture() const { return m_atlasTexture; }
 
     /**
+     * Get atlas texture view (used for binding as sampled image / depth attachment)
+     */
+    CatEngine::RHI::IRHITextureView* getAtlasTextureView() const { return m_atlasTextureView; }
+
+    /**
      * Get atlas dimensions
      */
     uint32_t getAtlasWidth() const { return m_atlasWidth; }
@@ -233,14 +242,18 @@ public:
     std::array<mat4, 6> updatePointLightShadowMatrices(ShadowMapHandle handle, const PointLight& light);
 
     /**
-     * Clear a shadow map region (set to white/max depth)
+     * Clear a shadow map region (set to max depth 1.0, stencil 0).
+     * Must be recorded inside an active depth-stencil render pass on @p cmd.
+     * @param region Atlas sub-rectangle to clear
+     * @param cmd Command buffer currently recording a depth render pass
      */
-    void clearRegion(const ShadowRegion& region);
+    void clearRegion(const ShadowRegion& region, CatEngine::RHI::IRHICommandBuffer* cmd);
 
     /**
-     * Clear unused regions in the atlas
+     * Clear unused regions in the atlas.
+     * Must be recorded inside an active depth-stencil render pass on @p cmd.
      */
-    void clearUnusedRegions();
+    void clearUnusedRegions(CatEngine::RHI::IRHICommandBuffer* cmd);
 
 private:
     /**
@@ -302,8 +315,10 @@ private:
     uint32_t m_atlasWidth;
     uint32_t m_atlasHeight;
 
-    // Atlas texture
+    // RHI resources (not owned by the atlas — created/destroyed via m_device)
+    CatEngine::RHI::IRHIDevice* m_device = nullptr;
     CatEngine::RHI::IRHITexture* m_atlasTexture = nullptr;
+    CatEngine::RHI::IRHITextureView* m_atlasTextureView = nullptr;
 
     // Allocations
     std::vector<AllocationEntry> m_allocations;

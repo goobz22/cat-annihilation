@@ -10,8 +10,15 @@
 #include "../../rhi/RHIShader.hpp"
 #include "../../rhi/RHICommandBuffer.hpp"
 #include "../../rhi/RHIPipeline.hpp"
+#include "../../rhi/RHIDescriptorSet.hpp"
 #include <vector>
 #include <memory>
+#include <string>
+#include <cstdint>
+
+namespace CatEngine::RHI {
+    class IRHIDevice;
+}
 
 namespace Engine::Renderer {
 
@@ -84,13 +91,34 @@ public:
     ClusteredLighting& operator=(ClusteredLighting&&) = default;
 
     /**
-     * Initialize clustered lighting system
+     * Initialize clustered lighting system (legacy — no device; buffers/pipeline will not be created)
      * @param width Screen width
      * @param height Screen height
      * @param nearPlane Camera near plane
      * @param farPlane Camera far plane
      */
     bool initialize(uint32_t width, uint32_t height, float nearPlane, float farPlane);
+
+    /**
+     * Initialize clustered lighting system with an RHI device.
+     * Creates GPU buffers and the compute pipeline for light assignment.
+     * @param device RHI device used to create GPU resources
+     * @param width Screen width
+     * @param height Screen height
+     * @param nearPlane Camera near plane
+     * @param farPlane Camera far plane
+     * @param cameraUBO Optional per-frame camera UBO bound at set=0 binding=0
+     * @param lightsSSBO Optional lights SSBO bound at set=0 binding=1
+     */
+    bool initialize(
+        CatEngine::RHI::IRHIDevice* device,
+        uint32_t width,
+        uint32_t height,
+        float nearPlane,
+        float farPlane,
+        CatEngine::RHI::IRHIBuffer* cameraUBO = nullptr,
+        CatEngine::RHI::IRHIBuffer* lightsSSBO = nullptr
+    );
 
     /**
      * Shutdown and release resources
@@ -101,6 +129,22 @@ public:
      * Update cluster grid for new screen dimensions or camera settings
      */
     void updateClusters(uint32_t width, uint32_t height, float nearPlane, float farPlane);
+
+    /**
+     * Record a GPU light-assignment pass for the current frame.
+     * Binds the compute pipeline + descriptor set, dispatches one workgroup per
+     * cluster, and inserts a pipeline barrier so subsequent lighting passes see
+     * the populated cluster grid and light index list.
+     *
+     * @param commandBuffer RHI command buffer in a recording state
+     * @param viewMatrix View matrix for the current frame (reserved)
+     * @param projectionMatrix Projection matrix for the current frame (reserved)
+     */
+    void updateClusters(
+        CatEngine::RHI::IRHICommandBuffer* commandBuffer,
+        const mat4& viewMatrix,
+        const mat4& projectionMatrix
+    );
 
     /**
      * Build cluster grid in view space (CPU-side)
@@ -167,6 +211,11 @@ public:
     CatEngine::RHI::IRHIBuffer* getLightIndexListBuffer() const { return m_lightIndexListBuffer; }
 
     /**
+     * Get light grid buffer (per-cluster uvec2(offset, count) into the light index list)
+     */
+    CatEngine::RHI::IRHIBuffer* getLightGridBuffer() const { return m_lightGridBuffer; }
+
+    /**
      * Get cluster parameters buffer (uniform buffer with cluster settings)
      */
     CatEngine::RHI::IRHIBuffer* getClusterParamsBuffer() const { return m_clusterParamsBuffer; }
@@ -224,6 +273,12 @@ private:
      */
     float computeZSlice(float depth) const;
 
+    /**
+     * Read a SPIR-V binary blob from disk into a byte vector.
+     * Returns an empty vector and logs to stderr on failure.
+     */
+    static std::vector<uint8_t> readSpirvFile(const std::string& path);
+
     // Screen and camera parameters
     uint32_t m_screenWidth = 0;
     uint32_t m_screenHeight = 0;
@@ -237,15 +292,32 @@ private:
     // Cluster parameters
     ClusterParams m_clusterParams;
 
-    // GPU resources
-    CatEngine::RHI::IRHIBuffer* m_clusterBuffer = nullptr;         // Cluster data buffer
-    CatEngine::RHI::IRHIBuffer* m_lightIndexListBuffer = nullptr;  // Light index list
-    CatEngine::RHI::IRHIBuffer* m_clusterParamsBuffer = nullptr;   // Cluster parameters
+    // RHI device (non-owning)
+    CatEngine::RHI::IRHIDevice* m_device = nullptr;
+
+    // External resources bound into the descriptor set (non-owning)
+    CatEngine::RHI::IRHIBuffer* m_cameraUBO = nullptr;
+    CatEngine::RHI::IRHIBuffer* m_lightsSSBO = nullptr;
+
+    // GPU resources (owned)
+    CatEngine::RHI::IRHIBuffer* m_clusterBuffer = nullptr;         // Cluster data buffer (GPUCluster[])
+    CatEngine::RHI::IRHIBuffer* m_lightIndexListBuffer = nullptr;  // Flat light index list
+    CatEngine::RHI::IRHIBuffer* m_lightGridBuffer = nullptr;       // Per-cluster uvec2(offset, count)
+    CatEngine::RHI::IRHIBuffer* m_clusterParamsBuffer = nullptr;   // Cluster parameters UBO
     CatEngine::RHI::IRHIBuffer* m_atomicCounterBuffer = nullptr;   // Atomic counter for light assignment
 
-    // Compute pipeline
-    CatEngine::RHI::IRHIPipeline* m_computePipeline = nullptr;
+    // Compute pipeline (owned)
     CatEngine::RHI::IRHIShader* m_computeShader = nullptr;
+    CatEngine::RHI::IRHIDescriptorSetLayout* m_descriptorSetLayout = nullptr;
+    CatEngine::RHI::IRHIPipelineLayout* m_pipelineLayout = nullptr;
+    CatEngine::RHI::IRHIPipeline* m_computePipeline = nullptr;
+    CatEngine::RHI::IRHIDescriptorPool* m_descriptorPool = nullptr;
+    CatEngine::RHI::IRHIDescriptorSet* m_descriptorSet = nullptr;
+
+    // Dispatch sizing (matches shader local_size)
+    static constexpr uint32_t LOCAL_SIZE_X = 16;
+    static constexpr uint32_t LOCAL_SIZE_Y = 9;
+    static constexpr uint32_t LOCAL_SIZE_Z = 1;
 
     // State
     bool m_initialized = false;

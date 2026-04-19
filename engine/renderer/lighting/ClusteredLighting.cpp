@@ -1,9 +1,19 @@
 #include "ClusteredLighting.hpp"
 #include "../../math/Math.hpp"
+#include "../../rhi/RHI.hpp"
 #include <cmath>
 #include <algorithm>
+#include <fstream>
+#include <iostream>
 
 namespace Engine::Renderer {
+
+namespace {
+
+// Per-cluster entry in the light grid (uvec2 offset+count -> 8 bytes each).
+constexpr uint64_t LIGHT_GRID_ENTRY_SIZE = sizeof(uint32_t) * 2;
+
+} // namespace
 
 ClusteredLighting::ClusteredLighting() {
     // Reserve space for all clusters
@@ -25,17 +35,9 @@ bool ClusteredLighting::initialize(uint32_t width, uint32_t height, float nearPl
     m_nearPlane = nearPlane;
     m_farPlane = farPlane;
 
-    // Create GPU buffers
-    if (!createBuffers()) {
-        return false;
-    }
-
-    // Create compute pipeline (would need actual implementation with RHI)
-    // if (!createComputePipeline()) {
-    //     return false;
-    // }
-
-    // Update cluster parameters
+    // No RHI device was supplied; the caller intends to set up GPU resources
+    // externally. Just populate CPU-side cluster parameters so the grid math
+    // is usable on the CPU (e.g. for getClusterFromScreenSpace).
     updateClusterParams();
 
     m_initialized = true;
@@ -44,15 +46,189 @@ bool ClusteredLighting::initialize(uint32_t width, uint32_t height, float nearPl
     return true;
 }
 
+bool ClusteredLighting::initialize(
+    CatEngine::RHI::IRHIDevice* device,
+    uint32_t width,
+    uint32_t height,
+    float nearPlane,
+    float farPlane,
+    CatEngine::RHI::IRHIBuffer* cameraUBO,
+    CatEngine::RHI::IRHIBuffer* lightsSSBO)
+{
+    if (m_initialized) {
+        return true;
+    }
+
+    if (device == nullptr) {
+        std::cerr << "[ClusteredLighting] initialize: device is null" << std::endl;
+        return false;
+    }
+
+    m_device = device;
+    m_cameraUBO = cameraUBO;
+    m_lightsSSBO = lightsSSBO;
+    m_screenWidth = width;
+    m_screenHeight = height;
+    m_nearPlane = nearPlane;
+    m_farPlane = farPlane;
+
+    if (!createBuffers()) {
+        std::cerr << "[ClusteredLighting] createBuffers failed" << std::endl;
+        shutdown();
+        return false;
+    }
+
+    if (!createComputePipeline()) {
+        std::cerr << "[ClusteredLighting] createComputePipeline failed" << std::endl;
+        shutdown();
+        return false;
+    }
+
+    updateClusterParams();
+
+    // If external buffers were supplied up front, wire them into the descriptor
+    // set now so the first dispatch sees a fully-populated binding table.
+    if (m_descriptorSet != nullptr) {
+        CatEngine::RHI::DescriptorBufferInfo cameraInfo{};
+        CatEngine::RHI::DescriptorBufferInfo lightsInfo{};
+        CatEngine::RHI::DescriptorBufferInfo clusterInfo{};
+        CatEngine::RHI::DescriptorBufferInfo gridInfo{};
+        CatEngine::RHI::DescriptorBufferInfo indexInfo{};
+
+        cameraInfo.buffer = m_cameraUBO != nullptr ? m_cameraUBO : m_clusterParamsBuffer;
+        cameraInfo.offset = 0;
+        cameraInfo.range = 0;
+
+        lightsInfo.buffer = m_lightsSSBO;
+        lightsInfo.offset = 0;
+        lightsInfo.range = 0;
+
+        clusterInfo.buffer = m_clusterBuffer;
+        clusterInfo.offset = 0;
+        clusterInfo.range = 0;
+
+        gridInfo.buffer = m_lightGridBuffer;
+        gridInfo.offset = 0;
+        gridInfo.range = 0;
+
+        indexInfo.buffer = m_lightIndexListBuffer;
+        indexInfo.offset = 0;
+        indexInfo.range = 0;
+
+        CatEngine::RHI::WriteDescriptor writes[5]{};
+
+        writes[0].binding = 0;
+        writes[0].descriptorType = CatEngine::RHI::DescriptorType::UniformBuffer;
+        writes[0].descriptorCount = 1;
+        writes[0].bufferInfo = &cameraInfo;
+
+        writes[1].binding = 1;
+        writes[1].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        writes[1].descriptorCount = 1;
+        writes[1].bufferInfo = &lightsInfo;
+
+        writes[2].binding = 2;
+        writes[2].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        writes[2].descriptorCount = 1;
+        writes[2].bufferInfo = &clusterInfo;
+
+        writes[3].binding = 3;
+        writes[3].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        writes[3].descriptorCount = 1;
+        writes[3].bufferInfo = &gridInfo;
+
+        writes[4].binding = 4;
+        writes[4].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        writes[4].descriptorCount = 1;
+        writes[4].bufferInfo = &indexInfo;
+
+        uint32_t writeCount = 0;
+        CatEngine::RHI::WriteDescriptor packed[5]{};
+        for (uint32_t i = 0; i < 5; ++i) {
+            if (writes[i].bufferInfo != nullptr && writes[i].bufferInfo->buffer != nullptr) {
+                packed[writeCount++] = writes[i];
+            }
+        }
+        if (writeCount > 0) {
+            m_descriptorSet->Update(packed, writeCount);
+        }
+    }
+
+    m_initialized = true;
+    m_clustersDirty = true;
+
+    std::cerr << "[ClusteredLighting] initialized " << CLUSTER_GRID_X << "x"
+              << CLUSTER_GRID_Y << "x" << CLUSTER_GRID_Z << " clusters ("
+              << TOTAL_CLUSTERS << " total)" << std::endl;
+
+    return true;
+}
+
 void ClusteredLighting::shutdown() {
-    // Clean up resources
-    // Note: In a real implementation, these would be smart pointers or managed by RHI
-    m_clusterBuffer = nullptr;
-    m_lightIndexListBuffer = nullptr;
-    m_clusterParamsBuffer = nullptr;
-    m_atomicCounterBuffer = nullptr;
-    m_computePipeline = nullptr;
-    m_computeShader = nullptr;
+    if (m_device != nullptr) {
+        if (m_descriptorSet != nullptr) {
+            m_device->DestroyDescriptorSet(m_descriptorSet);
+            m_descriptorSet = nullptr;
+        }
+        if (m_descriptorPool != nullptr) {
+            m_device->DestroyDescriptorPool(m_descriptorPool);
+            m_descriptorPool = nullptr;
+        }
+        if (m_computePipeline != nullptr) {
+            m_device->DestroyPipeline(m_computePipeline);
+            m_computePipeline = nullptr;
+        }
+        if (m_pipelineLayout != nullptr) {
+            m_device->DestroyPipelineLayout(m_pipelineLayout);
+            m_pipelineLayout = nullptr;
+        }
+        if (m_descriptorSetLayout != nullptr) {
+            m_device->DestroyDescriptorSetLayout(m_descriptorSetLayout);
+            m_descriptorSetLayout = nullptr;
+        }
+        if (m_computeShader != nullptr) {
+            m_device->DestroyShader(m_computeShader);
+            m_computeShader = nullptr;
+        }
+
+        if (m_atomicCounterBuffer != nullptr) {
+            m_device->DestroyBuffer(m_atomicCounterBuffer);
+            m_atomicCounterBuffer = nullptr;
+        }
+        if (m_clusterParamsBuffer != nullptr) {
+            m_device->DestroyBuffer(m_clusterParamsBuffer);
+            m_clusterParamsBuffer = nullptr;
+        }
+        if (m_lightGridBuffer != nullptr) {
+            m_device->DestroyBuffer(m_lightGridBuffer);
+            m_lightGridBuffer = nullptr;
+        }
+        if (m_lightIndexListBuffer != nullptr) {
+            m_device->DestroyBuffer(m_lightIndexListBuffer);
+            m_lightIndexListBuffer = nullptr;
+        }
+        if (m_clusterBuffer != nullptr) {
+            m_device->DestroyBuffer(m_clusterBuffer);
+            m_clusterBuffer = nullptr;
+        }
+    } else {
+        // No device available; null out the handles so we don't dangle.
+        m_descriptorSet = nullptr;
+        m_descriptorPool = nullptr;
+        m_computePipeline = nullptr;
+        m_pipelineLayout = nullptr;
+        m_descriptorSetLayout = nullptr;
+        m_computeShader = nullptr;
+        m_atomicCounterBuffer = nullptr;
+        m_clusterParamsBuffer = nullptr;
+        m_lightGridBuffer = nullptr;
+        m_lightIndexListBuffer = nullptr;
+        m_clusterBuffer = nullptr;
+    }
+
+    m_cameraUBO = nullptr;
+    m_lightsSSBO = nullptr;
+    m_device = nullptr;
 
     m_initialized = false;
 }
@@ -76,6 +252,53 @@ void ClusteredLighting::updateClusters(uint32_t width, uint32_t height, float ne
         updateClusterParams();
         m_clustersDirty = true;
     }
+}
+
+void ClusteredLighting::updateClusters(
+    CatEngine::RHI::IRHICommandBuffer* commandBuffer,
+    const mat4& viewMatrix,
+    const mat4& projectionMatrix)
+{
+    (void)viewMatrix;
+    (void)projectionMatrix;
+
+    if (commandBuffer == nullptr) {
+        std::cerr << "[ClusteredLighting] updateClusters: null command buffer" << std::endl;
+        return;
+    }
+    if (m_computePipeline == nullptr || m_pipelineLayout == nullptr || m_descriptorSet == nullptr) {
+        std::cerr << "[ClusteredLighting] updateClusters: pipeline or descriptor set not ready" << std::endl;
+        return;
+    }
+
+    // Reset the atomic allocation counter at the head of each dispatch so
+    // offsets into the flat light index list restart from zero.
+    if (m_atomicCounterBuffer != nullptr) {
+        uint32_t zero = 0;
+        m_atomicCounterBuffer->UpdateData(&zero, sizeof(uint32_t), 0);
+    }
+
+    commandBuffer->BindPipeline(m_computePipeline);
+
+    CatEngine::RHI::IRHIDescriptorSet* sets[] = { m_descriptorSet };
+    commandBuffer->BindDescriptorSets(
+        CatEngine::RHI::PipelineBindPoint::Compute,
+        m_pipelineLayout,
+        /*firstSet=*/0,
+        sets,
+        /*descriptorSetCount=*/1
+    );
+
+    // One workgroup per cluster column (x,y) per Z-slice. Workgroup size is
+    // (LOCAL_SIZE_X, LOCAL_SIZE_Y, LOCAL_SIZE_Z) matching clustered.comp.
+    const uint32_t groupsX = (CLUSTER_GRID_X + LOCAL_SIZE_X - 1) / LOCAL_SIZE_X;
+    const uint32_t groupsY = (CLUSTER_GRID_Y + LOCAL_SIZE_Y - 1) / LOCAL_SIZE_Y;
+    const uint32_t groupsZ = (CLUSTER_GRID_Z + LOCAL_SIZE_Z - 1) / LOCAL_SIZE_Z;
+    commandBuffer->Dispatch(groupsX, groupsY, groupsZ);
+
+    // Storage-buffer write -> shader-read barrier so the lighting pass can
+    // safely read the cluster grid and light index list we just populated.
+    commandBuffer->PipelineBarrier();
 }
 
 void ClusteredLighting::buildClusterGrid(const mat4& inverseProjection) {
@@ -166,32 +389,11 @@ void ClusteredLighting::assignLightsToClusters(
     const mat4& viewMatrix,
     const mat4& projectionMatrix)
 {
-    // In a real implementation, this would:
-    // 1. Upload light data to GPU buffer (from LightManager)
-    // 2. Bind compute shader and descriptor sets
-    // 3. Dispatch compute shader to assign lights to clusters
-    // 4. Synchronize with graphics pipeline
-
-    // Pseudo-code for compute dispatch:
-    //
-    // commandBuffer->BindPipeline(m_computePipeline);
-    // commandBuffer->BindDescriptorSet(0, clusterDescriptorSet);
-    // commandBuffer->BindDescriptorSet(1, lightDescriptorSet);
-    //
-    // // Dispatch compute shader
-    // // One thread group per cluster
-    // uint32_t groupsX = (CLUSTER_GRID_X + 7) / 8;  // 8x8x1 thread groups
-    // uint32_t groupsY = (CLUSTER_GRID_Y + 7) / 8;
-    // uint32_t groupsZ = CLUSTER_GRID_Z;
-    // commandBuffer->Dispatch(groupsX, groupsY, groupsZ);
-
-    // Note: Actual GPU implementation would be in the compute shader (clustered.comp)
-    // The shader would:
-    // 1. For each cluster, get its AABB in view space
-    // 2. Transform light positions to view space
-    // 3. Test each light against the cluster AABB
-    // 4. For intersecting lights, add light index to cluster's light list
-    // 5. Update cluster light count and offset atomically
+    (void)lightManager;
+    // Delegate to the compute-dispatch overload. The LightManager's GPU buffer
+    // is wired into the descriptor set at set=0 binding=1 at initialize() time,
+    // and the camera UBO is updated externally by the renderer each frame.
+    updateClusters(commandBuffer, viewMatrix, projectionMatrix);
 }
 
 uint32_t ClusteredLighting::getClusterFromScreenSpace(const vec2& screenPos, float linearDepth) const {
@@ -238,64 +440,256 @@ float ClusteredLighting::computeZSlice(float depth) const {
 // Private Methods
 // ============================================================================
 
+std::vector<uint8_t> ClusteredLighting::readSpirvFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        std::cerr << "[ClusteredLighting] readSpirvFile: failed to open '" << path << "'" << std::endl;
+        return {};
+    }
+
+    const std::streampos end = file.tellg();
+    if (end <= 0) {
+        std::cerr << "[ClusteredLighting] readSpirvFile: empty or unseekable file '" << path << "'" << std::endl;
+        return {};
+    }
+
+    const std::size_t byteCount = static_cast<std::size_t>(end);
+    std::vector<uint8_t> bytes(byteCount);
+
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(byteCount));
+    if (!file) {
+        std::cerr << "[ClusteredLighting] readSpirvFile: short read on '" << path
+                  << "' (" << file.gcount() << "/" << byteCount << " bytes)" << std::endl;
+        return {};
+    }
+
+    if ((byteCount % 4) != 0) {
+        std::cerr << "[ClusteredLighting] readSpirvFile: '" << path
+                  << "' size " << byteCount << " is not a multiple of 4 (not valid SPIR-V)" << std::endl;
+        return {};
+    }
+
+    return bytes;
+}
+
 bool ClusteredLighting::createBuffers() {
-    // In a real implementation, this would create GPU buffers using RHI
-    // For now, we just set up the data structures
+    if (m_device == nullptr) {
+        std::cerr << "[ClusteredLighting] createBuffers: no device" << std::endl;
+        return false;
+    }
 
-    // Cluster buffer: stores cluster bounds and light counts
-    // Size: TOTAL_CLUSTERS * sizeof(GPUCluster)
+    // --- Cluster buffer (AABB data for 16*9*24 = 3456 clusters) -----------
+    {
+        CatEngine::RHI::BufferDesc desc{};
+        desc.size = static_cast<uint64_t>(TOTAL_CLUSTERS) * sizeof(GPUCluster);
+        desc.usage = CatEngine::RHI::BufferUsage::Storage | CatEngine::RHI::BufferUsage::TransferDst;
+        desc.memoryProperties = CatEngine::RHI::MemoryProperty::DeviceLocal;
+        desc.debugName = "ClusteredLighting::clusterBuffer";
+        m_clusterBuffer = m_device->CreateBuffer(desc);
+        if (m_clusterBuffer == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateBuffer(cluster) failed" << std::endl;
+            return false;
+        }
+    }
 
-    // Light index list buffer: stores concatenated light indices for all clusters
-    // Size: TOTAL_CLUSTERS * MAX_LIGHTS_PER_CLUSTER * sizeof(uint32_t)
-    // This is conservative; actual size could be smaller with dynamic allocation
+    // --- Light index list buffer (flat uint32 array, worst-case sized) ----
+    {
+        CatEngine::RHI::BufferDesc desc{};
+        desc.size = static_cast<uint64_t>(TOTAL_CLUSTERS)
+                  * static_cast<uint64_t>(MAX_LIGHTS_PER_CLUSTER)
+                  * sizeof(uint32_t);
+        desc.usage = CatEngine::RHI::BufferUsage::Storage | CatEngine::RHI::BufferUsage::TransferDst;
+        desc.memoryProperties = CatEngine::RHI::MemoryProperty::DeviceLocal;
+        desc.debugName = "ClusteredLighting::lightIndexList";
+        m_lightIndexListBuffer = m_device->CreateBuffer(desc);
+        if (m_lightIndexListBuffer == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateBuffer(lightIndexList) failed" << std::endl;
+            return false;
+        }
+    }
 
-    // Cluster parameters buffer: uniform buffer with cluster settings
-    // Size: sizeof(ClusterParams)
+    // --- Light grid buffer (per-cluster uvec2 offset+count) ---------------
+    {
+        CatEngine::RHI::BufferDesc desc{};
+        desc.size = static_cast<uint64_t>(TOTAL_CLUSTERS) * LIGHT_GRID_ENTRY_SIZE;
+        desc.usage = CatEngine::RHI::BufferUsage::Storage | CatEngine::RHI::BufferUsage::TransferDst;
+        desc.memoryProperties = CatEngine::RHI::MemoryProperty::DeviceLocal;
+        desc.debugName = "ClusteredLighting::lightGrid";
+        m_lightGridBuffer = m_device->CreateBuffer(desc);
+        if (m_lightGridBuffer == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateBuffer(lightGrid) failed" << std::endl;
+            return false;
+        }
+    }
 
-    // Atomic counter buffer: for dynamic light index allocation
-    // Size: sizeof(uint32_t)
+    // --- Cluster parameters UBO ------------------------------------------
+    {
+        CatEngine::RHI::BufferDesc desc{};
+        desc.size = sizeof(ClusterParams);
+        desc.usage = CatEngine::RHI::BufferUsage::Uniform | CatEngine::RHI::BufferUsage::TransferDst;
+        desc.memoryProperties = CatEngine::RHI::MemoryProperty::HostVisible
+                              | CatEngine::RHI::MemoryProperty::HostCoherent;
+        desc.debugName = "ClusteredLighting::clusterParams";
+        m_clusterParamsBuffer = m_device->CreateBuffer(desc);
+        if (m_clusterParamsBuffer == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateBuffer(clusterParams) failed" << std::endl;
+            return false;
+        }
+    }
 
-    // Note: Actual buffer creation would happen here with RHI calls
-    // Example:
-    // BufferDesc desc;
-    // desc.size = TOTAL_CLUSTERS * sizeof(GPUCluster);
-    // desc.usage = BufferUsage::Storage;
-    // desc.memoryProperties = MemoryProperty::DeviceLocal;
-    // m_clusterBuffer = RHI::CreateBuffer(desc);
+    // --- Atomic counter buffer (single uint32) ----------------------------
+    {
+        CatEngine::RHI::BufferDesc desc{};
+        desc.size = sizeof(uint32_t);
+        desc.usage = CatEngine::RHI::BufferUsage::Storage | CatEngine::RHI::BufferUsage::TransferDst;
+        desc.memoryProperties = CatEngine::RHI::MemoryProperty::HostVisible
+                              | CatEngine::RHI::MemoryProperty::HostCoherent;
+        desc.debugName = "ClusteredLighting::atomicCounter";
+        m_atomicCounterBuffer = m_device->CreateBuffer(desc);
+        if (m_atomicCounterBuffer == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateBuffer(atomicCounter) failed" << std::endl;
+            return false;
+        }
 
-    return true; // Placeholder
+        // Seed the counter with zero.
+        uint32_t zero = 0;
+        m_atomicCounterBuffer->UpdateData(&zero, sizeof(uint32_t), 0);
+    }
+
+    return true;
 }
 
 bool ClusteredLighting::createComputePipeline() {
-    // In a real implementation, this would:
-    // 1. Load the compute shader (clustered.comp)
-    // 2. Create descriptor set layouts
-    // 3. Create compute pipeline with the shader
+    if (m_device == nullptr) {
+        std::cerr << "[ClusteredLighting] createComputePipeline: no device" << std::endl;
+        return false;
+    }
 
-    // Pseudo-code:
-    //
-    // ShaderDesc shaderDesc;
-    // shaderDesc.stage = ShaderStage::Compute;
-    // shaderDesc.code = LoadSPIRV("shaders/lighting/clustered.comp.spv");
-    // m_computeShader = RHI::CreateShader(shaderDesc);
-    //
-    // ComputePipelineDesc pipelineDesc;
-    // pipelineDesc.shader = m_computeShader;
-    // m_computePipeline = RHI::CreateComputePipeline(pipelineDesc);
+    // 1) Load compiled SPIR-V from disk.
+    const std::string spirvPath = "shaders/lighting/clustered.comp.spv";
+    std::vector<uint8_t> spirv = readSpirvFile(spirvPath);
+    if (spirv.empty()) {
+        return false;
+    }
 
-    return true; // Placeholder
+    // 2) Create the shader module.
+    {
+        CatEngine::RHI::ShaderDesc desc{};
+        desc.stage = CatEngine::RHI::ShaderStage::Compute;
+        desc.code = spirv.data();
+        desc.codeSize = static_cast<uint64_t>(spirv.size());
+        desc.entryPoint = "main";
+        desc.debugName = "ClusteredLighting::clustered.comp";
+        m_computeShader = m_device->CreateShader(desc);
+        if (m_computeShader == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateShader failed for '" << spirvPath << "'" << std::endl;
+            return false;
+        }
+    }
+
+    // 3) Descriptor set layout: matches clustered.comp bindings.
+    //    binding 0: camera UBO
+    //    binding 1: lights SSBO
+    //    binding 2: cluster SSBO (AABB data)
+    //    binding 3: light grid SSBO
+    //    binding 4: light index list SSBO
+    {
+        CatEngine::RHI::DescriptorSetLayoutDesc desc{};
+        desc.debugName = "ClusteredLighting::descriptorSetLayout";
+        desc.bindings.reserve(5);
+
+        CatEngine::RHI::DescriptorBinding b{};
+
+        b.binding = 0;
+        b.descriptorType = CatEngine::RHI::DescriptorType::UniformBuffer;
+        b.descriptorCount = 1;
+        b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
+        desc.bindings.push_back(b);
+
+        b.binding = 1;
+        b.descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        b.descriptorCount = 1;
+        b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
+        desc.bindings.push_back(b);
+
+        b.binding = 2;
+        b.descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        b.descriptorCount = 1;
+        b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
+        desc.bindings.push_back(b);
+
+        b.binding = 3;
+        b.descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        b.descriptorCount = 1;
+        b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
+        desc.bindings.push_back(b);
+
+        b.binding = 4;
+        b.descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        b.descriptorCount = 1;
+        b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
+        desc.bindings.push_back(b);
+
+        m_descriptorSetLayout = m_device->CreateDescriptorSetLayout(desc);
+        if (m_descriptorSetLayout == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateDescriptorSetLayout failed" << std::endl;
+            return false;
+        }
+    }
+
+    // 4) Pipeline layout wraps the single descriptor set layout.
+    {
+        CatEngine::RHI::IRHIDescriptorSetLayout* setLayouts[] = { m_descriptorSetLayout };
+        m_pipelineLayout = m_device->CreatePipelineLayout(setLayouts, 1);
+        if (m_pipelineLayout == nullptr) {
+            std::cerr << "[ClusteredLighting] CreatePipelineLayout failed" << std::endl;
+            return false;
+        }
+    }
+
+    // 5) Compute pipeline.
+    {
+        CatEngine::RHI::ComputePipelineDesc desc{};
+        desc.shader = m_computeShader;
+        desc.debugName = "ClusteredLighting::computePipeline";
+        m_computePipeline = m_device->CreateComputePipeline(desc);
+        if (m_computePipeline == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateComputePipeline failed" << std::endl;
+            return false;
+        }
+    }
+
+    // 6) Descriptor pool + set for this pipeline.
+    {
+        m_descriptorPool = m_device->CreateDescriptorPool(/*maxSets=*/1);
+        if (m_descriptorPool == nullptr) {
+            std::cerr << "[ClusteredLighting] CreateDescriptorPool failed" << std::endl;
+            return false;
+        }
+
+        m_descriptorSet = m_descriptorPool->AllocateDescriptorSet(m_descriptorSetLayout);
+        if (m_descriptorSet == nullptr) {
+            std::cerr << "[ClusteredLighting] AllocateDescriptorSet failed" << std::endl;
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void ClusteredLighting::updateClusterParams() {
     m_clusterParams.screenDimensions = vec4(
         static_cast<float>(m_screenWidth),
         static_cast<float>(m_screenHeight),
-        1.0f / static_cast<float>(m_screenWidth),
-        1.0f / static_cast<float>(m_screenHeight)
+        m_screenWidth  > 0 ? 1.0f / static_cast<float>(m_screenWidth)  : 0.0f,
+        m_screenHeight > 0 ? 1.0f / static_cast<float>(m_screenHeight) : 0.0f
     );
 
     float logRatio = std::log(m_farPlane / m_nearPlane);
-    float clusterScale = static_cast<float>(CLUSTER_GRID_Z) / logRatio;
+    float clusterScale = (logRatio != 0.0f)
+        ? static_cast<float>(CLUSTER_GRID_Z) / logRatio
+        : 0.0f;
 
     m_clusterParams.clusterParams = vec4(
         m_nearPlane,

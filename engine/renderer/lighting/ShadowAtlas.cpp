@@ -3,6 +3,7 @@
 #include "../../math/AABB.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace Engine::Renderer {
 
@@ -19,25 +20,63 @@ ShadowAtlas::~ShadowAtlas() {
     shutdown();
 }
 
-bool ShadowAtlas::initialize() {
+bool ShadowAtlas::initialize(CatEngine::RHI::IRHIDevice* device, uint32_t atlasSize) {
     if (m_initialized) {
         return true;
     }
 
-    // Create atlas texture
-    // In a real implementation, this would create the depth texture using RHI
-    // Pseudo-code:
-    //
-    // TextureDesc desc;
-    // desc.type = TextureType::Texture2D;
-    // desc.format = TextureFormat::D32_SFLOAT; // or D24_UNORM_S8_UINT
-    // desc.usage = TextureUsage::DepthStencil | TextureUsage::Sampled;
-    // desc.width = m_atlasWidth;
-    // desc.height = m_atlasHeight;
-    // desc.mipLevels = 1;
-    // desc.sampleCount = 1;
-    // desc.debugName = "Shadow Atlas";
-    // m_atlasTexture = RHI::CreateTexture(desc);
+    if (!device) {
+        std::cout << "[ShadowAtlas] initialize() failed: null RHI device\n";
+        return false;
+    }
+
+    // Override atlas dimensions with the caller-provided square size so that
+    // callers that construct the atlas with default dimensions can still size
+    // the GPU texture at initialize time.
+    m_device = device;
+    m_atlasWidth = atlasSize;
+    m_atlasHeight = atlasSize;
+
+    // Create the depth atlas texture. It needs DepthStencil (rendered into),
+    // Sampled (read by lighting shaders), and TransferDst (so it can be cleared
+    // outside of a render pass if the backend promotes clears to transfers).
+    CatEngine::RHI::TextureDesc desc;
+    desc.type = CatEngine::RHI::TextureType::Texture2D;
+    desc.format = CatEngine::RHI::TextureFormat::D32_SFLOAT;
+    desc.usage = CatEngine::RHI::TextureUsage::DepthStencil
+               | CatEngine::RHI::TextureUsage::Sampled
+               | CatEngine::RHI::TextureUsage::TransferDst;
+    desc.width = m_atlasWidth;
+    desc.height = m_atlasHeight;
+    desc.depth = 1;
+    desc.mipLevels = 1;
+    desc.arrayLayers = 1;
+    desc.sampleCount = 1;
+    desc.debugName = "ShadowAtlas";
+
+    m_atlasTexture = m_device->CreateTexture(desc);
+    if (!m_atlasTexture) {
+        std::cout << "[ShadowAtlas] Failed to create atlas texture\n";
+        m_device = nullptr;
+        return false;
+    }
+
+    // Matching whole-image view; format Undefined tells the RHI to inherit the
+    // texture's format. mipLevelCount/arrayLayerCount of 0 => all remaining.
+    m_atlasTextureView = m_device->CreateTextureView(
+        m_atlasTexture,
+        CatEngine::RHI::TextureFormat::Undefined,
+        0, 0, 0, 0
+    );
+    if (!m_atlasTextureView) {
+        std::cout << "[ShadowAtlas] Failed to create atlas texture view\n";
+        m_device->DestroyTexture(m_atlasTexture);
+        m_atlasTexture = nullptr;
+        m_device = nullptr;
+        return false;
+    }
+
+    std::cout << "[ShadowAtlas] Created atlas " << m_atlasWidth << "x" << m_atlasHeight << "\n";
 
     m_initialized = true;
     return true;
@@ -45,7 +84,19 @@ bool ShadowAtlas::initialize() {
 
 void ShadowAtlas::shutdown() {
     clear();
+
+    if (m_device) {
+        if (m_atlasTextureView) {
+            m_device->DestroyTextureView(m_atlasTextureView);
+        }
+        if (m_atlasTexture) {
+            m_device->DestroyTexture(m_atlasTexture);
+        }
+    }
+
+    m_atlasTextureView = nullptr;
     m_atlasTexture = nullptr;
+    m_device = nullptr;
     m_initialized = false;
 }
 
@@ -286,23 +337,71 @@ void ShadowAtlas::updateCascadedShadowMatrices(
         return;
     }
 
-    // Compute cascade splits
-    // Extract near/far from projection matrix (simplified)
-    float nearPlane = 0.1f;  // Would extract from projection matrix
+    // Extract near/far from a standard Vulkan-style perspective projection matrix
+    // (column-major, depth range [0,1], reverse-Z not assumed).
+    // For P = perspective(fov, aspect, n, f):
+    //   P[2][2] = f / (n - f)        -> A
+    //   P[3][2] = (n * f) / (n - f)  -> B
+    //   n = B / A
+    //   f = B / (A + 1)
+    // Fall back to sane scene defaults if the projection looks degenerate
+    // (e.g. an ortho matrix was passed instead).
+    float nearPlane = 0.1f;
     float farPlane = 1000.0f;
+    {
+        float A = projectionMatrix[2][2];
+        float B = projectionMatrix[3][2];
+        if (A < 0.0f && B != 0.0f) {
+            float extractedNear = B / A;
+            float extractedFar = B / (A + 1.0f);
+            if (extractedNear > 0.0f && extractedFar > extractedNear) {
+                nearPlane = extractedNear;
+                farPlane = extractedFar;
+            }
+        }
+    }
 
     computeCascadeSplits(nearPlane, farPlane, light.cascadeSplitLambda, cascaded->cascadeSplits);
 
-    // For each cascade, compute light space matrix
+    // Inverse of view*proj transforms NDC-cube corners back into world space.
+    // This is the canonical way to get the camera frustum corners for CSM.
+    mat4 invViewProj = (projectionMatrix * viewMatrix).inverse();
+
+    const vec3 ndcCorners[8] = {
+        vec3(-1.0f, -1.0f, 0.0f), vec3(1.0f, -1.0f, 0.0f),
+        vec3(-1.0f,  1.0f, 0.0f), vec3(1.0f,  1.0f, 0.0f),
+        vec3(-1.0f, -1.0f, 1.0f), vec3(1.0f, -1.0f, 1.0f),
+        vec3(-1.0f,  1.0f, 1.0f), vec3(1.0f,  1.0f, 1.0f)
+    };
+
+    vec3 worldCorners[8];
+    for (uint32_t i = 0; i < 8; ++i) {
+        worldCorners[i] = invViewProj.transformPoint(ndcCorners[i]);
+    }
+
+    // For each cascade, build an AABB around the slice of the frustum between
+    // cascadeNear and cascadeFar along the camera's view direction, then fit
+    // an orthographic light matrix to those bounds.
+    float range = farPlane - nearPlane;
     for (uint32_t i = 0; i < 4; ++i) {
         float cascadeNear = (i == 0) ? nearPlane : cascaded->cascadeSplits[i - 1];
         float cascadeFar = cascaded->cascadeSplits[i];
 
-        // Build frustum for this cascade
-        // Compute scene bounds visible in this cascade
-        AABB sceneBounds; // Would compute from frustum corners
+        // Normalised [0,1] positions of this cascade's near/far inside the
+        // camera frustum; used to linearly interpolate between the world-space
+        // near-face and far-face corners of the full frustum.
+        float tNear = (cascadeNear - nearPlane) / range;
+        float tFar = (cascadeFar - nearPlane) / range;
 
-        // Build orthographic shadow matrix
+        AABB sceneBounds;
+        for (uint32_t c = 0; c < 4; ++c) {
+            const vec3& nearCorner = worldCorners[c];        // NDC z=0 corners
+            const vec3& farCorner = worldCorners[c + 4];     // NDC z=1 corners
+            vec3 dir = farCorner - nearCorner;
+            sceneBounds.expand(nearCorner + dir * tNear);
+            sceneBounds.expand(nearCorner + dir * tFar);
+        }
+
         cascaded->cascadeMatrices[i] = buildOrthographicShadowMatrix(
             light.direction,
             sceneBounds
@@ -366,17 +465,34 @@ std::array<mat4, 6> ShadowAtlas::updatePointLightShadowMatrices(
     return matrices;
 }
 
-void ShadowAtlas::clearRegion(const ShadowRegion& region) {
-    // In a real implementation, this would clear the depth texture region
-    // Pseudo-code:
-    // commandBuffer->ClearDepthStencil(m_atlasTexture, region.x, region.y, region.width, region.height, 1.0f, 0);
+void ShadowAtlas::clearRegion(const ShadowRegion& region, CatEngine::RHI::IRHICommandBuffer* cmd) {
+    if (!cmd) {
+        return;
+    }
+
+    CatEngine::RHI::ClearDepthStencilValue clearValue;
+    clearValue.depth = 1.0f;
+    clearValue.stencil = 0;
+
+    CatEngine::RHI::Rect2D rect;
+    rect.x = static_cast<int32_t>(region.x);
+    rect.y = static_cast<int32_t>(region.y);
+    rect.width = region.width;
+    rect.height = region.height;
+
+    cmd->ClearDepthStencilAttachment(clearValue, rect);
 }
 
-void ShadowAtlas::clearUnusedRegions() {
-    // Clear all inactive regions
+void ShadowAtlas::clearUnusedRegions(CatEngine::RHI::IRHICommandBuffer* cmd) {
+    if (!cmd) {
+        return;
+    }
+
+    // Clear all inactive regions so stale shadow data cannot leak into the next
+    // frame when their atlas slots get reallocated to new lights.
     for (const auto& alloc : m_allocations) {
         if (!alloc.active) {
-            clearRegion(alloc.region);
+            clearRegion(alloc.region, cmd);
         }
     }
 }
