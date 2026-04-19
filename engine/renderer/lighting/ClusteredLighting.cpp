@@ -1,10 +1,13 @@
 #include "ClusteredLighting.hpp"
 #include "../../math/Math.hpp"
 #include "../../rhi/RHI.hpp"
+#include "../../rhi/vulkan/VulkanCommandBuffer.hpp"
+#include "../../rhi/vulkan/VulkanBuffer.hpp"
 #include <cmath>
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <vulkan/vulkan.h>
 
 namespace Engine::Renderer {
 
@@ -88,13 +91,33 @@ bool ClusteredLighting::initialize(
 
     // If external buffers were supplied up front, wire them into the descriptor
     // set now so the first dispatch sees a fully-populated binding table.
+    //
+    // Bindings MUST match shaders/lighting/clustered.comp exactly:
+    //   (set=0, binding=0) uniform  CameraData         -> m_cameraUBO
+    //   (set=0, binding=1) uniform  LightData          -> m_lightsSSBO (UBO)
+    //   (set=0, binding=2) buffer   ClusterLightIndices-> m_lightIndexListBuffer
+    //   (set=0, binding=3) buffer   ClusterLightGrid   -> m_lightGridBuffer
+    //   (set=0, binding=4) buffer   AtomicCounter      -> m_atomicCounterBuffer
+    //
+    // Note: binding 1 is declared `uniform LightData` in GLSL, i.e. a UBO, not
+    // a storage buffer. The external `m_lightsSSBO` name is historical — the
+    // buffer itself is bound as a uniform buffer descriptor here. The caller
+    // (LightManager) is responsible for creating it with BufferUsage::Uniform.
+    //
+    // The old code also wrote an m_clusterBuffer (cluster AABBs) into
+    // binding 2. That binding is actually clusterLightIndices in the shader,
+    // and the shader recomputes AABBs inline (see calculateClusterAABB) — so
+    // the AABB buffer had no consumer at all. It has been removed entirely.
     if (m_descriptorSet != nullptr) {
         CatEngine::RHI::DescriptorBufferInfo cameraInfo{};
         CatEngine::RHI::DescriptorBufferInfo lightsInfo{};
-        CatEngine::RHI::DescriptorBufferInfo clusterInfo{};
-        CatEngine::RHI::DescriptorBufferInfo gridInfo{};
         CatEngine::RHI::DescriptorBufferInfo indexInfo{};
+        CatEngine::RHI::DescriptorBufferInfo gridInfo{};
+        CatEngine::RHI::DescriptorBufferInfo atomicInfo{};
 
+        // Fallback to our own params buffer if no external camera UBO was
+        // supplied — keeps the descriptor set valid even in headless tests
+        // that never wire a camera.
         cameraInfo.buffer = m_cameraUBO != nullptr ? m_cameraUBO : m_clusterParamsBuffer;
         cameraInfo.offset = 0;
         cameraInfo.range = 0;
@@ -103,17 +126,17 @@ bool ClusteredLighting::initialize(
         lightsInfo.offset = 0;
         lightsInfo.range = 0;
 
-        clusterInfo.buffer = m_clusterBuffer;
-        clusterInfo.offset = 0;
-        clusterInfo.range = 0;
+        indexInfo.buffer = m_lightIndexListBuffer;
+        indexInfo.offset = 0;
+        indexInfo.range = 0;
 
         gridInfo.buffer = m_lightGridBuffer;
         gridInfo.offset = 0;
         gridInfo.range = 0;
 
-        indexInfo.buffer = m_lightIndexListBuffer;
-        indexInfo.offset = 0;
-        indexInfo.range = 0;
+        atomicInfo.buffer = m_atomicCounterBuffer;
+        atomicInfo.offset = 0;
+        atomicInfo.range = 0;
 
         CatEngine::RHI::WriteDescriptor writes[5]{};
 
@@ -122,15 +145,16 @@ bool ClusteredLighting::initialize(
         writes[0].descriptorCount = 1;
         writes[0].bufferInfo = &cameraInfo;
 
+        // Binding 1 is `uniform LightData` in the shader — must be UB, not SSBO.
         writes[1].binding = 1;
-        writes[1].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        writes[1].descriptorType = CatEngine::RHI::DescriptorType::UniformBuffer;
         writes[1].descriptorCount = 1;
         writes[1].bufferInfo = &lightsInfo;
 
         writes[2].binding = 2;
         writes[2].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
         writes[2].descriptorCount = 1;
-        writes[2].bufferInfo = &clusterInfo;
+        writes[2].bufferInfo = &indexInfo;
 
         writes[3].binding = 3;
         writes[3].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
@@ -140,7 +164,7 @@ bool ClusteredLighting::initialize(
         writes[4].binding = 4;
         writes[4].descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
         writes[4].descriptorCount = 1;
-        writes[4].bufferInfo = &indexInfo;
+        writes[4].bufferInfo = &atomicInfo;
 
         uint32_t writeCount = 0;
         CatEngine::RHI::WriteDescriptor packed[5]{};
@@ -207,10 +231,6 @@ void ClusteredLighting::shutdown() {
             m_device->DestroyBuffer(m_lightIndexListBuffer);
             m_lightIndexListBuffer = nullptr;
         }
-        if (m_clusterBuffer != nullptr) {
-            m_device->DestroyBuffer(m_clusterBuffer);
-            m_clusterBuffer = nullptr;
-        }
     } else {
         // No device available; null out the handles so we don't dangle.
         m_descriptorSet = nullptr;
@@ -223,7 +243,6 @@ void ClusteredLighting::shutdown() {
         m_clusterParamsBuffer = nullptr;
         m_lightGridBuffer = nullptr;
         m_lightIndexListBuffer = nullptr;
-        m_clusterBuffer = nullptr;
     }
 
     m_cameraUBO = nullptr;
@@ -254,14 +273,14 @@ void ClusteredLighting::updateClusters(uint32_t width, uint32_t height, float ne
     }
 }
 
-void ClusteredLighting::updateClusters(
-    CatEngine::RHI::IRHICommandBuffer* commandBuffer,
-    const mat4& viewMatrix,
-    const mat4& projectionMatrix)
-{
-    (void)viewMatrix;
-    (void)projectionMatrix;
-
+void ClusteredLighting::updateClusters(CatEngine::RHI::IRHICommandBuffer* commandBuffer) {
+    // Note: view/projection are deliberately NOT parameters. The compute
+    // shader (shaders/lighting/clustered.comp) reads camera.view and
+    // camera.projection directly from the CameraData UBO bound at
+    // (set=0, binding=0) — see m_cameraUBO. That UBO is owned and refreshed
+    // externally by the renderer each frame before this dispatch runs.
+    // Accepting redundant matrices here would invite callers to pass stale
+    // data that diverges from the UBO the shader is actually reading.
     if (commandBuffer == nullptr) {
         std::cerr << "[ClusteredLighting] updateClusters: null command buffer" << std::endl;
         return;
@@ -296,9 +315,62 @@ void ClusteredLighting::updateClusters(
     const uint32_t groupsZ = (CLUSTER_GRID_Z + LOCAL_SIZE_Z - 1) / LOCAL_SIZE_Z;
     commandBuffer->Dispatch(groupsX, groupsY, groupsZ);
 
-    // Storage-buffer write -> shader-read barrier so the lighting pass can
-    // safely read the cluster grid and light index list we just populated.
-    commandBuffer->PipelineBarrier();
+    // Post-dispatch barrier: the compute shader just wrote three SSBOs
+    // (lightGrid, lightIndexList, atomicCounter) via atomicAdd + stores.
+    // The lighting fragment shader that reads them next frame/pass must
+    // happen-after those writes.
+    //
+    // The base IRHICommandBuffer::PipelineBarrier() is a wildcard
+    // ALL_COMMANDS->ALL_COMMANDS memory barrier which is both unnecessarily
+    // slow and semantically vague — replace it with a tight buffer memory
+    // barrier addressed at the three buffers we actually touched:
+    //   src stage:  COMPUTE_SHADER         (compute wrote the SSBOs)
+    //   src access: SHADER_WRITE           (atomicAdd + .data[i] = ...)
+    //   dst stage:  FRAGMENT_SHADER        (lighting pass samples them)
+    //   dst access: SHADER_READ            (read-only in the fragment pass)
+    //
+    // Using VulkanCommandBuffer::PipelineBarrierFull (the Vulkan-side
+    // extension on our RHI cmdbuf) to get access to buffer barriers
+    // specifically rather than the generic memory-barrier shortcut.
+    auto* vulkanCmd = static_cast<CatEngine::RHI::VulkanCommandBuffer*>(commandBuffer);
+
+    VkBufferMemoryBarrier bufferBarriers[3]{};
+    uint32_t barrierCount = 0;
+
+    auto addBufferBarrier = [&](CatEngine::RHI::IRHIBuffer* buffer) {
+        if (buffer == nullptr) {
+            return;
+        }
+        auto* vulkanBuffer = static_cast<CatEngine::RHI::VulkanBuffer*>(buffer);
+        VkBuffer handle = vulkanBuffer->GetHandle();
+        if (handle == VK_NULL_HANDLE) {
+            return;
+        }
+        VkBufferMemoryBarrier& b = bufferBarriers[barrierCount++];
+        b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.buffer = handle;
+        b.offset = 0;
+        b.size = VK_WHOLE_SIZE;
+    };
+
+    addBufferBarrier(m_lightGridBuffer);
+    addBufferBarrier(m_lightIndexListBuffer);
+    addBufferBarrier(m_atomicCounterBuffer);
+
+    if (barrierCount > 0) {
+        vulkanCmd->PipelineBarrierFull(
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            /*dependencyFlags=*/0,
+            /*memoryBarriers=*/nullptr, /*memoryBarrierCount=*/0,
+            bufferBarriers, barrierCount,
+            /*imageBarriers=*/nullptr, /*imageBarrierCount=*/0
+        );
+    }
 }
 
 void ClusteredLighting::buildClusterGrid(const mat4& inverseProjection) {
@@ -383,17 +455,19 @@ void ClusteredLighting::buildClusterGrid(const mat4& inverseProjection) {
     m_clustersDirty = false;
 }
 
-void ClusteredLighting::assignLightsToClusters(
-    CatEngine::RHI::IRHICommandBuffer* commandBuffer,
-    const LightManager& lightManager,
-    const mat4& viewMatrix,
-    const mat4& projectionMatrix)
-{
-    (void)lightManager;
+void ClusteredLighting::assignLightsToClusters(CatEngine::RHI::IRHICommandBuffer* commandBuffer) {
     // Delegate to the compute-dispatch overload. The LightManager's GPU buffer
-    // is wired into the descriptor set at set=0 binding=1 at initialize() time,
-    // and the camera UBO is updated externally by the renderer each frame.
-    updateClusters(commandBuffer, viewMatrix, projectionMatrix);
+    // is wired into the descriptor set at set=0 binding=1 at initialize() time;
+    // the caller is responsible for having already called
+    // LightManager::uploadToGPU() for the current frame. The camera UBO is
+    // likewise updated externally by the renderer each frame.
+    //
+    // The old signature accepted LightManager + view + projection and ignored
+    // them all (forwarded to updateClusters which also ignored the matrices).
+    // Keeping those parameters just let callers pass stale data with no
+    // enforcement that it matched what the shader was actually reading, so
+    // they have been removed rather than rubber-stamped with (void) casts.
+    updateClusters(commandBuffer);
 }
 
 uint32_t ClusteredLighting::getClusterFromScreenSpace(const vec2& screenPos, float linearDepth) const {
@@ -479,19 +553,12 @@ bool ClusteredLighting::createBuffers() {
         return false;
     }
 
-    // --- Cluster buffer (AABB data for 16*9*24 = 3456 clusters) -----------
-    {
-        CatEngine::RHI::BufferDesc desc{};
-        desc.size = static_cast<uint64_t>(TOTAL_CLUSTERS) * sizeof(GPUCluster);
-        desc.usage = CatEngine::RHI::BufferUsage::Storage | CatEngine::RHI::BufferUsage::TransferDst;
-        desc.memoryProperties = CatEngine::RHI::MemoryProperty::DeviceLocal;
-        desc.debugName = "ClusteredLighting::clusterBuffer";
-        m_clusterBuffer = m_device->CreateBuffer(desc);
-        if (m_clusterBuffer == nullptr) {
-            std::cerr << "[ClusteredLighting] CreateBuffer(cluster) failed" << std::endl;
-            return false;
-        }
-    }
+    // NOTE: there is no m_clusterBuffer (cluster AABB buffer) any more.
+    // clustered.comp recomputes cluster AABBs inline per workgroup in
+    // calculateClusterAABB() using camera.nearPlane/farPlane + the inverse
+    // projection. The old m_clusterBuffer was never consumed by any shader
+    // and was incorrectly aliased to binding 2 (clusterLightIndices), which
+    // corrupted the flat light index list at dispatch time. Removed.
 
     // --- Light index list buffer (flat uint32 array, worst-case sized) ----
     {
@@ -588,12 +655,17 @@ bool ClusteredLighting::createComputePipeline() {
         }
     }
 
-    // 3) Descriptor set layout: matches clustered.comp bindings.
-    //    binding 0: camera UBO
-    //    binding 1: lights SSBO
-    //    binding 2: cluster SSBO (AABB data)
-    //    binding 3: light grid SSBO
-    //    binding 4: light index list SSBO
+    // 3) Descriptor set layout: MUST match clustered.comp byte-for-byte.
+    //    binding 0: uniform  CameraData          (UBO)
+    //    binding 1: uniform  LightData           (UBO — *not* storage!)
+    //    binding 2: buffer   ClusterLightIndices (SSBO, flat uint index list)
+    //    binding 3: buffer   ClusterLightGrid    (SSBO, uvec2 offset+count)
+    //    binding 4: buffer   AtomicCounter       (SSBO, single uint head)
+    //
+    // Previously binding 1 was declared as StorageBuffer here, which would
+    // cause a validation-layer type-mismatch at BindDescriptorSets time and
+    // undefined behaviour at dispatch. clustered.comp uses `uniform LightData`
+    // so it must be bound as UniformBuffer.
     {
         CatEngine::RHI::DescriptorSetLayoutDesc desc{};
         desc.debugName = "ClusteredLighting::descriptorSetLayout";
@@ -608,7 +680,7 @@ bool ClusteredLighting::createComputePipeline() {
         desc.bindings.push_back(b);
 
         b.binding = 1;
-        b.descriptorType = CatEngine::RHI::DescriptorType::StorageBuffer;
+        b.descriptorType = CatEngine::RHI::DescriptorType::UniformBuffer;
         b.descriptorCount = 1;
         b.stageFlags = CatEngine::RHI::ShaderStage::Compute;
         desc.bindings.push_back(b);
@@ -719,10 +791,13 @@ void ClusteredLighting::updateClusterParams() {
 }
 
 void ClusteredLighting::uploadClusterData() {
-    if (m_clusterBuffer && !m_gpuClusters.empty()) {
-        size_t dataSize = m_gpuClusters.size() * sizeof(GPUCluster);
-        m_clusterBuffer->UpdateData(m_gpuClusters.data(), dataSize, 0);
-    }
+    // Intentionally empty on the GPU path. m_gpuClusters is kept on the CPU
+    // only — the CPU-side buildClusterGrid() helper is still useful for
+    // debug visualisation and for getClusterFromScreenSpace(), but the
+    // compute shader (clustered.comp) recomputes AABBs per workgroup from
+    // camera params and does not read a pre-populated AABB buffer. The
+    // previous implementation uploaded to m_clusterBuffer, which has been
+    // removed (see createBuffers).
 }
 
 } // namespace Engine::Renderer

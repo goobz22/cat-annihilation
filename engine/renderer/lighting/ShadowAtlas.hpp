@@ -226,12 +226,18 @@ public:
     );
 
     /**
-     * Update shadow matrix for a spot light
-     * @param region Shadow region
+     * Update shadow matrix for a spot light.
+     *
+     * Returns a world -> light clip-space matrix only. Atlas tile placement
+     * (which sub-rectangle of the physical atlas texture this light writes
+     * to / samples from) is handled separately via the ShadowRegion's uv
+     * offset/scale applied at sample time; embedding it here would
+     * double-apply the transform and corrupt filtering.
+     *
      * @param light Spot light
-     * @return Light space matrix for shadow rendering
+     * @return Light-space matrix for shadow rendering
      */
-    mat4 updateSpotLightShadowMatrix(ShadowRegion& region, const SpotLight& light);
+    mat4 updateSpotLightShadowMatrix(const SpotLight& light);
 
     /**
      * Update shadow matrices for a point light (6 faces)

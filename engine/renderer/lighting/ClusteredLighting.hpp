@@ -136,15 +136,15 @@ public:
      * cluster, and inserts a pipeline barrier so subsequent lighting passes see
      * the populated cluster grid and light index list.
      *
+     * Note: no view/projection parameters. The compute shader reads camera
+     * matrices from the CameraData UBO bound at (set=0, binding=0), which is
+     * owned and refreshed externally by the renderer each frame before this
+     * dispatch runs. Passing matrices in here would invite callers to hand
+     * in stale data that diverges from what the shader actually reads.
+     *
      * @param commandBuffer RHI command buffer in a recording state
-     * @param viewMatrix View matrix for the current frame (reserved)
-     * @param projectionMatrix Projection matrix for the current frame (reserved)
      */
-    void updateClusters(
-        CatEngine::RHI::IRHICommandBuffer* commandBuffer,
-        const mat4& viewMatrix,
-        const mat4& projectionMatrix
-    );
+    void updateClusters(CatEngine::RHI::IRHICommandBuffer* commandBuffer);
 
     /**
      * Build cluster grid in view space (CPU-side)
@@ -153,18 +153,14 @@ public:
     void buildClusterGrid(const mat4& inverseProjection);
 
     /**
-     * Assign lights to clusters (GPU compute shader)
+     * Assign lights to clusters (GPU compute shader). The light SSBO is
+     * wired into the descriptor set at initialize() time; the caller is
+     * responsible for having already pushed fresh light data through
+     * LightManager::uploadToGPU() for the current frame.
+     *
      * @param commandBuffer RHI command buffer for dispatching compute
-     * @param lightManager Light manager containing active lights
-     * @param viewMatrix Camera view matrix
-     * @param projectionMatrix Camera projection matrix
      */
-    void assignLightsToClusters(
-        CatEngine::RHI::IRHICommandBuffer* commandBuffer,
-        const LightManager& lightManager,
-        const mat4& viewMatrix,
-        const mat4& projectionMatrix
-    );
+    void assignLightsToClusters(CatEngine::RHI::IRHICommandBuffer* commandBuffer);
 
     /**
      * Get cluster index from 3D grid coordinates
@@ -201,12 +197,10 @@ public:
     // ========================================================================
 
     /**
-     * Get cluster buffer (contains cluster bounds and light counts/offsets)
-     */
-    CatEngine::RHI::IRHIBuffer* getClusterBuffer() const { return m_clusterBuffer; }
-
-    /**
      * Get light index list buffer (contains concatenated light indices for all clusters)
+     *
+     * Note: there is no getClusterBuffer() — clustered.comp recomputes cluster
+     * AABBs inline each dispatch, so no separate AABB buffer is uploaded.
      */
     CatEngine::RHI::IRHIBuffer* getLightIndexListBuffer() const { return m_lightIndexListBuffer; }
 
@@ -300,11 +294,14 @@ private:
     CatEngine::RHI::IRHIBuffer* m_lightsSSBO = nullptr;
 
     // GPU resources (owned)
-    CatEngine::RHI::IRHIBuffer* m_clusterBuffer = nullptr;         // Cluster data buffer (GPUCluster[])
-    CatEngine::RHI::IRHIBuffer* m_lightIndexListBuffer = nullptr;  // Flat light index list
-    CatEngine::RHI::IRHIBuffer* m_lightGridBuffer = nullptr;       // Per-cluster uvec2(offset, count)
-    CatEngine::RHI::IRHIBuffer* m_clusterParamsBuffer = nullptr;   // Cluster parameters UBO
-    CatEngine::RHI::IRHIBuffer* m_atomicCounterBuffer = nullptr;   // Atomic counter for light assignment
+    // Note: no m_clusterBuffer (AABB data) — clustered.comp calculates
+    // cluster AABBs inline per workgroup, so there is no GPU-side AABB
+    // buffer to maintain. m_gpuClusters (CPU-side) is still populated for
+    // debug/testing consumers but never uploaded.
+    CatEngine::RHI::IRHIBuffer* m_lightIndexListBuffer = nullptr;  // Flat light index list (set=0, binding=2)
+    CatEngine::RHI::IRHIBuffer* m_lightGridBuffer = nullptr;       // Per-cluster uvec2(offset, count) (set=0, binding=3)
+    CatEngine::RHI::IRHIBuffer* m_clusterParamsBuffer = nullptr;   // Cluster parameters UBO (fallback for binding 0)
+    CatEngine::RHI::IRHIBuffer* m_atomicCounterBuffer = nullptr;   // Atomic counter for light assignment (set=0, binding=4)
 
     // Compute pipeline (owned)
     CatEngine::RHI::IRHIShader* m_computeShader = nullptr;

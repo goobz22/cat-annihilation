@@ -337,23 +337,34 @@ void ShadowAtlas::updateCascadedShadowMatrices(
         return;
     }
 
-    // Extract near/far from a standard Vulkan-style perspective projection matrix
-    // (column-major, depth range [0,1], reverse-Z not assumed).
-    // For P = perspective(fov, aspect, n, f):
-    //   P[2][2] = f / (n - f)        -> A
-    //   P[3][2] = (n * f) / (n - f)  -> B
-    //   n = B / A
-    //   f = B / (A + 1)
+    // Extract near/far from the engine's standard perspective projection.
+    //
+    // Convention: CatEngine's Matrix.hpp::perspective() builds an OpenGL-style
+    // RH projection — clip-space depth in [-1, +1], with:
+    //     A = P[2][2] = -(f + n) / (f - n)
+    //     B = P[3][2] = -2fn     / (f - n)
+    // Solving for n and f in terms of A and B:
+    //     n = B / (A - 1)
+    //     f = B / (A + 1)
+    // A previous version of this code used Vulkan depth-[0,1] formulas
+    // (n = B / A, f = B / (A+1)), which silently produced wrong cascade
+    // splits whenever the caller passed the engine-built projection.
+    //
     // Fall back to sane scene defaults if the projection looks degenerate
-    // (e.g. an ortho matrix was passed instead).
+    // (e.g. an ortho matrix or an infinite-far perspective was passed, in
+    // which case the (A-1) / (A+1) denominators aren't meaningful).
     float nearPlane = 0.1f;
     float farPlane = 1000.0f;
     {
-        float A = projectionMatrix[2][2];
-        float B = projectionMatrix[3][2];
-        if (A < 0.0f && B != 0.0f) {
-            float extractedNear = B / A;
-            float extractedFar = B / (A + 1.0f);
+        const float A = projectionMatrix[2][2];
+        const float B = projectionMatrix[3][2];
+        const float denomNear = A - 1.0f;
+        const float denomFar  = A + 1.0f;
+        const float kEps = 1e-6f;
+        if (A < 0.0f && B < 0.0f &&
+            std::abs(denomNear) > kEps && std::abs(denomFar) > kEps) {
+            const float extractedNear = B / denomNear;
+            const float extractedFar  = B / denomFar;
             if (extractedNear > 0.0f && extractedFar > extractedNear) {
                 nearPlane = extractedNear;
                 farPlane = extractedFar;
@@ -409,8 +420,13 @@ void ShadowAtlas::updateCascadedShadowMatrices(
     }
 }
 
-mat4 ShadowAtlas::updateSpotLightShadowMatrix(ShadowRegion& region, const SpotLight& light) {
-    // Build perspective projection for spot light shadow
+mat4 ShadowAtlas::updateSpotLightShadowMatrix(const SpotLight& light) {
+    // Build a world -> light clip-space matrix for the spot light. The
+    // returned matrix does NOT encode any atlas tile offset — atlas tile
+    // remapping (shadow UV -> sub-rect inside the atlas texture) is applied
+    // downstream at sample time using the ShadowRegion's uv offset/scale.
+    // Mixing tile-offset math into this matrix would double-apply that
+    // transform and break filtering, so the region parameter was removed.
     float fov = light.outerAngle * 2.0f;
     float nearPlane = 0.1f;
     float farPlane = light.radius;

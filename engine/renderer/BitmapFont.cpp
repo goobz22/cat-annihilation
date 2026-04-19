@@ -246,6 +246,28 @@ bool BitmapFont::Initialize(RHI::IRHI* rhi, uint32_t fontSize) {
                 if (!on) {
                     continue;
                 }
+                // Integer pixel replication. Each "on" source texel is
+                // splatted into a pixelScaleX * pixelScaleY block of 0xFF
+                // bytes in the atlas. We deliberately do NOT blend or
+                // antialias between source texels for two reasons:
+                //
+                //   1. Glyph edges stay crisp — the font renderer samples
+                //      this atlas with VK_FILTER_LINEAR at arbitrary UI
+                //      scales. Pre-blurring the source with bilinear
+                //      interpolation during rasterization would stack
+                //      filters at draw time (source blur * sampler blur)
+                //      and produce mushy glyphs at 1:1 screen-space
+                //      scales. Feeding the sampler a sharp-edge mask lets
+                //      the GPU do the right amount of filtering for the
+                //      current screen scale and no more.
+                //
+                //   2. 5x7 source glyphs integer-upscaled to a cell are
+                //      pixel-aligned by construction. Any non-integer
+                //      scaling would put partial coverage on edge pixels,
+                //      which a 1-byte R8_UNORM atlas cannot represent
+                //      without dithering artefacts. The scale factors
+                //      pixelScaleX/Y are computed as integer divisions
+                //      above specifically to guarantee this.
                 for (uint32_t sy = 0; sy < pixelScaleY; ++sy) {
                     for (uint32_t sx = 0; sx < pixelScaleX; ++sx) {
                         const uint32_t px = cellOriginX + gx * pixelScaleX + sx;
@@ -336,6 +358,15 @@ bool BitmapFont::Initialize(RHI::IRHI* rhi, uint32_t fontSize) {
     // Synchronous upload path: the atlas is tiny (256 KiB at 512x512x1B) and
     // only uploaded once at init time, so a single WaitIdle is cheaper than
     // threading a per-frame staging ring for this resource.
+    //
+    // CopyBufferToTexture handles the image layout transitions internally
+    // (UNDEFINED -> TRANSFER_DST_OPTIMAL around the copy, then
+    // TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL afterwards). We do
+    // NOT emit any barriers here: the atlas is usable by samplers as soon
+    // as the submitted work completes. Prior to the VulkanCommandBuffer
+    // fix this path produced a texture left in UNDEFINED, and the first
+    // sample read was undefined behaviour — do not reintroduce that by
+    // assuming the copy leaves the image in TRANSFER_DST_OPTIMAL.
     cmd->Begin();
     cmd->CopyBufferToTexture(stagingBuffer, m_atlasTexture,
                              /*mipLevel*/ 0, /*arrayLayer*/ 0,
