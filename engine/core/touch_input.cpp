@@ -38,9 +38,19 @@ void TouchInput::initialize() {
         return;
     }
 
-    // Check for native touch support
-    // Note: GLFW doesn't have direct touch support yet, so we simulate with mouse
-    m_hasTouchSupport = false;
+    // GLFW 3.x has no cross-platform touch API — multi-touch on Windows
+    // requires WM_TOUCH wiring, on Linux it requires libinput, and on mobile
+    // it requires the platform's native GLFW port. Rather than return
+    // "hasTouchSupport == false" silently (which made MobileControlsSystem
+    // think touch was universally unavailable even on tablets), we flip
+    // m_hasTouchSupport to true when the simulation shim is hot — from the
+    // rest of the engine's POV there IS a working single-touch stream; it
+    // just happens to be backed by the mouse on desktop builds.
+    //
+    // A future platform TouchInput subclass can override initialize() to
+    // hook real WM_TOUCH / libinput / Android MotionEvent sources and
+    // leave m_simulateTouch = false while still reporting hasTouchSupport.
+    m_hasTouchSupport = true;
     m_simulateTouch = true;
 
     // Set up mouse callbacks for touch simulation

@@ -10,6 +10,7 @@
 #include "../engine/core/Timer.hpp"
 #include "../engine/core/Logger.hpp"
 #include "../engine/core/Config.hpp"
+#include "../engine/assets/AssetManager.hpp"
 #include "../engine/rhi/vulkan/VulkanRHI.hpp"
 #include "../engine/rhi/vulkan/VulkanSwapchain.hpp"
 #include "../engine/rhi/vulkan/VulkanDevice.hpp"
@@ -23,9 +24,11 @@
 #include "config/BalanceConfig.hpp"
 #include "CatAnnihilation.hpp"
 
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <cstdlib>
 
 // Command line argument parsing
@@ -94,6 +97,12 @@ int main(int argc, char* argv[]) {
     Engine::Logger::info("===========================================");
     Engine::Logger::info("  CAT ANNIHILATION - Starting Up");
     Engine::Logger::info("===========================================");
+
+    // Bring up the asset manager's loader-thread pool before any system
+    // attempts to load a model or texture. LoadModel/LoadModelAsync both
+    // hard-require an initialized manager — without this call those paths
+    // would throw (async) or hit the cache miss path with no loader (sync).
+    CatEngine::AssetManager::GetInstance().Initialize();
 
     // Load game configuration
     Game::GameConfig gameConfig = Game::GameConfig::getDefault();
@@ -211,11 +220,9 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Initialize CUDA Context
     // ========================================================================
-    std::cout << "[main] Creating CUDA context..." << std::endl;
     std::unique_ptr<CatEngine::CUDA::CudaContext> cudaContext;
     try {
         cudaContext.reset(new CatEngine::CUDA::CudaContext());
-        std::cout << "[main] CUDA context created" << std::endl;
         Engine::Logger::info("CUDA context initialized successfully");
     } catch (const CatEngine::CUDA::CudaException& e) {
         std::cerr << "[main] CUDA initialization failed: " << e.what() << std::endl;
@@ -245,7 +252,12 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Create Cat Annihilation Game Instance
     // ========================================================================
-    auto game = std::make_unique<CatGame::CatAnnihilation>(&input, renderer.get(), audioEngine.get(), &imguiLayer);
+    auto game = std::make_unique<CatGame::CatAnnihilation>(&input, &window, renderer.get(), audioEngine.get(), &imguiLayer);
+    // Wire the config through before initialize() so the menus can bind
+    // their Settings panel to it during initializeUI(). Without this the
+    // Settings dialog's sliders would mutate file-local storage only and
+    // never reach the real audio/video subsystems.
+    game->setGameConfig(&gameConfig);
     if (!game->initialize()) {
         Engine::Logger::error("Failed to initialize Cat Annihilation game");
         return 1;
@@ -269,7 +281,6 @@ int main(int argc, char* argv[]) {
     // Main Game Loop
     // ========================================================================
     Engine::Logger::info("Entering main loop...");
-    std::cout << "[main] About to enter main loop" << std::endl;
 
     CatEngine::Timer timer;
     timer.Start();
@@ -278,27 +289,22 @@ int main(int argc, char* argv[]) {
     uint32_t frameCount = 0;
     float currentFPS = 0.0f;
 
+    using FrameClock = std::chrono::steady_clock;
+    auto nextFrameDeadline = FrameClock::now();
+
     bool running = true;
 
     while (running && !window.shouldClose()) {
-        // Log first few frames for debugging
-        if (frameCount < 5) {
-            std::cout << "[main] Frame " << frameCount << " starting..." << std::endl;
-        }
+        // Frame-pacing anchor: captured before work begins so the optional
+        // sleep at the bottom of the loop targets a stable cadence instead
+        // of drifting with the work duration.
+        const auto frameStart = FrameClock::now();
 
         // Update timer and get delta time
         deltaTime = static_cast<float>(timer.Update());
 
-        if (frameCount < 5) {
-            std::cout << "[main] Frame " << frameCount << " - polling events..." << std::endl;
-        }
-
         // Poll events
         window.pollEvents();
-
-        if (frameCount < 5) {
-            std::cout << "[main] Frame " << frameCount << " - updating input..." << std::endl;
-        }
 
         // Update input
         input.update();
@@ -306,46 +312,15 @@ int main(int argc, char* argv[]) {
         // Start a new ImGui frame so update() can emit widgets via MainMenu etc.
         imguiLayer.BeginFrame();
 
-        if (frameCount < 5) {
-            std::cout << "[main] Frame " << frameCount << " - updating game..." << std::endl;
-        }
-
         // Update game
         game->update(deltaTime);
 
-        if (frameCount < 5) {
-            std::cout << "[main] Frame " << frameCount << " - checking window minimized..." << std::endl;
-        }
-
         // Render
         if (!window.isMinimized()) {
-            if (frameCount < 5) {
-                std::cout << "[main] Frame " << frameCount << " - calling BeginFrame..." << std::endl;
-            }
-
             if (renderer->BeginFrame()) {
-                if (frameCount < 5) {
-                    std::cout << "[main] Frame " << frameCount << " - BeginFrame succeeded, calling game->render()..." << std::endl;
-                }
-
                 // Render game (world, entities, effects)
                 game->render();
-
-                if (frameCount < 5) {
-                    std::cout << "[main] Frame " << frameCount << " - game->render() done, calling EndFrame..." << std::endl;
-                    std::cout.flush();
-                }
-
                 renderer->EndFrame();
-
-                if (frameCount < 5) {
-                    std::cout << "[main] Frame " << frameCount << " - EndFrame done" << std::endl;
-                    std::cout.flush();
-                }
-            } else {
-                if (frameCount < 5) {
-                    std::cout << "[main] Frame " << frameCount << " - BeginFrame returned false" << std::endl;
-                }
             }
         }
 
@@ -357,17 +332,49 @@ int main(int argc, char* argv[]) {
             if (gameConfig.graphics.showFPS) {
                 Engine::Logger::info("FPS: " + std::to_string(static_cast<int>(currentFPS)));
             }
-            std::cout << "[main] FPS: " << static_cast<int>(currentFPS) << std::endl;
             frameCount = 0;
             fpsTimer = 0.0f;
         }
 
-        // The swapchain is created with VSync enabled, so vkQueuePresentKHR
-        // blocks until the next monitor refresh and the main loop is
-        // naturally rate-limited to the display refresh rate. An explicit
-        // CPU-side frame cap is only needed if the swapchain is
-        // reconfigured to IMMEDIATE mode (tearing, uncapped) — wire in a
-        // sleep-to-target-frame-time here when that mode is exposed.
+        // CPU-side frame cap.
+        //
+        // VSync normally pins the cadence via vkQueuePresentKHR blocking on
+        // the compositor. But the settings UI can disable VSync at runtime,
+        // and some Vulkan drivers silently fall back to IMMEDIATE mode when
+        // the requested present mode isn't available — in both cases the
+        // loop would otherwise spin as fast as the CPU can dispatch draws,
+        // burning ~100% of a core. When the user wants an explicit target
+        // (gameConfig.graphics.maxFPS > 0) OR VSync is off, sleep until the
+        // start of the next frame. The default maxFPS=60 fallback applies
+        // only when VSync is disabled and the config doesn't specify one,
+        // so VSync-on users keep their native refresh rate.
+        const bool vsyncActive = gameConfig.graphics.vsync;
+        const uint32_t configuredCap = gameConfig.graphics.maxFPS;
+        const uint32_t targetFPS = (configuredCap > 0)
+            ? configuredCap
+            : (vsyncActive ? 0u : 60u);
+
+        if (targetFPS > 0) {
+            using namespace std::chrono;
+            const auto targetFrameTime =
+                duration_cast<FrameClock::duration>(
+                    duration<double>(1.0 / static_cast<double>(targetFPS)));
+
+            // Advance the deadline from the previous deadline when possible
+            // to avoid jitter accumulation; if we fell far behind (e.g.
+            // stall, debugger break), resync to the current time so we
+            // don't burn the next N frames catching up.
+            nextFrameDeadline += targetFrameTime;
+            const auto now = FrameClock::now();
+            if (nextFrameDeadline < now) {
+                nextFrameDeadline = now + targetFrameTime;
+            }
+            std::this_thread::sleep_until(nextFrameDeadline);
+        } else {
+            // Keep the deadline tracking current time so the first frame
+            // after a toggle-on doesn't try to catch up through history.
+            nextFrameDeadline = frameStart;
+        }
     }
 
     // ========================================================================
@@ -398,6 +405,13 @@ int main(int argc, char* argv[]) {
     rhi.reset();
 
     // CUDA context cleanup happens automatically in destructor
+
+    // Release any cached models/textures and stop the loader thread pool
+    // before main exits. Doing this after the renderer/RHI are already
+    // down is safe because the AssetManager only holds CPU-side data and
+    // the loader tasks are pure-CPU (parsing + uploads are driven by the
+    // renderer, which has already waited on the GPU at this point).
+    CatEngine::AssetManager::GetInstance().Shutdown();
 
     Engine::Logger::info("===========================================");
     Engine::Logger::info("  CAT ANNIHILATION - Shutdown Complete");

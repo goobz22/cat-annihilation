@@ -23,7 +23,11 @@ void Window::initGLFW() {
 }
 
 Window::Window(const Config& config)
-    : m_width(config.width), m_height(config.height) {
+    : m_width(config.width)
+    , m_height(config.height)
+    , m_isFullscreen(config.fullscreen)
+    , m_windowedWidth(config.width)
+    , m_windowedHeight(config.height) {
 
     initGLFW();
 
@@ -85,7 +89,12 @@ Window::Window(Window&& other) noexcept
     , m_resizeCallback(std::move(other.m_resizeCallback))
     , m_minimizeCallback(std::move(other.m_minimizeCallback))
     , m_closeCallback(std::move(other.m_closeCallback))
-    , m_focusCallback(std::move(other.m_focusCallback)) {
+    , m_focusCallback(std::move(other.m_focusCallback))
+    , m_isFullscreen(other.m_isFullscreen)
+    , m_windowedX(other.m_windowedX)
+    , m_windowedY(other.m_windowedY)
+    , m_windowedWidth(other.m_windowedWidth)
+    , m_windowedHeight(other.m_windowedHeight) {
 
     other.m_window = nullptr;
 
@@ -155,6 +164,52 @@ void Window::setSize(u32 width, u32 height) {
     if (m_window) {
         glfwSetWindowSize(m_window, static_cast<int>(width), static_cast<int>(height));
     }
+}
+
+void Window::setFullscreen(bool enable) {
+    if (!m_window || m_isFullscreen == enable) {
+        return;
+    }
+
+    if (enable) {
+        // Snapshot the current windowed geometry before we lose it — GLFW
+        // replaces the window's monitor/size atomically in glfwSetWindowMonitor,
+        // so without caching here we'd have no way to restore the user's
+        // chosen layout when toggling back.
+        int posX = 0;
+        int posY = 0;
+        glfwGetWindowPos(m_window, &posX, &posY);
+        m_windowedX = posX;
+        m_windowedY = posY;
+        m_windowedWidth = m_width;
+        m_windowedHeight = m_height;
+
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        if (monitor == nullptr) {
+            return; // No monitor available — leave the window alone
+        }
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if (mode == nullptr) {
+            return;
+        }
+        // Fullscreen at the desktop's current video mode so we don't force a
+        // refresh-rate change on the user's display.
+        glfwSetWindowMonitor(m_window, monitor, 0, 0,
+                             mode->width, mode->height, mode->refreshRate);
+    } else {
+        // Fall back to sane defaults if we somehow never cached a windowed
+        // geometry (e.g. the window was born fullscreen from command-line
+        // args and setFullscreen(false) is the first toggle we see).
+        const u32 restoreWidth  = m_windowedWidth  > 0 ? m_windowedWidth  : 1280;
+        const u32 restoreHeight = m_windowedHeight > 0 ? m_windowedHeight : 720;
+        glfwSetWindowMonitor(m_window, nullptr,
+                             m_windowedX, m_windowedY,
+                             static_cast<int>(restoreWidth),
+                             static_cast<int>(restoreHeight),
+                             GLFW_DONT_CARE);
+    }
+
+    m_isFullscreen = enable;
 }
 
 void Window::setupCallbacks() {

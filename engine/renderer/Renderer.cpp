@@ -33,14 +33,11 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
 
     this->device = device;
 
-    std::cout << "[Renderer] Creating swapchain..." << std::endl;
     // Create swapchain
     if (!CreateSwapchain()) {
         return false;
     }
-    std::cout << "[Renderer] Swapchain created" << std::endl;
 
-    std::cout << "[Renderer] Creating command buffers..." << std::endl;
     // Create one command buffer per frame in flight
     commandBuffers.resize(config.maxFramesInFlight);
     for (uint32_t i = 0; i < config.maxFramesInFlight; ++i) {
@@ -49,28 +46,20 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
             return false;
         }
     }
-    std::cout << "[Renderer] Created " << config.maxFramesInFlight << " command buffers" << std::endl;
 
-    std::cout << "[Renderer] Creating frame resources..." << std::endl;
     // Create frame resources
     if (!CreateFrameResources()) {
         return false;
     }
-    std::cout << "[Renderer] Frame resources created" << std::endl;
 
-    std::cout << "[Renderer] Creating render graph..." << std::endl;
     // Create default render graph
     defaultRenderGraph = std::make_unique<RenderGraph>(device);
-    std::cout << "[Renderer] Render graph created" << std::endl;
 
-    std::cout << "[Renderer] Creating UI pass..." << std::endl;
     // Create UI pass for 2D rendering
     uiPass = std::make_unique<UIPass>();
     uiPass->Setup(device, this);  // Initialize UIPass with RHI device
     uiPass->OnResize(renderWidth, renderHeight);
-    std::cout << "[Renderer] UI pass created and initialized" << std::endl;
 
-    std::cout << "[Renderer] Creating scene pass..." << std::endl;
     // Create scene pass for 3D rendering (terrain, entities)
     {
         auto* vulkanDevice = static_cast<RHI::VulkanRHI*>(device)->GetDevice();
@@ -81,7 +70,6 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
             return false;
         }
     }
-    std::cout << "[Renderer] Scene pass created" << std::endl;
 
     initialized = true;
     return true;
@@ -132,43 +120,33 @@ void Renderer::Shutdown() {
 // ============================================================================
 
 bool Renderer::BeginFrame() {
-    std::cout << "[Renderer::BeginFrame] Starting..." << std::endl;
-
     if (!initialized || !swapchain) {
-        std::cout << "[Renderer::BeginFrame] Not initialized or no swapchain" << std::endl;
         return false;
     }
 
-    std::cout << "[Renderer::BeginFrame] Acquiring next swapchain image..." << std::endl;
     // Acquire next swapchain image
     // Note: AcquireNextImage handles fence waiting internally, don't duplicate it here
     currentSwapchainImageIndex = swapchain->AcquireNextImage();
     if (currentSwapchainImageIndex == UINT32_MAX) {
-        std::cout << "[Renderer::BeginFrame] Swapchain out of date, recreating..." << std::endl;
         // Swapchain out of date, need to recreate
         RecreateSwapchain();
         return false;
     }
-    std::cout << "[Renderer::BeginFrame] Got swapchain image index: " << currentSwapchainImageIndex << std::endl;
 
-    std::cout << "[Renderer::BeginFrame] Calling device->BeginFrame()..." << std::endl;
     // Begin frame on device
     device->BeginFrame();
 
     // Cycle frame index
     currentFrameIndex = (currentFrameIndex + 1) % config.maxFramesInFlight;
     frameNumber++;
-    std::cout << "[Renderer::BeginFrame] Frame " << frameNumber << ", index " << currentFrameIndex << std::endl;
 
     // Reset statistics
     ResetStatistics();
 
-    std::cout << "[Renderer::BeginFrame] Beginning command buffer recording..." << std::endl;
     // Begin recording command buffer for current frame
     auto* currentCmdBuffer = commandBuffers[currentFrameIndex];
     if (currentCmdBuffer != nullptr) {
         currentCmdBuffer->Begin();
-        std::cout << "[Renderer::BeginFrame] Command buffer Begin() called" << std::endl;
 
         // Get Vulkan command buffer handle
         auto* vulkanCmdBuffer = static_cast<RHI::VulkanCommandBuffer*>(currentCmdBuffer);
@@ -180,9 +158,7 @@ bool Renderer::BeginFrame() {
         // Get the swapchain image
         VkImage swapchainImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
 
-        std::cout << "[Renderer::BeginFrame] vkCmd=" << vkCmd << ", swapchainImage=" << swapchainImage << std::endl;
         if (vkCmd != VK_NULL_HANDLE && swapchainImage != VK_NULL_HANDLE) {
-            std::cout << "[Renderer::BeginFrame] Setting up image transition barrier..." << std::endl;
             // Transition image from undefined to transfer dst for clearing
             VkImageMemoryBarrier barrier = {};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -231,7 +207,6 @@ bool Renderer::BeginFrame() {
                 1,
                 &clearRange
             );
-            std::cout << "[Renderer::BeginFrame] Image cleared" << std::endl;
 
             // Transition to color attachment optimal for rendering
             barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -248,24 +223,17 @@ bool Renderer::BeginFrame() {
                 0, nullptr,
                 1, &barrier
             );
-            std::cout << "[Renderer::BeginFrame] Image transitioned to color attachment" << std::endl;
         }
     }
 
-    std::cout << "[Renderer::BeginFrame] Complete, returning true" << std::endl;
     return true;
 }
 
 void Renderer::EndFrame() {
-    std::cout << "[Renderer::EndFrame] Starting..." << std::endl;
-    std::cout.flush();
-
     if (!initialized) {
-        std::cout << "[Renderer::EndFrame] Not initialized, returning" << std::endl;
         return;
     }
 
-    std::cout << "[Renderer::EndFrame] Getting Vulkan objects..." << std::endl;
     // Get Vulkan swapchain for accessing synchronization primitives
     auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
     auto* currentCmdBuffer = commandBuffers[currentFrameIndex];
@@ -274,11 +242,8 @@ void Renderer::EndFrame() {
     if (currentCmdBuffer != nullptr && vulkanCmdBuffer != nullptr) {
         VkCommandBuffer vkCmd = vulkanCmdBuffer->GetHandle();
         VkImage swapchainImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
-        std::cout << "[Renderer::EndFrame] vkCmd=" << vkCmd << ", swapchainImage=" << swapchainImage << std::endl;
 
         if (vkCmd != VK_NULL_HANDLE && swapchainImage != VK_NULL_HANDLE) {
-            std::cout << "[Renderer::EndFrame] Transitioning to present layout...\n";
-            std::cout.flush();
             // Transition swapchain image to present layout
             VkImageMemoryBarrier barrier = {};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -305,18 +270,13 @@ void Renderer::EndFrame() {
                 1, &barrier
             );
         } else {
-            std::cout << "[Renderer::EndFrame] WARNING: vkCmd or swapchainImage is null!\n";
-            std::cout.flush();
+            std::cerr << "[Renderer::EndFrame] vkCmd or swapchainImage is null" << std::endl;
         }
 
         // End command buffer recording
-        std::cout << "[Renderer::EndFrame] Ending command buffer...\n";
-        std::cout.flush();
         currentCmdBuffer->End();
-        std::cout << "[Renderer::EndFrame] Command buffer ended" << std::endl;
 
         // Submit command buffer with proper synchronization
-        std::cout << "[Renderer::EndFrame] Setting up submit info..." << std::endl;
         VkSubmitInfo submitInfo = {};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -337,7 +297,6 @@ void Renderer::EndFrame() {
         submitInfo.pSignalSemaphores = signalSemaphores;
 
         // Submit to graphics queue with fence
-        std::cout << "[Renderer::EndFrame] Submitting to graphics queue..." << std::endl;
         VkFence inFlightFence = vulkanSwapchain->GetInFlightFence();
         VkResult result = vkQueueSubmit(
             static_cast<RHI::VulkanRHI*>(device)->GetDevice()->GetGraphicsQueue(),
@@ -350,20 +309,15 @@ void Renderer::EndFrame() {
             std::cerr << "[Renderer::EndFrame] Failed to submit command buffer: " << result << std::endl;
             return;
         }
-        std::cout << "[Renderer::EndFrame] Queue submit succeeded" << std::endl;
     }
 
     // Present the swapchain image
-    std::cout << "[Renderer::EndFrame] Presenting swapchain..." << std::endl;
     if (swapchain) {
         swapchain->Present();
-        std::cout << "[Renderer::EndFrame] Present complete" << std::endl;
     }
 
     // End frame on device
-    std::cout << "[Renderer::EndFrame] Calling device->EndFrame()..." << std::endl;
     device->EndFrame();
-    std::cout << "[Renderer::EndFrame] Complete" << std::endl;
 }
 
 // ============================================================================

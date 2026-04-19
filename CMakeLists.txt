@@ -248,6 +248,7 @@ set(ENGINE_RENDERER_SOURCES
     engine/renderer/passes/PostProcessPass.cpp
     engine/renderer/passes/UIPass.cpp
     engine/renderer/passes/ScenePass.cpp
+    engine/renderer/MeshSubmissionSystem.cpp
     engine/renderer/BitmapFont.cpp
     engine/renderer/lighting/LightManager.cpp
     engine/renderer/lighting/ClusteredLighting.cpp

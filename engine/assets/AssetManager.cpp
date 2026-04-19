@@ -37,6 +37,15 @@ void AssetManager::Shutdown() {
 }
 
 std::shared_ptr<Model> AssetManager::LoadModel(const std::string& path) {
+    // Enforce the same "Initialize first" contract as the async path: callers
+    // that forget to bring up the manager used to silently get a half-working
+    // instance that served the cache but could never honor an async request.
+    // Failing loudly here catches the missing Initialize() in the boot
+    // sequence instead of later, at the first LoadModelAsync() call site.
+    if (!initialized) {
+        throw std::runtime_error("AssetManager not initialized");
+    }
+
     // Check cache first
     {
         std::lock_guard<std::mutex> lock(modelMutex);

@@ -2,6 +2,13 @@
 #define ENGINE_CORE_WINDOW_HPP
 
 #include "Types.hpp"
+// Include Vulkan directly rather than relying on GLFW_INCLUDE_VULKAN — the
+// macro only takes effect if no earlier TU has already pulled in
+// <GLFW/glfw3.h>, so the order-dependent behavior breaks any consumer that
+// includes Window.hpp after something that forward-declared GLFW without
+// the Vulkan define. Including vulkan.h explicitly makes VkSurfaceKHR and
+// VkInstance visible regardless of include ordering.
+#include <vulkan/vulkan.h>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <string>
@@ -147,6 +154,21 @@ public:
      */
     void setSize(u32 width, u32 height);
 
+    /**
+     * @brief Toggle between fullscreen and windowed mode
+     *
+     * When entering fullscreen the window snaps to the primary monitor at its
+     * current video mode. When returning to windowed mode we restore the last
+     * windowed size/position captured before the previous fullscreen switch.
+     * @param enable true to switch to fullscreen, false for windowed
+     */
+    void setFullscreen(bool enable);
+
+    /**
+     * @brief Query whether the window is currently in fullscreen mode
+     */
+    bool isFullscreen() const { return m_isFullscreen; }
+
 private:
     /**
      * @brief Initialize GLFW library (called once)
@@ -169,6 +191,15 @@ private:
     u32 m_height = 0;
     bool m_minimized = false;
     bool m_focused = true;
+
+    // Cached windowed-mode geometry so returning from fullscreen lands on the
+    // same size + position the user had before. Updated lazily inside
+    // setFullscreen(true) right before handing the window to the monitor.
+    bool m_isFullscreen = false;
+    int m_windowedX = 0;
+    int m_windowedY = 0;
+    u32 m_windowedWidth = 0;
+    u32 m_windowedHeight = 0;
 
     // Event callbacks
     ResizeCallback m_resizeCallback;
