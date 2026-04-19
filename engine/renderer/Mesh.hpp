@@ -5,6 +5,9 @@
 #include "../rhi/RHITypes.hpp"
 #include <vector>
 #include <cstdint>
+#include <array>
+#include <cmath>
+#include <limits>
 
 namespace CatEngine::Renderer {
 
@@ -326,15 +329,227 @@ public:
     }
 
     /**
-     * Optimize index buffer for vertex cache
-     * Simple linear optimization
+     * Reorder the index buffer to improve post-transform vertex cache hit rate.
+     *
+     * Implements Tom Forsyth's "Linear-Speed Vertex Cache Optimisation" (2006).
+     * Each vertex gets a score derived from its position in a simulated FIFO
+     * cache and its remaining valence (unprocessed triangles using it); each
+     * triangle's score is the sum of its three vertices' scores. We greedily
+     * emit the highest-scoring triangle, push its vertices to the front of
+     * the cache, and repeat until every triangle has been emitted.
+     *
+     * Cache size is 32 entries, which is a good match for the post-transform
+     * caches on modern GPUs (NVIDIA, AMD, Intel, and mobile tilers all sit in
+     * the 16-64 range; 32 is the value Forsyth's paper and meshoptimizer use).
+     *
+     * Operates per-submesh so triangles stay grouped with their material.
+     * Vertex positions are preserved; only the index buffer is permuted.
      */
     void OptimizeIndices() {
-        // Simple optimization: reorder vertices based on first occurrence in index buffer
-        // For production, consider using libraries like meshoptimizer
+        if (indices.empty() || vertices.empty()) {
+            return;
+        }
 
-        // This is a placeholder for a basic optimization
-        // A full implementation would use techniques like the Forsyth algorithm
+        constexpr uint32_t kCacheSize = 32;
+        constexpr uint32_t kInvalid = std::numeric_limits<uint32_t>::max();
+
+        // Forsyth scoring constants (from the reference paper).
+        constexpr float kCacheDecayPower = 1.5f;
+        constexpr float kLastTriScore    = 0.75f;
+        constexpr float kValenceBoostScale = 2.0f;
+        constexpr float kValenceBoostPower = 0.5f;
+
+        auto scoreVertex = [&](int cachePosition, uint32_t remainingValence) -> float {
+            if (remainingValence == 0) {
+                // No remaining triangles use this vertex - don't bother caching it.
+                return -1.0f;
+            }
+
+            float score = 0.0f;
+            if (cachePosition < 0) {
+                // Not in cache.
+                score = 0.0f;
+            } else if (cachePosition < 3) {
+                // The 3 most recent vertices are assumed to be the last-drawn
+                // triangle; give them all the same score so we don't bias
+                // toward re-emitting that same triangle.
+                score = kLastTriScore;
+            } else {
+                // Linear decay from kCacheSize-1 (just entered) to 3 (oldest
+                // non-last-tri slot), then raised to kCacheDecayPower.
+                const float scaler = 1.0f / static_cast<float>(kCacheSize - 3);
+                score = 1.0f - static_cast<float>(cachePosition - 3) * scaler;
+                score = std::pow(score, kCacheDecayPower);
+            }
+
+            // Bonus for vertices with few remaining triangles; they're about
+            // to "die" anyway, so use them up while they're hot in the cache.
+            float valenceBoost = std::pow(static_cast<float>(remainingValence), -kValenceBoostPower);
+            score += kValenceBoostScale * valenceBoost;
+            return score;
+        };
+
+        auto optimizeRange = [&](uint32_t indexOffset, uint32_t indexCount) {
+            if (indexCount < 3) {
+                return;
+            }
+            const uint32_t triangleCount = indexCount / 3;
+
+            // Per-vertex valence (how many active triangles still reference it)
+            // and per-vertex triangle list, both scoped to this submesh range.
+            std::vector<uint32_t> vertexValence(vertices.size(), 0);
+            for (uint32_t i = 0; i < indexCount; ++i) {
+                ++vertexValence[indices[indexOffset + i]];
+            }
+
+            // Build vertex -> triangle adjacency lists (flat CSR-style arrays).
+            std::vector<uint32_t> vertexTriOffset(vertices.size() + 1, 0);
+            for (uint32_t v = 0; v < vertices.size(); ++v) {
+                vertexTriOffset[v + 1] = vertexTriOffset[v] + vertexValence[v];
+            }
+            std::vector<uint32_t> vertexTriangles(indexCount); // one slot per (vertex,triangle) incidence
+            std::vector<uint32_t> writeCursor(vertices.size(), 0);
+            for (uint32_t t = 0; t < triangleCount; ++t) {
+                for (uint32_t c = 0; c < 3; ++c) {
+                    uint32_t v = indices[indexOffset + t * 3 + c];
+                    vertexTriangles[vertexTriOffset[v] + writeCursor[v]++] = t;
+                }
+            }
+
+            // Live state.
+            std::vector<uint32_t> remainingValence = vertexValence;
+            std::vector<int32_t>  vertexCachePosition(vertices.size(), -1);
+            std::vector<float>    vertexScore(vertices.size(), 0.0f);
+            std::vector<bool>     triangleEmitted(triangleCount, false);
+            std::vector<float>    triangleScore(triangleCount, 0.0f);
+
+            // Initial scores.
+            for (uint32_t v = 0; v < vertices.size(); ++v) {
+                if (remainingValence[v] > 0) {
+                    vertexScore[v] = scoreVertex(-1, remainingValence[v]);
+                }
+            }
+            for (uint32_t t = 0; t < triangleCount; ++t) {
+                const uint32_t a = indices[indexOffset + t * 3 + 0];
+                const uint32_t b = indices[indexOffset + t * 3 + 1];
+                const uint32_t c = indices[indexOffset + t * 3 + 2];
+                triangleScore[t] = vertexScore[a] + vertexScore[b] + vertexScore[c];
+            }
+
+            // Cache is modelled as a fixed-size ring; slot 0 is most recent.
+            // We keep 3 sentinel slots past the end so the "evicted" triangle
+            // vertices can be recognized and reset in one pass.
+            std::array<uint32_t, kCacheSize + 3> cache;
+            cache.fill(kInvalid);
+
+            std::vector<uint32_t> optimized;
+            optimized.reserve(indexCount);
+
+            uint32_t emittedCount = 0;
+            while (emittedCount < triangleCount) {
+                // Pick the highest-scoring active triangle. In the steady
+                // state this is found by scanning the small set of triangles
+                // touched by the current cache; if none are active (e.g. on
+                // the very first iteration) we fall back to a linear scan.
+                int32_t bestTriangle = -1;
+                float bestScore = -1.0f;
+
+                for (uint32_t slot = 0; slot < kCacheSize; ++slot) {
+                    const uint32_t v = cache[slot];
+                    if (v == kInvalid) continue;
+                    const uint32_t triStart = vertexTriOffset[v];
+                    const uint32_t triEnd   = vertexTriOffset[v + 1];
+                    for (uint32_t k = triStart; k < triEnd; ++k) {
+                        const uint32_t t = vertexTriangles[k];
+                        if (triangleEmitted[t]) continue;
+                        if (triangleScore[t] > bestScore) {
+                            bestScore = triangleScore[t];
+                            bestTriangle = static_cast<int32_t>(t);
+                        }
+                    }
+                }
+
+                if (bestTriangle < 0) {
+                    for (uint32_t t = 0; t < triangleCount; ++t) {
+                        if (!triangleEmitted[t] && triangleScore[t] > bestScore) {
+                            bestScore = triangleScore[t];
+                            bestTriangle = static_cast<int32_t>(t);
+                        }
+                    }
+                    if (bestTriangle < 0) break; // shouldn't happen, but guard.
+                }
+
+                // Emit the chosen triangle.
+                const uint32_t triBase = static_cast<uint32_t>(bestTriangle) * 3;
+                const uint32_t triVerts[3] = {
+                    indices[indexOffset + triBase + 0],
+                    indices[indexOffset + triBase + 1],
+                    indices[indexOffset + triBase + 2]
+                };
+                optimized.push_back(triVerts[0]);
+                optimized.push_back(triVerts[1]);
+                optimized.push_back(triVerts[2]);
+                triangleEmitted[bestTriangle] = true;
+                --remainingValence[triVerts[0]];
+                --remainingValence[triVerts[1]];
+                --remainingValence[triVerts[2]];
+                ++emittedCount;
+
+                // Push the 3 emitted vertices to the front of the cache.
+                // Any vertex already in the cache is moved rather than duped.
+                std::array<uint32_t, kCacheSize + 3> newCache;
+                newCache.fill(kInvalid);
+                uint32_t writeIdx = 0;
+                newCache[writeIdx++] = triVerts[0];
+                newCache[writeIdx++] = triVerts[1];
+                newCache[writeIdx++] = triVerts[2];
+                for (uint32_t slot = 0; slot < kCacheSize; ++slot) {
+                    const uint32_t v = cache[slot];
+                    if (v == kInvalid) continue;
+                    if (v == triVerts[0] || v == triVerts[1] || v == triVerts[2]) continue;
+                    if (writeIdx >= newCache.size()) break;
+                    newCache[writeIdx++] = v;
+                }
+                cache = newCache;
+
+                // Collect the set of vertices whose score may have changed:
+                // anything still in the first kCacheSize+3 slots, plus the
+                // three vertices of the emitted triangle (their valence
+                // decremented).
+                for (uint32_t slot = 0; slot < cache.size(); ++slot) {
+                    const uint32_t v = cache[slot];
+                    if (v == kInvalid) continue;
+                    const int32_t newPos = (slot < kCacheSize) ? static_cast<int32_t>(slot) : -1;
+                    vertexCachePosition[v] = newPos;
+                    const float newScore = scoreVertex(newPos, remainingValence[v]);
+                    const float delta = newScore - vertexScore[v];
+                    vertexScore[v] = newScore;
+                    if (delta != 0.0f) {
+                        const uint32_t triStart = vertexTriOffset[v];
+                        const uint32_t triEnd   = vertexTriOffset[v + 1];
+                        for (uint32_t k = triStart; k < triEnd; ++k) {
+                            const uint32_t t = vertexTriangles[k];
+                            if (!triangleEmitted[t]) {
+                                triangleScore[t] += delta;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Copy reordered indices back into the submesh range.
+            for (uint32_t i = 0; i < optimized.size() && i < indexCount; ++i) {
+                indices[indexOffset + i] = optimized[i];
+            }
+        };
+
+        if (submeshes.empty()) {
+            optimizeRange(0, static_cast<uint32_t>(indices.size()));
+        } else {
+            for (const auto& sub : submeshes) {
+                optimizeRange(sub.indexOffset, sub.indexCount);
+            }
+        }
     }
 
     /**

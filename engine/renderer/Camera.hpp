@@ -5,6 +5,7 @@
 #include "../math/Quaternion.hpp"
 #include "../math/Frustum.hpp"
 #include "../math/Ray.hpp"
+#include "../core/Input.hpp"
 
 namespace CatEngine::Renderer {
 
@@ -486,9 +487,75 @@ class FPSCameraController {
 public:
     FPSCameraController(Camera* camera) : camera(camera) {}
 
+    /**
+     * Bind an input source. When set, Update(dt) reads WASD / Space / Ctrl /
+     * mouse delta from this input every frame. Pass nullptr to detach and
+     * drive the controller exclusively via UpdateFPS(dt, moveInput, mouseDelta).
+     */
+    void SetInput(Engine::Input* inputSource) {
+        input = inputSource;
+    }
+
+    /**
+     * Per-frame tick. If an Input source is bound via SetInput(), samples
+     * keyboard + mouse and applies FPS controls. Otherwise this is a no-op
+     * and callers should use UpdateFPS() with explicit inputs.
+     */
     void Update(float deltaTime) {
-        // This is a placeholder for FPS camera controls
-        // Actual implementation would integrate with input system
+        if (!input) {
+            return;
+        }
+
+        // Keyboard -> local move vector: x = right, y = up, z = forward
+        Engine::vec3 moveInput(0.0f);
+        if (input->isKeyDown(Engine::Input::Key::W)) moveInput.z += 1.0f;
+        if (input->isKeyDown(Engine::Input::Key::S)) moveInput.z -= 1.0f;
+        if (input->isKeyDown(Engine::Input::Key::D)) moveInput.x += 1.0f;
+        if (input->isKeyDown(Engine::Input::Key::A)) moveInput.x -= 1.0f;
+        if (input->isKeyDown(Engine::Input::Key::Space)) moveInput.y += 1.0f;
+        if (input->isKeyDown(Engine::Input::Key::LeftControl)) moveInput.y -= 1.0f;
+
+        // Mouse delta (GLFW-style: +x right, +y down; yaw turns right when mouse moves right)
+        double dx = 0.0, dy = 0.0;
+        input->getMouseDelta(dx, dy);
+        Engine::vec2 mouseDelta(static_cast<float>(dx), static_cast<float>(dy));
+
+        UpdateFPS(deltaTime, moveInput, mouseDelta);
+    }
+
+    /**
+     * Input-agnostic FPS update.
+     * @param deltaTime Frame time in seconds.
+     * @param moveInput Desired movement in local axes: x=right, y=up, z=forward. Not required to be normalized.
+     * @param mouseDelta Pointer delta in pixels since last frame (+x right, +y down).
+     */
+    void UpdateFPS(float deltaTime, const Engine::vec3& moveInput, const Engine::vec2& mouseDelta) {
+        if (!camera) {
+            return;
+        }
+
+        // Yaw from horizontal mouse motion (moving mouse right turns camera right => negative yaw about +Y).
+        // Pitch from vertical mouse motion (moving mouse up pitches camera up => negative pitch about +X).
+        if (mouseDelta.x != 0.0f || mouseDelta.y != 0.0f) {
+            Rotate(-mouseDelta.x, -mouseDelta.y);
+        }
+
+        // Normalize XZ so diagonal strafing isn't faster than cardinal movement; keep Y separate.
+        Engine::vec3 planar(moveInput.x, 0.0f, moveInput.z);
+        float planarLen = planar.length();
+        if (planarLen > 1.0f) {
+            planar = planar * (1.0f / planarLen);
+        }
+        Engine::vec3 direction(planar.x, moveInput.y, planar.z);
+
+        if (direction.x != 0.0f || direction.y != 0.0f || direction.z != 0.0f) {
+            Engine::vec3 forward = camera->GetForward();
+            Engine::vec3 right = camera->GetRight();
+            Engine::vec3 worldUp(0.0f, 1.0f, 0.0f);
+
+            Engine::vec3 velocity = forward * direction.z + right * direction.x + worldUp * direction.y;
+            camera->SetPosition(camera->GetPosition() + velocity * (moveSpeed * deltaTime));
+        }
     }
 
     void Rotate(float yaw, float pitch) {
@@ -518,6 +585,7 @@ public:
 
 private:
     Camera* camera;
+    Engine::Input* input = nullptr;
     float currentYaw = 0.0f;
     float currentPitch = 0.0f;
 };
