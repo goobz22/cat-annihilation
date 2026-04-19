@@ -310,9 +310,22 @@ void Profiler::BeginFrameGPU(VkCommandBuffer cmd) {
         return;
     }
 
+    // PRECONDITION: `cmd` MUST be in the recording state. vkCmdResetQueryPool
+    // is a command-buffer command; calling it on a buffer that has been
+    // allocated but not yet vkBeginCommandBuffer'd is an immediate Vulkan
+    // validation error and a driver crash on some implementations. The
+    // renderer's BeginFrame opens the per-frame command buffer before this
+    // method is invoked, which is the contract this function relies on.
+    //
+    // If the caller wants to reset the pool outside any command buffer
+    // (e.g., from a shutdown path after the device has idled), use the
+    // host-side vkResetQueryPool (Vulkan 1.2+) — not currently needed on
+    // the main path, but documented here so nobody refactors this into a
+    // silent bug.
+    //
     // Resetting the entire pool in one call is cheap and guarantees every
-    // slot returns a defined result after ResolveGPUQueries regardless of
-    // how many queries the frame ends up emitting.
+    // slot returns a defined availability state after ResolveGPUQueries
+    // regardless of how many queries the frame actually emits.
     vkCmdResetQueryPool(cmd, m_GPUQueryPool, 0, m_GPUQueryPoolSize);
 
     m_GPUQueryNextSlot = 0;
@@ -378,26 +391,42 @@ void Profiler::ResolveGPUQueries() {
     }
 
     // Read every slot that has been written this frame in one round-trip.
-    // VK_QUERY_RESULT_WAIT_BIT makes the call block until the results are
-    // ready, trading a potential stall for guaranteed-valid data. The
-    // profiler should only be enabled when the user explicitly asked for
-    // profiling, so the stall is acceptable.
+    //
+    // We deliberately use WITH_AVAILABILITY_BIT rather than WAIT_BIT. The
+    // availability variant stores an extra uint64 per slot that's non-zero
+    // iff the GPU has already written that slot's timestamp. A query pair
+    // where Begin ran but End did NOT (e.g., a pass early-outed between the
+    // two calls) would cause WAIT_BIT to block the host forever waiting on
+    // a timestamp that will never arrive. With AVAILABILITY we simply skip
+    // pairs that didn't both complete; stalls become impossible.
+    //
+    // The trade-off: stride doubles to 2 * sizeof(uint64_t) — one for the
+    // timestamp, one for the availability counter — and we check the
+    // availability counter before consuming the timestamp.
     const uint32_t usedSlots = m_GPUQueryNextSlot;
     if (usedSlots == 0) return;
 
-    std::vector<uint64_t> timestamps(usedSlots);
+    struct TimestampWithAvailability {
+        uint64_t timestamp;
+        uint64_t available;
+    };
+
+    std::vector<TimestampWithAvailability> results(usedSlots);
     VkResult result = vkGetQueryPoolResults(
         m_GPUQueryDevice,
         m_GPUQueryPool,
-        0,                                               // firstQuery
-        usedSlots,                                       // queryCount
-        sizeof(uint64_t) * timestamps.size(),            // dataSize
-        timestamps.data(),
-        sizeof(uint64_t),                                // stride
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT
+        0,                                                          // firstQuery
+        usedSlots,                                                  // queryCount
+        sizeof(TimestampWithAvailability) * results.size(),         // dataSize
+        results.data(),
+        sizeof(TimestampWithAvailability),                          // stride
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
     );
 
-    if (result != VK_SUCCESS) {
+    // VK_NOT_READY is a valid return when some slots are still pending; the
+    // per-slot available flag still reflects which slots DID complete. Only
+    // bail on actual errors.
+    if (result != VK_SUCCESS && result != VK_NOT_READY) {
         std::cerr << "[Profiler] vkGetQueryPoolResults failed (" << result
                   << "); dropping this frame's GPU timings" << std::endl;
         return;
@@ -410,8 +439,16 @@ void Profiler::ResolveGPUQueries() {
     m_GPUTimestamps.reserve(m_GPUQuerySlots.size());
 
     for (const auto& [name, slots] : m_GPUQuerySlots) {
-        const uint64_t startTicks = timestamps[slots.startSlot];
-        const uint64_t endTicks   = timestamps[slots.endSlot];
+        // Skip pairs where either endpoint hasn't completed — a query pair
+        // with a mismatched Begin/End (user error) or still-in-flight GPU
+        // work would otherwise write misleading zeros into the report.
+        if (results[slots.startSlot].available == 0u ||
+            results[slots.endSlot].available == 0u) {
+            continue;
+        }
+
+        const uint64_t startTicks = results[slots.startSlot].timestamp;
+        const uint64_t endTicks   = results[slots.endSlot].timestamp;
         const uint64_t deltaTicks = (endTicks > startTicks)
                                         ? (endTicks - startTicks)
                                         : 0ull;

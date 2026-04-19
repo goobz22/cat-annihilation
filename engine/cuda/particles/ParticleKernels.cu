@@ -430,9 +430,20 @@ struct IsAlive {
 namespace {
 
 // Permute every particle SoA array using the supplied sorted/compacted index
-// list. Allocates one set of device temp buffers, runs thrust::gather per
-// array, copies back, and frees. Called by both compactParticles and
-// sortParticles; keeps the two paths on one memory-management code path.
+// list. Uses stream-ordered memory allocation (cudaMallocAsync / cudaFreeAsync,
+// CUDA 11.2+) so the temporary buffers are allocated, filled, copied back, and
+// freed entirely on the caller's stream — no host-side synchronization, no
+// cross-stream serialization. The particle system schedules compaction every
+// `compactionFrequency` frames (default 60) so the allocator churn is
+// amortized across many simulation steps.
+//
+// IMPORTANT: the alive flag array IS included in the gather. A prior version
+// skipped alive and then tried to fix it with cudaMemsetAsync(alive, 0x01, ...)
+// — that set every byte to 0x01, producing uint32 values of 0x01010101
+// instead of a canonical 1. Truthy checks still worked, but any code that
+// compared `alive[i] == 1` silently broke. Gathering alive directly keeps the
+// invariant "after compaction, alive[0..count] are the exact alive values from
+// the source indices (all 1 by definition of copy_if's predicate)."
 void permuteParticleArrays(
     GpuParticles& particles,
     const thrust::device_ptr<const uint32_t>& indices,
@@ -444,22 +455,25 @@ void permuteParticleArrays(
     const size_t f3Bytes = static_cast<size_t>(count) * sizeof(float3);
     const size_t f4Bytes = static_cast<size_t>(count) * sizeof(float4);
     const size_t f1Bytes = static_cast<size_t>(count) * sizeof(float);
+    const size_t u32Bytes = static_cast<size_t>(count) * sizeof(uint32_t);
 
-    float3*  tmpPos          = nullptr;
-    float3*  tmpVel          = nullptr;
-    float4*  tmpColor        = nullptr;
-    float*   tmpLifetime     = nullptr;
-    float*   tmpMaxLifetime  = nullptr;
-    float*   tmpSize         = nullptr;
-    float*   tmpRotation     = nullptr;
+    float3*   tmpPos          = nullptr;
+    float3*   tmpVel          = nullptr;
+    float4*   tmpColor        = nullptr;
+    float*    tmpLifetime     = nullptr;
+    float*    tmpMaxLifetime  = nullptr;
+    float*    tmpSize         = nullptr;
+    float*    tmpRotation     = nullptr;
+    uint32_t* tmpAlive        = nullptr;
 
-    cudaMalloc(&tmpPos,          f3Bytes);
-    cudaMalloc(&tmpVel,          f3Bytes);
-    cudaMalloc(&tmpColor,        f4Bytes);
-    cudaMalloc(&tmpLifetime,     f1Bytes);
-    cudaMalloc(&tmpMaxLifetime,  f1Bytes);
-    cudaMalloc(&tmpSize,         f1Bytes);
-    cudaMalloc(&tmpRotation,     f1Bytes);
+    cudaMallocAsync(&tmpPos,          f3Bytes,  stream);
+    cudaMallocAsync(&tmpVel,          f3Bytes,  stream);
+    cudaMallocAsync(&tmpColor,        f4Bytes,  stream);
+    cudaMallocAsync(&tmpLifetime,     f1Bytes,  stream);
+    cudaMallocAsync(&tmpMaxLifetime,  f1Bytes,  stream);
+    cudaMallocAsync(&tmpSize,         f1Bytes,  stream);
+    cudaMallocAsync(&tmpRotation,     f1Bytes,  stream);
+    cudaMallocAsync(&tmpAlive,        u32Bytes, stream);
 
     auto policy = thrust::cuda::par.on(stream);
     auto idxBegin = indices;
@@ -486,24 +500,33 @@ void permuteParticleArrays(
     thrust::gather(policy, idxBegin, idxEnd,
         thrust::device_ptr<float>(particles.rotations),
         thrust::device_ptr<float>(tmpRotation));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<uint32_t>(particles.alive),
+        thrust::device_ptr<uint32_t>(tmpAlive));
 
-    cudaMemcpyAsync(particles.positions,    tmpPos,         f3Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.velocities,   tmpVel,         f3Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.colors,       tmpColor,       f4Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.lifetimes,    tmpLifetime,    f1Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.maxLifetimes, tmpMaxLifetime, f1Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.sizes,        tmpSize,        f1Bytes, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.rotations,    tmpRotation,    f1Bytes, cudaMemcpyDeviceToDevice, stream);
+    // Copy each gathered temp array back into the source front. All copies
+    // enqueue on the same stream so they serialize correctly relative to the
+    // preceding gather ops without a host synchronize.
+    cudaMemcpyAsync(particles.positions,    tmpPos,         f3Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.velocities,   tmpVel,         f3Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.colors,       tmpColor,       f4Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.lifetimes,    tmpLifetime,    f1Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.maxLifetimes, tmpMaxLifetime, f1Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.sizes,        tmpSize,        f1Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.rotations,    tmpRotation,    f1Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.alive,        tmpAlive,       u32Bytes, cudaMemcpyDeviceToDevice, stream);
 
-    cudaStreamSynchronize(stream);
-
-    cudaFree(tmpPos);
-    cudaFree(tmpVel);
-    cudaFree(tmpColor);
-    cudaFree(tmpLifetime);
-    cudaFree(tmpMaxLifetime);
-    cudaFree(tmpSize);
-    cudaFree(tmpRotation);
+    // Stream-ordered frees — the driver waits for the preceding memcpy ops to
+    // drain on this stream before actually reclaiming the memory, so no host
+    // sync is required. Matches the allocator's lifetime contract.
+    cudaFreeAsync(tmpPos,         stream);
+    cudaFreeAsync(tmpVel,         stream);
+    cudaFreeAsync(tmpColor,       stream);
+    cudaFreeAsync(tmpLifetime,    stream);
+    cudaFreeAsync(tmpMaxLifetime, stream);
+    cudaFreeAsync(tmpSize,        stream);
+    cudaFreeAsync(tmpRotation,    stream);
+    cudaFreeAsync(tmpAlive,       stream);
 }
 
 } // anonymous namespace
@@ -556,31 +579,24 @@ void compactParticles(
         return;
     }
 
-    // Gather each SoA array through the compact index list into temp buffers,
-    // then copy the compact result back in place. Per-compaction allocations
-    // are acceptable since the particle system schedules compaction every
-    // `compactionFrequency` frames (default 60).
+    // Gather every SoA array (including alive) through the compact index list
+    // into temp buffers, then copy the compact result back in place.
+    // permuteParticleArrays handles the temp-buffer lifecycle via stream-
+    // ordered cudaMallocAsync / cudaFreeAsync — no host sync required.
     thrust::device_ptr<const uint32_t> compactPtr(
         thrust::raw_pointer_cast(compactIndices.data())
     );
     permuteParticleArrays(particles, compactPtr, compactedCount, stream);
 
     // Mark the tail as dead so future emission slots start in a known state.
+    // The leading region [0, compactedCount) already carries the correct
+    // alive=1 values from the gather (since copy_if's predicate only selected
+    // indices where alive was non-zero, and gather lifted the source flags
+    // verbatim).
     cudaMemsetAsync(
         particles.alive + compactedCount,
         0,
         static_cast<size_t>(particles.count - compactedCount) * sizeof(uint32_t),
-        stream
-    );
-
-    // Set the leading region's alive flags to 1 — gather wrote whatever the
-    // source alive values were at the gathered indices, which is already 1 for
-    // every compacted slot, so this is a cheap re-assertion that keeps the
-    // invariant explicit.
-    cudaMemsetAsync(
-        particles.alive,
-        0x01,
-        static_cast<size_t>(compactedCount) * sizeof(uint32_t),
         stream
     );
 
