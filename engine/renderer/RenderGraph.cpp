@@ -237,8 +237,12 @@ void RenderGraph::Reset() {
     // Any tracked access/stage info belonged to resources we just destroyed —
     // clearing these maps prevents the next Execute() from inheriting stale
     // state that would produce either missing or incorrect barriers.
-    currentAccess.clear();
-    currentStage.clear();
+    // currentState carries per-resource Vulkan barrier info (layout +
+    // access mask + pipeline stage) left behind by the previously
+    // executed pass. Clearing it here prevents the next Execute() from
+    // emitting transitions against state that belonged to resources the
+    // caller has since destroyed.
+    currentState.clear();
 
     executionOrder.clear();
     isCompiled = false;
@@ -457,12 +461,67 @@ void RenderGraph::DeallocateTransientResources() {
 
 namespace {
 
-// Map the RHI-level ShaderStage bitmask into Vulkan pipeline stage flags so
-// barrier construction doesn't sprinkle the same switch throughout the file.
-// Only the stages the render graph actually uses for resource access are
-// listed; anything else falls through to ALL_COMMANDS which is the safe
-// (though coarse) default.
-VkPipelineStageFlags ToVkPipelineStage(CatEngine::RHI::ShaderStage stage) {
+// ---------------------------------------------------------------------------
+// Format classification
+// ---------------------------------------------------------------------------
+//
+// Depth / depth-stencil texture formats need different aspect bits and
+// different attachment layouts than color formats. The render graph derives
+// these from the resource's TextureFormat so callers don't have to tag each
+// resource with "this is a depth target" — the format already says so.
+
+bool IsDepthFormat(CatEngine::RHI::TextureFormat format) {
+    using F = CatEngine::RHI::TextureFormat;
+    return format == F::D16_UNORM
+        || format == F::D32_SFLOAT
+        || format == F::D24_UNORM_S8_UINT
+        || format == F::D32_SFLOAT_S8_UINT
+        || format == F::S8_UINT;
+}
+
+bool HasStencil(CatEngine::RHI::TextureFormat format) {
+    using F = CatEngine::RHI::TextureFormat;
+    return format == F::D24_UNORM_S8_UINT
+        || format == F::D32_SFLOAT_S8_UINT
+        || format == F::S8_UINT;
+}
+
+VkImageAspectFlags AspectForFormat(CatEngine::RHI::TextureFormat format) {
+    if (!IsDepthFormat(format)) {
+        return VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+    VkImageAspectFlags aspect = 0;
+    using F = CatEngine::RHI::TextureFormat;
+    if (format != F::S8_UINT) aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (HasStencil(format))   aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    return aspect;
+}
+
+// ---------------------------------------------------------------------------
+// Pass-type-aware barrier target derivation
+// ---------------------------------------------------------------------------
+//
+// The render graph needs to know not just "this resource is being read or
+// written" but "what kind of pass is reading/writing it" to pick the right
+// Vulkan layout, stage, and access bits. A Write in a Graphics pass against
+// a color-format texture is a color attachment (COLOR_ATTACHMENT_OUTPUT +
+// COLOR_ATTACHMENT_OPTIMAL + COLOR_ATTACHMENT_WRITE); the same Write in a
+// Compute pass is a storage image (COMPUTE_SHADER + GENERAL + SHADER_WRITE);
+// and the same Write in a Transfer pass is a copy destination (TRANSFER +
+// TRANSFER_DST_OPTIMAL + TRANSFER_WRITE). Getting any of these wrong on real
+// hardware is either a validation error or silent cache incoherence, so we
+// derive all three in one place keyed on (passType, access, formatClass).
+
+struct TransitionState {
+    VkImageLayout        layout;
+    VkAccessFlags        access;
+    VkPipelineStageFlags stage;
+};
+
+// Map the RHI-level ShaderStage bitmask into Vulkan pipeline shader stages.
+// Only the stages the render graph actually uses are listed; anything else
+// falls through to ALL_COMMANDS which is the conservative default.
+VkPipelineStageFlags ToVkShaderStages(CatEngine::RHI::ShaderStage stage) {
     using S = CatEngine::RHI::ShaderStage;
     VkPipelineStageFlags out = 0;
     auto has = [&](S bit) {
@@ -478,39 +537,112 @@ VkPipelineStageFlags ToVkPipelineStage(CatEngine::RHI::ShaderStage stage) {
     return out;
 }
 
-// Derive the access-mask bits for a shader-side access. Writes get both READ
-// and WRITE bits because almost every write-followed-by-read pattern in this
-// engine reads the same data back via a different binding type (e.g., storage
-// image written by compute and sampled by fragment), and shader WRITE without
-// READ would skip a cache flush that later sampling needs.
-//
-// The isTexture parameter is kept because a future engine change — binding
-// some buffer storage-descriptors under a different access class, or adding
-// INDIRECT_COMMAND_READ for draw-indirect buffers — needs to discriminate
-// buffer vs image without rewriting every caller. Today both paths resolve
-// to the same bits; diverging them is a one-line change when it becomes
-// needed.
-VkAccessFlags AccessMaskFor(CatEngine::Renderer::ResourceAccess access,
-                            bool /*isTexture*/) {
+// Derive the full transition target for a texture resource. isDepth carries
+// the format classification so attachment writes land in the correct depth
+// vs color attachment state.
+TransitionState DeriveTextureTarget(
+    CatEngine::Renderer::PassType passType,
+    CatEngine::Renderer::ResourceAccess access,
+    CatEngine::RHI::ShaderStage shaderStages,
+    bool isDepth
+) {
     using A = CatEngine::Renderer::ResourceAccess;
-    if (access == A::Read) {
-        return VK_ACCESS_SHADER_READ_BIT;
+    using P = CatEngine::Renderer::PassType;
+
+    TransitionState t{};
+    switch (passType) {
+        case P::Transfer:
+            // Transfer passes copy/blit — src/dst choice follows access.
+            if (access == A::Read) {
+                t.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                t.access = VK_ACCESS_TRANSFER_READ_BIT;
+            } else {
+                t.layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                t.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+            }
+            t.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            return t;
+
+        case P::Compute:
+            // Compute passes use storage images (GENERAL layout for writes)
+            // and sampled images (SHADER_READ_ONLY for pure reads).
+            if (access == A::Read) {
+                t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                t.access = VK_ACCESS_SHADER_READ_BIT;
+            } else {
+                t.layout = VK_IMAGE_LAYOUT_GENERAL;
+                t.access = VK_ACCESS_SHADER_WRITE_BIT
+                         | (access == A::ReadWrite ? VK_ACCESS_SHADER_READ_BIT : 0);
+            }
+            t.stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            return t;
+
+        case P::Graphics:
+            if (access == A::Read) {
+                // Sampled by the graphics pipeline — could be any shader stage.
+                t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                t.access = VK_ACCESS_SHADER_READ_BIT;
+                t.stage  = ToVkShaderStages(shaderStages);
+                return t;
+            }
+            // Writes: distinguish attachment from storage-image by format.
+            if (isDepth) {
+                t.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                t.access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                         | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                t.stage  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                         | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            } else {
+                // Color attachment write. READ bit covers blend-read-back.
+                t.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                t.access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                         | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                t.stage  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            }
+            return t;
     }
-    // Both Write and ReadWrite collapse to read+write: a pure "write" still
-    // needs the read bit so subsequent shader reads see the flushed write,
-    // which matches the "writes flush, reads invalidate" Vulkan memory model.
-    return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    return t;
 }
 
-// Pick the image layout a texture should sit in while a pass accesses it
-// under the given access mode. Read -> SHADER_READ_ONLY, any write ->
-// GENERAL (covers storage images, compute writes, and arbitrary
-// read-modify-write). Color/depth attachment layouts are handled by the
-// render-pass itself, not by the render-graph barrier path.
-VkImageLayout LayoutFor(CatEngine::Renderer::ResourceAccess access) {
+// Buffer barriers don't carry a layout, but still need access masks and
+// pipeline stages keyed on the access class.
+TransitionState DeriveBufferTarget(
+    CatEngine::Renderer::PassType passType,
+    CatEngine::Renderer::ResourceAccess access,
+    CatEngine::RHI::ShaderStage shaderStages
+) {
     using A = CatEngine::Renderer::ResourceAccess;
-    if (access == A::Read) return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    return VK_IMAGE_LAYOUT_GENERAL;
+    using P = CatEngine::Renderer::PassType;
+
+    TransitionState t{};
+    switch (passType) {
+        case P::Transfer:
+            t.access = (access == A::Read) ? VK_ACCESS_TRANSFER_READ_BIT
+                                           : VK_ACCESS_TRANSFER_WRITE_BIT;
+            t.stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            return t;
+
+        case P::Compute:
+            if (access == A::Read) {
+                t.access = VK_ACCESS_SHADER_READ_BIT;
+            } else {
+                t.access = VK_ACCESS_SHADER_WRITE_BIT
+                         | (access == A::ReadWrite ? VK_ACCESS_SHADER_READ_BIT : 0);
+            }
+            t.stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            return t;
+
+        case P::Graphics:
+            if (access == A::Read) {
+                t.access = VK_ACCESS_SHADER_READ_BIT;
+            } else {
+                t.access = VK_ACCESS_SHADER_WRITE_BIT
+                         | (access == A::ReadWrite ? VK_ACCESS_SHADER_READ_BIT : 0);
+            }
+            t.stage = ToVkShaderStages(shaderStages);
+            return t;
+    }
+    return t;
 }
 
 } // namespace
@@ -534,62 +666,100 @@ void RenderGraph::InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer,
     VkPipelineStageFlags aggregateSrcStage = 0;
     VkPipelineStageFlags aggregateDstStage = 0;
 
+    const PassType passType = pass->GetType();
+
     for (const auto& usage : pass->GetResourceUsages()) {
         auto* resource = GetResource(usage.resource);
         if (!resource) continue;
 
-        // Check whether this resource has been accessed before in the current
-        // frame's graph execution. If not, the resource enters this pass
-        // "fresh" and we still emit a barrier from TOP_OF_PIPE so any
-        // previous-frame work on the same resource is correctly ordered.
-        auto accessIt = currentAccess.find(resource->id);
-        auto stageIt  = currentStage.find(resource->id);
+        // Derive the Vulkan-level target state (layout, access, stage) from
+        // the combination of pass type + access mode + resource format. This
+        // is the single source of truth for what this pass needs the
+        // resource to be in — attachment, storage image, sampled image,
+        // transfer target, etc. are all handled uniformly via the Derive*
+        // helpers above.
+        const bool isDepth = (resource->type == ResourceType::Texture)
+                          && IsDepthFormat(resource->textureDesc.format);
 
-        const bool hasPriorState = (accessIt != currentAccess.end());
-        const ResourceAccess prevAccess = hasPriorState ? accessIt->second
-                                                        : ResourceAccess::Read;
-        const RHI::ShaderStage prevStage = (stageIt != currentStage.end())
-                                               ? stageIt->second
-                                               : RHI::ShaderStage::All;
+        const TransitionState target = (resource->type == ResourceType::Texture)
+            ? DeriveTextureTarget(passType, usage.access, usage.shaderStages, isDepth)
+            : DeriveBufferTarget(passType, usage.access, usage.shaderStages);
+
+        // Look up the prior state this resource was left in. "Fresh"
+        // resources (no prior state this frame) come in at TOP_OF_PIPE with
+        // UNDEFINED layout and zero access — those terms make the incoming
+        // edge a pure wait for previous-frame work without carrying forward
+        // a concrete layout.
+        auto priorIt = currentState.find(resource->id);
+        const bool hasPriorState = priorIt != currentState.end();
+        RenderGraph::ResourceState prior{};
+        if (hasPriorState) {
+            prior = priorIt->second;
+        } else {
+            prior.layout        = VK_IMAGE_LAYOUT_UNDEFINED;
+            prior.accessMask    = 0;
+            prior.pipelineStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        }
+
+        // Decide whether a barrier is actually needed. We emit if:
+        //   - this is the resource's first access this frame (need the
+        //     previous-frame → this-frame edge even if the target state
+        //     happens to match UNDEFINED), OR
+        //   - any of layout / access / stage differs, OR
+        //   - the prior access mask carried a WRITE bit (write-after-*
+        //     always needs a flush even if layouts coincide).
+        const bool priorHadWrite =
+            (prior.accessMask & (VK_ACCESS_SHADER_WRITE_BIT
+                               | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                               | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                               | VK_ACCESS_TRANSFER_WRITE_BIT
+                               | VK_ACCESS_MEMORY_WRITE_BIT)) != 0;
 
         const bool needsBarrier =
-            !hasPriorState ||
-            prevAccess != usage.access ||
-            prevStage != usage.shaderStages ||
-            // A write followed by another write on the same resource still
-            // needs a write-after-write barrier so the second write sees the
-            // flushed cache state from the first. The access enum equality
-            // check above doesn't catch that case, so be explicit here.
-            (prevAccess != ResourceAccess::Read &&
-             usage.access != ResourceAccess::Read);
+            !hasPriorState
+            || prior.layout        != target.layout
+            || prior.accessMask    != target.access
+            || prior.pipelineStage != target.stage
+            || priorHadWrite;
 
         if (!needsBarrier) continue;
 
-        const VkPipelineStageFlags srcStage =
-            hasPriorState ? ToVkPipelineStage(prevStage)
-                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        const VkPipelineStageFlags dstStage = ToVkPipelineStage(usage.shaderStages);
-
-        aggregateSrcStage |= srcStage;
-        aggregateDstStage |= dstStage;
+        aggregateSrcStage |= prior.pipelineStage;
+        aggregateDstStage |= target.stage;
 
         if (resource->type == ResourceType::Texture && resource->texture) {
             auto* vkTex = static_cast<RHI::VulkanTexture*>(resource->texture);
 
+            // WAW barriers need only the WRITE bit on the src side per the
+            // Vulkan memory model — carrying forward READ bits here would
+            // hide future read-after-write hazards that the validator can
+            // catch with the tighter mask. The dst side keeps both bits
+            // because the upcoming pass's reads must see the flushed write.
+            const VkAccessFlags srcAccess = priorHadWrite
+                ? (prior.accessMask & ~(VK_ACCESS_SHADER_READ_BIT
+                                      | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                                      | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                                      | VK_ACCESS_TRANSFER_READ_BIT
+                                      | VK_ACCESS_MEMORY_READ_BIT))
+                : prior.accessMask;
+
             VkImageMemoryBarrier b{};
             b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.oldLayout = hasPriorState
-                              ? LayoutFor(prevAccess)
-                              : VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout = LayoutFor(usage.access);
-            b.srcAccessMask = hasPriorState
-                                  ? AccessMaskFor(prevAccess, true)
-                                  : 0;
-            b.dstAccessMask = AccessMaskFor(usage.access, true);
+            // ResourceState::layout is stored as uint32_t so the header
+            // doesn't need to pull in <vulkan/vulkan.h>; cast back to the
+            // enum here where we're already inside the Vulkan include chain.
+            b.oldLayout = static_cast<VkImageLayout>(prior.layout);
+            b.newLayout = target.layout;
+            b.srcAccessMask = srcAccess;
+            b.dstAccessMask = target.access;
             b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.image = vkTex->GetVkImage();
-            b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            // Aspect flags come from the texture's format, not a hard-coded
+            // COLOR_BIT — depth and depth-stencil textures need the right
+            // aspect or the barrier is silently ignored by many drivers and
+            // validation layers will flag it.
+            b.subresourceRange.aspectMask     = AspectForFormat(resource->textureDesc.format);
             b.subresourceRange.baseMipLevel   = 0;
             b.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
             b.subresourceRange.baseArrayLayer = 0;
@@ -599,12 +769,16 @@ void RenderGraph::InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer,
         } else if (resource->type == ResourceType::Buffer && resource->buffer) {
             auto* vkBuf = static_cast<RHI::VulkanBuffer*>(resource->buffer);
 
+            const VkAccessFlags srcAccess = priorHadWrite
+                ? (prior.accessMask & ~(VK_ACCESS_SHADER_READ_BIT
+                                      | VK_ACCESS_TRANSFER_READ_BIT
+                                      | VK_ACCESS_MEMORY_READ_BIT))
+                : prior.accessMask;
+
             VkBufferMemoryBarrier b{};
             b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            b.srcAccessMask = hasPriorState
-                                  ? AccessMaskFor(prevAccess, false)
-                                  : 0;
-            b.dstAccessMask = AccessMaskFor(usage.access, false);
+            b.srcAccessMask = srcAccess;
+            b.dstAccessMask = target.access;
             b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.buffer = vkBuf->GetVkBuffer();
@@ -616,10 +790,13 @@ void RenderGraph::InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer,
 
         // Update the tracked state unconditionally — even if the barrier
         // didn't physically land in the arrays (e.g., a transient resource
-        // that hasn't been allocated yet), the logical access is what the
+        // that hasn't been allocated yet), the logical state is what the
         // next pass will diff against.
-        currentAccess[resource->id] = usage.access;
-        currentStage[resource->id]  = usage.shaderStages;
+        RenderGraph::ResourceState next;
+        next.layout        = target.layout;
+        next.accessMask    = target.access;
+        next.pipelineStage = target.stage;
+        currentState[resource->id] = next;
     }
 
     if (imageBarriers.empty() && bufferBarriers.empty()) {

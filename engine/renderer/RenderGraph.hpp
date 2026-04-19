@@ -361,17 +361,28 @@ private:
     // Compilation state
     bool isCompiled = false;
 
-    // Per-resource access tracking used by InsertBarriers to decide whether a
-    // pipeline barrier is needed before the next pass touches the resource.
-    // Keyed by Resource::id (not the handle, which carries transient flags we
-    // don't care about for state tracking). Values reflect the *last*
-    // access+stage the resource was left in after the previously executed
-    // pass — the render graph uses them to diff against the upcoming pass's
-    // declared usages and emit only the transitions actually required.
-    // Both maps are cleared in Reset() and Compile() so one graph can be
-    // re-executed across frames without leaking stale state.
-    std::unordered_map<uint32_t, ResourceAccess> currentAccess;
-    std::unordered_map<uint32_t, RHI::ShaderStage> currentStage;
+    // Per-resource Vulkan barrier state used by InsertBarriers to decide
+    // whether a pipeline barrier is needed before the next pass touches the
+    // resource. Keyed by Resource::id (not the handle, which carries
+    // transient flags we don't care about for state tracking). Values store
+    // the last (image-layout, access-mask, pipeline-stage) the resource was
+    // left in after the previously executed pass; InsertBarriers diffs the
+    // upcoming pass's derived target state against this and emits only the
+    // transitions actually required. Cleared in Reset() and populated
+    // monotonically as passes execute so one graph can be re-executed across
+    // frames without leaking stale state.
+    //
+    // Storing the full Vulkan-level state (not just ResourceAccess +
+    // ShaderStage) keeps InsertBarriers consistent when the previous pass
+    // was a Transfer or Compute pass with different layout/stage conventions
+    // than the upcoming one — the prior pass type doesn't need to be
+    // re-derived at diff time because its target state is already baked in.
+    struct ResourceState {
+        uint32_t layout;                // VkImageLayout, or 0 for buffers
+        uint32_t accessMask;             // VkAccessFlags
+        uint32_t pipelineStage;          // VkPipelineStageFlags
+    };
+    std::unordered_map<uint32_t, ResourceState> currentState;
 
     // Number of barriers emitted during the most recent Execute() — surfaced
     // via GetStatistics() so the owning renderer can observe whether the
