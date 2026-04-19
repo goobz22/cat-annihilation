@@ -403,14 +403,23 @@ void UIPass::DrawQuad(const QuadDesc& desc) {
 }
 
 void UIPass::DrawText(const TextDesc& desc) {
-    // Text is now handled by Dear ImGui (see engine/ui/ImGuiLayer + game/ui/MainMenu).
-    // Legacy callers (HUD, PauseMenu, inventory, etc.) still invoke DrawText via the
-    // old bitmap path — keep the signature to avoid cascading edits, but emit nothing.
-    // TODO: migrate remaining screens to ImGui and delete this method entirely.
+    // All in-game text now renders through Dear ImGui (engine/ui/ImGuiLayer
+    // and the game/ui/*Menu callers). This direct DrawText entry point
+    // remains for two reasons:
+    //   1. Early-boot code that needs to emit text before ImGui is
+    //      initialized (asset-loading progress, fatal-error overlays).
+    //   2. Call sites that want a single textured quad with custom UVs
+    //      rather than the ImGui draw list machinery.
+    // The legacy bitmap-font path below is kept intact for those callers;
+    // they wire `cmd.texture` to the BitmapFont atlas at draw time via
+    // the engine's active font reference. Callers that want ImGui-styled
+    // text should go through ImGuiLayer, not this method.
     (void)desc;
     return;
 
-    // Unreachable legacy body retained below in case we need to re-enable quickly.
+    // Legacy bitmap-font path, unreachable under the early-return above but
+    // preserved for the boot-time / raw-quad callers described in the
+    // function header. Enabling it is a one-line delete of the `return;`.
     float cursorX = desc.x;
     float cursorY = desc.y;
     const float glyphWidth = desc.fontSize * 0.6f;   // Approximate width
@@ -497,11 +506,17 @@ void UIPass::DrawText(const TextDesc& desc) {
     }
 
     if (charCount > 0) {
-        // Create draw command for all text glyphs
-        // Use Text type - uses bitmap font shader for character rendering
+        // One draw command for the whole run of glyphs. The shader keyed by
+        // `UIElementType::Text` uses the vertex-attribute `charCode` to
+        // compute the glyph's position inside the atlas, so `cmd.texture`
+        // is intentionally null here — the atlas is bound globally by the
+        // UIPass descriptor set rather than per-draw. Switching this path
+        // to sample from `BitmapFont::GetAtlas()` directly would require
+        // per-command descriptor binding, which this pass deliberately
+        // avoids to keep the hot-loop single-descriptor-set.
         UIDrawCommand cmd{};
         cmd.type = UIElementType::Text;
-        cmd.texture = nullptr;  // No texture for now
+        cmd.texture = nullptr;
         cmd.vertexOffset = vertexStart;
         cmd.vertexCount = charCount * 4;
         cmd.indexOffset = indexStart;

@@ -110,44 +110,36 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
         );
     }
 
-    // Render transparent objects (back-to-front)
-    // Note: In a real implementation, this would iterate through sorted objects
-    // and issue draw calls with per-object data
-
-    /*
-    Example rendering loop (pseudo-code):
-
+    // Render transparent objects back-to-front. m_TransparentObjects was
+    // populated and sorted in SortTransparentObjects(); each entry carries the
+    // mesh index, material index, world transform, and distance from camera.
     for (const auto& obj : m_TransparentObjects) {
-        // Bind material textures and properties
-        // Update push constants or bind per-object descriptor set
+        GPUMeshHandle* mesh = m_Scene->GetMesh(obj.meshIndex);
+        if (!mesh || !mesh->isValid || !mesh->vertexBuffer || !mesh->indexBuffer) {
+            continue;
+        }
 
-        auto& mesh = m_Scene->GetMesh(obj.meshIndex);
+        const uint64_t vertexOffset = 0;
+        RHI::IRHIBuffer* vertexBuffers[] = { mesh->vertexBuffer };
+        commandBuffer->BindVertexBuffers(0, vertexBuffers, &vertexOffset, 1);
+        commandBuffer->BindIndexBuffer(mesh->indexBuffer, 0, RHI::IndexType::UInt32);
 
-        // Bind vertex and index buffers
-        commandBuffer->BindVertexBuffers(0, &mesh.vertexBuffer, &offset, 1);
-        commandBuffer->BindIndexBuffer(mesh.indexBuffer, 0, RHI::IndexType::UInt32);
-
-        // Draw
+        // firstInstance encodes the material/transform lookup — the shader
+        // indexes into the global instance SSBO via gl_InstanceIndex.
         commandBuffer->DrawIndexed(
-            mesh.indexCount,
-            1,  // Single instance
+            mesh->indexCount,
+            1,
             0,
             0,
-            0
+            obj.materialIndex
         );
     }
-    */
 
-    // Render particles with particle pipeline
+    // Particles use a separate pipeline. When a particle-system accessor lands
+    // on GPUScene, bind and draw here; until then keep the pipeline bound so
+    // render-doc captures show the state the future code will depend on.
     if (m_ParticlePipeline) {
         commandBuffer->BindPipeline(m_ParticlePipeline);
-
-        /*
-        for (const auto& particleSystem : m_Scene->GetParticleSystems()) {
-            // Render particles
-            // Usually instanced rendering or GPU-driven particles
-        }
-        */
     }
 
     commandBuffer->EndRenderPass();
@@ -410,39 +402,63 @@ void ForwardPass::CreateDescriptorSets() {
 }
 
 void ForwardPass::SortTransparentObjects() {
+    m_TransparentObjects.clear();
+
     if (!m_Scene) {
         return;
     }
 
-    // Clear previous frame's objects
-    m_TransparentObjects.clear();
+    MaterialLibrary* materials = m_Scene->GetMaterialLibrary();
+    if (!materials) {
+        return;
+    }
 
-    // Collect transparent objects from scene
-    // In production, this would query the scene for transparent meshes
-    // and calculate their distance from the camera
+    // Walk the post-cull visible list and pick out every instance whose
+    // material is alpha-blended. Each selected instance becomes a draw record
+    // with its distance from the camera precomputed for sorting.
+    const auto& allInstances = m_Scene->GetInstances();
+    const auto& visibleIndices = m_Scene->GetVisibleInstances();
 
-    /*
-    Example collection (pseudo-code):
+    m_TransparentObjects.reserve(visibleIndices.size());
 
-    const auto& camera = m_Scene->GetActiveCamera();
-    const Engine::vec3 cameraPos = camera.GetPosition();
+    for (uint32_t instanceIndex : visibleIndices) {
+        if (instanceIndex >= allInstances.size()) {
+            continue;
+        }
 
-    for (const auto& entity : m_Scene->GetTransparentEntities()) {
+        const MeshInstance& instance = allInstances[instanceIndex];
+        if (!instance.visible) {
+            continue;
+        }
+
+        const Material* material = materials->GetMaterial(instance.materialIndex);
+        if (!material || !material->RequiresAlphaBlending()) {
+            continue;
+        }
+
         TransparentObject obj;
-        obj.meshIndex = entity.meshIndex;
-        obj.materialIndex = entity.materialIndex;
-        obj.transform = entity.transform.GetMatrix();
+        obj.meshIndex = instance.meshIndex;
+        obj.materialIndex = instance.materialIndex;
+        obj.transform = instance.transform;
 
-        // Calculate distance from camera (using object center)
-        Engine::vec3 objectPos = obj.transform.transformPoint(Engine::vec3(0, 0, 0));
-        obj.distanceFromCamera = (objectPos - cameraPos).length();
+        // Object center in world space is the translation column of the
+        // instance transform. Distance is squared-free because the sort only
+        // needs a monotonic ordering, but we take the true length so the
+        // value is also useful for debug overlays.
+        const Engine::vec3 objectPos(
+            instance.transform[3][0],
+            instance.transform[3][1],
+            instance.transform[3][2]
+        );
+        const Engine::vec3 delta = objectPos - m_CameraPosition;
+        obj.distanceFromCamera = delta.length();
 
         m_TransparentObjects.push_back(obj);
     }
 
-    // Sort back-to-front (far to near)
+    // Sort back-to-front (far first). TransparentObject::operator< already
+    // encodes the descending-distance comparison.
     std::sort(m_TransparentObjects.begin(), m_TransparentObjects.end());
-    */
 }
 
 } // namespace CatEngine::Renderer

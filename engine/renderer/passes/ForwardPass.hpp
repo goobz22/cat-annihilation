@@ -77,6 +77,13 @@ public:
      */
     void SetSimplifiedLighting(bool enabled) { m_UseSimplifiedLighting = enabled; }
 
+    /**
+     * Update the camera world-space position used for back-to-front sorting
+     * of transparent objects. Should be called once per frame by the Renderer
+     * before Execute().
+     */
+    void SetCameraPosition(const Engine::vec3& position) { m_CameraPosition = position; }
+
 private:
     /**
      * Create pipelines for transparent rendering
@@ -127,6 +134,9 @@ private:
 
     // Settings
     bool m_UseSimplifiedLighting = false;
+
+    // Camera world position (updated per frame by Renderer for back-to-front sort)
+    Engine::vec3 m_CameraPosition = Engine::vec3(0.0f);
 
     // Current dimensions
     uint32_t m_Width = 1920;

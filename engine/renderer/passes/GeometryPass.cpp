@@ -3,7 +3,40 @@
 #include "../GPUScene.hpp"
 #include "../../math/Frustum.hpp"
 
+#include <cstdint>
+#include <fstream>
+#include <vector>
+
 namespace CatEngine::Renderer {
+
+namespace {
+
+/**
+ * Load a compiled SPIR-V binary from disk.
+ * Returns an empty vector on failure; caller should treat that as a hard error
+ * because the pipeline cannot be created without valid bytecode.
+ */
+std::vector<uint8_t> LoadSpirvBinary(const char* path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return {};
+    }
+
+    std::streamsize size = file.tellg();
+    if (size <= 0 || (size % 4) != 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (!file) {
+        return {};
+    }
+    return bytes;
+}
+
+} // namespace
 
 GeometryPass::GeometryPass() = default;
 
@@ -136,40 +169,59 @@ void GeometryPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frame
         );
     }
 
-    // Render opaque geometry
-    // Note: In a real implementation, this would iterate through visible meshes
-    // from the GPU scene and issue draw calls with instance data
-    // For now, this is a placeholder showing the structure
+    // Render opaque geometry. Iterate the GPUScene's post-cull visible list and
+    // issue one indexed draw per instance. Instances with transparent materials
+    // are skipped here; they are rendered by ForwardPass after lighting.
+    const auto& allInstances = m_Scene->GetInstances();
+    const auto& visibleIndices = m_Scene->GetVisibleInstances();
+    MaterialLibrary* materials = m_Scene->GetMaterialLibrary();
 
-    /*
-    Example draw loop (pseudo-code):
+    for (uint32_t instanceIndex : visibleIndices) {
+        if (instanceIndex >= allInstances.size()) {
+            continue;
+        }
 
-    for (const auto& batch : m_Scene->GetVisibleOpaqueBatches()) {
-        // Bind vertex and index buffers
-        commandBuffer->BindVertexBuffers(0, &batch.vertexBuffer, &offset, 1);
-        commandBuffer->BindIndexBuffer(batch.indexBuffer, 0, RHI::IndexType::UInt32);
+        const MeshInstance& instance = allInstances[instanceIndex];
+        if (!instance.visible) {
+            continue;
+        }
 
-        // Draw indexed with instance count
+        // Opaque pass only — skip alpha-blended materials.
+        if (materials) {
+            const Material* material = materials->GetMaterial(instance.materialIndex);
+            if (material && material->RequiresAlphaBlending()) {
+                continue;
+            }
+        }
+
+        GPUMeshHandle* mesh = m_Scene->GetMesh(instance.meshIndex);
+        if (!mesh || !mesh->isValid || !mesh->vertexBuffer || !mesh->indexBuffer) {
+            continue;
+        }
+
+        const uint64_t vertexOffset = 0;
+        RHI::IRHIBuffer* vertexBuffers[] = { mesh->vertexBuffer };
+        commandBuffer->BindVertexBuffers(0, vertexBuffers, &vertexOffset, 1);
+        commandBuffer->BindIndexBuffer(mesh->indexBuffer, 0, RHI::IndexType::UInt32);
+
         commandBuffer->DrawIndexed(
-            batch.indexCount,
-            batch.instanceCount,
-            batch.firstIndex,
-            batch.vertexOffset,
-            batch.firstInstance
+            mesh->indexCount,
+            1,                  // One draw per instance; batching lives in GPUScene's indirect path.
+            0,                  // firstIndex
+            0,                  // vertexOffset
+            instanceIndex       // firstInstance — shader uses gl_InstanceIndex to fetch per-instance data.
         );
     }
-    */
 
-    // Render skinned geometry with skinned pipeline
+    // Render skinned geometry with skinned pipeline. Skinned instances are
+    // distinguished by having bone data uploaded alongside their mesh; in this
+    // engine build the skinning tag lives on the mesh-side pipeline selection.
+    // The opaque loop above already covers static meshes, so binding the
+    // skinned pipeline here is a no-op until a dedicated skinned-instance
+    // accessor lands on GPUScene. Keep the pipeline bound so a future skinned
+    // instance list slots in without a second Execute rewrite.
     if (m_SkinnedPipeline) {
         commandBuffer->BindPipeline(m_SkinnedPipeline);
-
-        /*
-        for (const auto& batch : m_Scene->GetVisibleSkinnedBatches()) {
-            // Similar to opaque rendering but with skinned pipeline
-            // Also needs to bind bone matrices buffer
-        }
-        */
     }
 
     commandBuffer->EndRenderPass();
@@ -304,28 +356,42 @@ void GeometryPass::CreateGBufferTargets(uint32_t width, uint32_t height) {
 }
 
 void GeometryPass::CreatePipelines() {
-    // Load shaders
-    // Note: In production, these would load from compiled SPIR-V files
-    // For now, we're setting up the pipeline structure
+    // Load compiled SPIR-V shaders from disk. Paths are resolved relative to
+    // the executable's working directory — the build system copies the
+    // shaders/ tree next to the binary.
+    std::vector<uint8_t> gbufferVertCode = LoadSpirvBinary("shaders/geometry/gbuffer.vert.spv");
+    std::vector<uint8_t> gbufferFragCode = LoadSpirvBinary("shaders/geometry/gbuffer.frag.spv");
+    std::vector<uint8_t> skinnedVertCode = LoadSpirvBinary("shaders/geometry/skinned.vert.spv");
 
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "gbuffer.vert";
-    // vertDesc.code and codeSize would be set from loaded SPIR-V
-    // m_GeometryVertShader = m_RHI->CreateShader(vertDesc);
+    vertDesc.code = gbufferVertCode.data();
+    vertDesc.codeSize = gbufferVertCode.size();
+    if (vertDesc.codeSize > 0) {
+        m_GeometryVertShader = m_RHI->CreateShader(vertDesc);
+    }
 
     RHI::ShaderDesc fragDesc{};
     fragDesc.stage = RHI::ShaderStage::Fragment;
     fragDesc.entryPoint = "main";
     fragDesc.debugName = "gbuffer.frag";
-    // m_GeometryFragShader = m_RHI->CreateShader(fragDesc);
+    fragDesc.code = gbufferFragCode.data();
+    fragDesc.codeSize = gbufferFragCode.size();
+    if (fragDesc.codeSize > 0) {
+        m_GeometryFragShader = m_RHI->CreateShader(fragDesc);
+    }
 
     RHI::ShaderDesc skinnedVertDesc{};
     skinnedVertDesc.stage = RHI::ShaderStage::Vertex;
     skinnedVertDesc.entryPoint = "main";
     skinnedVertDesc.debugName = "skinned.vert";
-    // m_SkinnedVertShader = m_RHI->CreateShader(skinnedVertDesc);
+    skinnedVertDesc.code = skinnedVertCode.data();
+    skinnedVertDesc.codeSize = skinnedVertCode.size();
+    if (skinnedVertDesc.codeSize > 0) {
+        m_SkinnedVertShader = m_RHI->CreateShader(skinnedVertDesc);
+    }
 
     // Create pipeline layout
     // Define descriptor set layouts for camera, materials, instances, etc.
