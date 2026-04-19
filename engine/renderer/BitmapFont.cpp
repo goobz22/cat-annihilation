@@ -1,4 +1,9 @@
 #include "BitmapFont.hpp"
+
+#include "../rhi/RHIBuffer.hpp"
+#include "../rhi/RHICommandBuffer.hpp"
+#include "../rhi/RHITexture.hpp"
+
 #include <cstring>
 #include <iostream>
 #include <cmath>
@@ -205,42 +210,160 @@ static const uint8_t FONT_5x7[96][7] = {
 bool BitmapFont::Initialize(RHI::IRHI* rhi, uint32_t fontSize) {
     rhi_ = rhi;
     fontSize_ = fontSize;
-    
-    // Calculate scale factor from base 5x7 font to desired size
-    lineHeight_ = static_cast<float>(fontSize) * 1.2f;  // Add some line spacing
-    
-    // Generate glyph metrics (no texture for now - we'll render as colored rectangles)
-    uint32_t cellWidth = ATLAS_WIDTH / CHARS_PER_ROW;
-    uint32_t cellHeight = ATLAS_HEIGHT / CHAR_ROWS;
-    
-    // Generate glyph info for each ASCII character
-    for (int i = 0; i < 96; i++) {
-        char c = static_cast<char>(32 + i);
-        uint32_t col = i % CHARS_PER_ROW;
-        uint32_t row = i / CHARS_PER_ROW;
-        
+    lineHeight_ = static_cast<float>(fontSize) * 1.2f;
+
+    const uint32_t cellWidth = ATLAS_WIDTH / CHARS_PER_ROW;
+    const uint32_t cellHeight = ATLAS_HEIGHT / CHAR_ROWS;
+
+    // Rasterize the 5x7 source font into the 32x(ATLAS_HEIGHT/CHAR_ROWS) cell
+    // grid using integer replication. Keeps glyph edges crisp at integer pixel
+    // scales without introducing sampling blur at V1.
+    m_atlasPixels.assign(static_cast<size_t>(ATLAS_WIDTH) * ATLAS_HEIGHT, 0);
+
+    constexpr uint32_t GLYPH_SRC_W = 5;
+    constexpr uint32_t GLYPH_SRC_H = 7;
+    const uint32_t pixelScaleX = cellWidth / GLYPH_SRC_W;
+    const uint32_t pixelScaleY = cellHeight / GLYPH_SRC_H;
+    const uint32_t glyphPixelW = GLYPH_SRC_W * pixelScaleX;
+    const uint32_t glyphPixelH = GLYPH_SRC_H * pixelScaleY;
+    const uint32_t padX = (cellWidth - glyphPixelW) / 2;
+    const uint32_t padY = (cellHeight - glyphPixelH) / 2;
+
+    for (int i = 0; i < 96; ++i) {
+        const char c = static_cast<char>(32 + i);
+        const uint32_t col = static_cast<uint32_t>(i) % CHARS_PER_ROW;
+        const uint32_t row = static_cast<uint32_t>(i) / CHARS_PER_ROW;
+        const uint32_t cellOriginX = col * cellWidth + padX;
+        const uint32_t cellOriginY = row * cellHeight + padY;
+
+        const uint8_t (&rows)[7] = FONT_5x7[i];
+        for (uint32_t gy = 0; gy < GLYPH_SRC_H; ++gy) {
+            // Source bitmask stores column 0 in bit 4 (leftmost of the 5-wide
+            // glyph); bits 0..4 map to columns 4..0 respectively.
+            const uint8_t mask = rows[gy];
+            for (uint32_t gx = 0; gx < GLYPH_SRC_W; ++gx) {
+                const bool on = (mask >> (GLYPH_SRC_W - 1 - gx)) & 1u;
+                if (!on) {
+                    continue;
+                }
+                for (uint32_t sy = 0; sy < pixelScaleY; ++sy) {
+                    for (uint32_t sx = 0; sx < pixelScaleX; ++sx) {
+                        const uint32_t px = cellOriginX + gx * pixelScaleX + sx;
+                        const uint32_t py = cellOriginY + gy * pixelScaleY + sy;
+                        m_atlasPixels[py * ATLAS_WIDTH + px] = 0xFFu;
+                    }
+                }
+            }
+        }
+
         GlyphInfo glyph{};
         glyph.u0 = static_cast<float>(col * cellWidth) / static_cast<float>(ATLAS_WIDTH);
         glyph.v0 = static_cast<float>(row * cellHeight) / static_cast<float>(ATLAS_HEIGHT);
         glyph.u1 = static_cast<float>((col + 1) * cellWidth) / static_cast<float>(ATLAS_WIDTH);
         glyph.v1 = static_cast<float>((row + 1) * cellHeight) / static_cast<float>(ATLAS_HEIGHT);
-        glyph.width = static_cast<float>(fontSize) * 0.6f;  // Approximate width
+        glyph.width = static_cast<float>(fontSize) * 0.6f;
         glyph.height = static_cast<float>(fontSize);
         glyph.xOffset = 0.0f;
         glyph.yOffset = 0.0f;
-        glyph.xAdvance = glyph.width;  // Monospace for now
-        
+        glyph.xAdvance = glyph.width;
+
         glyphs_[c] = glyph;
     }
-    
-    std::cout << "[BitmapFont] Font initialized with " << glyphs_.size() 
-              << " glyphs, fontSize=" << fontSize << "\n";
-    
+
+    if (!rhi_) {
+        std::cout << "[BitmapFont] Font initialized (CPU-only, no RHI) with "
+                  << glyphs_.size() << " glyphs, fontSize=" << fontSize << "\n";
+        return true;
+    }
+
+    // Upload the rasterized atlas to the GPU as an R8_UNORM sampled image.
+    RHI::TextureDesc atlasDesc{};
+    atlasDesc.type = RHI::TextureType::Texture2D;
+    atlasDesc.format = RHI::TextureFormat::R8_UNORM;
+    atlasDesc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::TransferDst;
+    atlasDesc.width = ATLAS_WIDTH;
+    atlasDesc.height = ATLAS_HEIGHT;
+    atlasDesc.depth = 1;
+    atlasDesc.mipLevels = 1;
+    atlasDesc.arrayLayers = 1;
+    atlasDesc.sampleCount = 1;
+    atlasDesc.debugName = "BitmapFontAtlas";
+
+    m_atlasTexture = rhi_->CreateTexture(atlasDesc);
+    if (!m_atlasTexture) {
+        std::cerr << "[BitmapFont] Failed to create atlas texture\n";
+        return false;
+    }
+
+    const uint64_t atlasByteSize =
+        static_cast<uint64_t>(ATLAS_WIDTH) * static_cast<uint64_t>(ATLAS_HEIGHT);
+
+    RHI::BufferDesc stagingDesc{};
+    stagingDesc.size = atlasByteSize;
+    stagingDesc.usage = RHI::BufferUsage::Staging | RHI::BufferUsage::TransferSrc;
+    stagingDesc.memoryProperties =
+        RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
+    stagingDesc.debugName = "BitmapFontAtlasStaging";
+
+    RHI::IRHIBuffer* stagingBuffer = rhi_->CreateBuffer(stagingDesc);
+    if (!stagingBuffer) {
+        std::cerr << "[BitmapFont] Failed to create staging buffer\n";
+        rhi_->DestroyTexture(m_atlasTexture);
+        m_atlasTexture = nullptr;
+        return false;
+    }
+
+    void* mapped = rhi_->MapBuffer(stagingBuffer);
+    if (!mapped) {
+        std::cerr << "[BitmapFont] Failed to map staging buffer\n";
+        rhi_->DestroyBuffer(stagingBuffer);
+        rhi_->DestroyTexture(m_atlasTexture);
+        m_atlasTexture = nullptr;
+        return false;
+    }
+    std::memcpy(mapped, m_atlasPixels.data(), static_cast<size_t>(atlasByteSize));
+    rhi_->UnmapBuffer(stagingBuffer);
+
+    RHI::IRHICommandBuffer* cmd = rhi_->CreateCommandBuffer();
+    if (!cmd) {
+        std::cerr << "[BitmapFont] Failed to create upload command buffer\n";
+        rhi_->DestroyBuffer(stagingBuffer);
+        rhi_->DestroyTexture(m_atlasTexture);
+        m_atlasTexture = nullptr;
+        return false;
+    }
+
+    // Synchronous upload path: the atlas is tiny (256 KiB at 512x512x1B) and
+    // only uploaded once at init time, so a single WaitIdle is cheaper than
+    // threading a per-frame staging ring for this resource.
+    cmd->Begin();
+    cmd->CopyBufferToTexture(stagingBuffer, m_atlasTexture,
+                             /*mipLevel*/ 0, /*arrayLayer*/ 0,
+                             ATLAS_WIDTH, ATLAS_HEIGHT, /*depth*/ 1);
+    cmd->End();
+
+    rhi_->Submit(&cmd, 1);
+    rhi_->WaitIdle();
+
+    rhi_->DestroyCommandBuffer(cmd);
+    rhi_->DestroyBuffer(stagingBuffer);
+
+    std::cout << "[BitmapFont] Font initialized with " << glyphs_.size()
+              << " glyphs, fontSize=" << fontSize
+              << ", atlas=" << ATLAS_WIDTH << "x" << ATLAS_HEIGHT << " R8\n";
+
     return true;
 }
 
 void BitmapFont::Cleanup() {
+    if (rhi_ && m_atlasTexture) {
+        rhi_->DestroyTexture(m_atlasTexture);
+    }
+    m_atlasTexture = nullptr;
+    m_atlasPixels.clear();
+    m_atlasPixels.shrink_to_fit();
     glyphs_.clear();
+    rhi_ = nullptr;
 }
 
 const GlyphInfo* BitmapFont::GetGlyph(char c) const {
