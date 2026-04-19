@@ -1,6 +1,11 @@
 #include "MainMenu.hpp"
 #include "../audio/GameAudio.hpp"
+#include "../config/GameConfig.hpp"
+#include "../../engine/audio/AudioEngine.hpp"
+#include "../../engine/audio/AudioMixer.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/core/Window.hpp"
+#include "../../engine/renderer/Renderer.hpp"
 #include "../../engine/ui/ImGuiLayer.hpp"
 
 #include "imgui.h"
@@ -13,61 +18,140 @@ namespace Game {
 // ---------------------------------------------------------------------------
 // Settings panel state
 //
-// No dedicated Settings singleton exists yet, so the panel owns its own sliders
-// via file-local storage. When a Settings system lands these are the first
-// values to wire through to the real store. The layout is deliberately narrow
-// (ImGui sliders + checkboxes) so the panel works on every platform the engine
-// already supports.
+// The panel owns its open/closed flag here (a file-local singleton so the
+// toggle survives across render() calls). Every other value lives in the
+// GameConfig the MainMenu was bound to — the panel edits it live so any
+// subsystem that reads GameConfig picks up the new values on the next
+// query, and saveConfig writes them out when the user closes the panel.
 // ---------------------------------------------------------------------------
 namespace {
 
-struct SettingsPanelState {
-    bool   open             = false;
-    float  masterVolume     = 0.80F;
-    float  musicVolume      = 0.70F;
-    float  sfxVolume        = 0.90F;
-    float  mouseSensitivity = 1.00F;
-    bool   fullscreen       = false;
-    bool   vsync            = true;
-    bool   invertY          = false;
-};
-
-SettingsPanelState& settingsState() {
-    static SettingsPanelState state;
-    return state;
+bool& panelOpenFlag() {
+    static bool open = false;
+    return open;
 }
 
-void drawSettingsPanel(GameAudio& /*audio*/) {
-    SettingsPanelState& state = settingsState();
-    if (!state.open) {
+// Track the last applied values so we only push updates to the real
+// subsystems on the frame they change. Reading back via getMasterVolume()
+// each frame would be cheap but it's cleaner to only call the setters on
+// a real edge — several audio drivers log on volume change, and we don't
+// want to spam that log every frame.
+struct LastApplied {
+    float masterVolume     = -1.0F;
+    float musicVolume      = -1.0F;
+    float sfxVolume        = -1.0F;
+    float mouseSensitivity = -1.0F;
+    int   fullscreen       = -1;
+    int   vsync            = -1;
+    int   invertY          = -1;
+};
+
+LastApplied& lastApplied() {
+    static LastApplied s;
+    return s;
+}
+
+void drawSettingsPanel(GameAudio& audio,
+                       Engine::Window* window,
+                       CatEngine::Renderer::Renderer* renderer,
+                       GameConfig* gameConfig) {
+    bool& open = panelOpenFlag();
+    if (!open) {
+        return;
+    }
+    if (gameConfig == nullptr) {
+        // Without a config to mutate, nothing would stick across frames —
+        // and every one of the real subsystem setters below would have no
+        // authoritative source to read from. Surface this once via ImGui
+        // rather than silently draw a dead panel.
+        ImGui::SetNextWindowSize(ImVec2(480.0F, 120.0F), ImGuiCond_Appearing);
+        if (ImGui::Begin("Settings", &open)) {
+            ImGui::TextWrapped("Settings are not wired to a GameConfig instance. "
+                               "Call MainMenu::setSettingsBindings() during init.");
+        }
+        ImGui::End();
         return;
     }
 
+    LastApplied& last = lastApplied();
+
     ImGui::SetNextWindowSize(ImVec2(480.0F, 360.0F), ImGuiCond_Appearing);
-    if (ImGui::Begin("Settings", &state.open)) {
+    if (ImGui::Begin("Settings", &open)) {
         ImGui::TextUnformatted("Audio");
         ImGui::Separator();
-        // Volumes are held locally until GameAudio exposes a mixer setter; the
-        // sliders still respond instantly so the panel is never an empty shell.
-        ImGui::SliderFloat("Master Volume", &state.masterVolume, 0.0F, 1.0F, "%.2f");
-        ImGui::SliderFloat("Music Volume",  &state.musicVolume,  0.0F, 1.0F, "%.2f");
-        ImGui::SliderFloat("SFX Volume",    &state.sfxVolume,    0.0F, 1.0F, "%.2f");
+
+        ImGui::SliderFloat("Master Volume", &gameConfig->audio.masterVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.masterVolume != last.masterVolume) {
+            audio.getMixer().setMasterVolume(gameConfig->audio.masterVolume);
+            last.masterVolume = gameConfig->audio.masterVolume;
+        }
+
+        ImGui::SliderFloat("Music Volume", &gameConfig->audio.musicVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.musicVolume != last.musicVolume) {
+            // GameAudio routes music through the Music mixer channel; the
+            // mixer is the single source of truth for per-channel gain so
+            // every music source (menu / gameplay / victory / defeat) picks
+            // up the change on the next updateVolumes() pass.
+            audio.getMixer().setChannelVolume(CatEngine::AudioMixer::Channel::Music,
+                                              gameConfig->audio.musicVolume);
+            last.musicVolume = gameConfig->audio.musicVolume;
+        }
+
+        ImGui::SliderFloat("SFX Volume", &gameConfig->audio.sfxVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.sfxVolume != last.sfxVolume) {
+            audio.getMixer().setChannelVolume(CatEngine::AudioMixer::Channel::SFX,
+                                              gameConfig->audio.sfxVolume);
+            last.sfxVolume = gameConfig->audio.sfxVolume;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 6.0F));
         ImGui::TextUnformatted("Input");
         ImGui::Separator();
-        ImGui::SliderFloat("Mouse Sensitivity", &state.mouseSensitivity, 0.25F, 4.0F, "%.2f");
-        ImGui::Checkbox("Invert Y Axis", &state.invertY);
+
+        ImGui::SliderFloat("Mouse Sensitivity", &gameConfig->controls.mouseSensitivity,
+                           0.1F, 2.0F, "%.2f");
+        if (gameConfig->controls.mouseSensitivity != last.mouseSensitivity) {
+            // The FPS camera controller reads controls.mouseSensitivity out
+            // of GameConfig at input time, so updating the config is all
+            // that's needed here — no setter call required.
+            last.mouseSensitivity = gameConfig->controls.mouseSensitivity;
+        }
+
+        ImGui::Checkbox("Invert Y Axis", &gameConfig->controls.invertMouseY);
+        const int invertYNow = gameConfig->controls.invertMouseY ? 1 : 0;
+        if (invertYNow != last.invertY) {
+            // Camera reads this flag from GameConfig per-frame — same
+            // pattern as mouseSensitivity above.
+            last.invertY = invertYNow;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 6.0F));
         ImGui::TextUnformatted("Display");
         ImGui::Separator();
-        ImGui::Checkbox("Fullscreen", &state.fullscreen);
-        ImGui::Checkbox("VSync",      &state.vsync);
+
+        ImGui::Checkbox("Fullscreen", &gameConfig->graphics.fullscreen);
+        const int fullscreenNow = gameConfig->graphics.fullscreen ? 1 : 0;
+        if (fullscreenNow != last.fullscreen && window != nullptr) {
+            window->setFullscreen(gameConfig->graphics.fullscreen);
+            last.fullscreen = fullscreenNow;
+        }
+
+        ImGui::Checkbox("VSync", &gameConfig->graphics.vsync);
+        const int vsyncNow = gameConfig->graphics.vsync ? 1 : 0;
+        if (vsyncNow != last.vsync && renderer != nullptr) {
+            // Renderer::SetVSync recreates the swapchain so it's heavier
+            // than the other toggles; only call it on the edge.
+            renderer->SetVSync(gameConfig->graphics.vsync);
+            last.vsync = vsyncNow;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 12.0F));
         if (ImGui::Button("Close", ImVec2(120.0F, 0.0F))) {
-            state.open = false;
+            open = false;
+            // Persist on close so settings survive a restart. The main
+            // loop also saves on exit, but saving here means pre-quit
+            // crashes don't lose the user's tweaks.
+            gameConfig->save("config.json");
         }
     }
     ImGui::End();
@@ -131,7 +215,7 @@ bool MainMenu::initialize() {
         } else {
             // Toggle the in-menu settings window. A consumer-supplied callback
             // (e.g. to open a dedicated scene) still takes precedence.
-            settingsState().open = !settingsState().open;
+            panelOpenFlag() = !panelOpenFlag();
         }
     };
     m_buttons.push_back(settingsButton);
@@ -300,7 +384,7 @@ void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth,
     ImGui::PopStyleColor();
 
     // Draw the settings panel last so it layers on top of the overlay window.
-    drawSettingsPanel(m_audio);
+    drawSettingsPanel(m_audio, m_settingsWindow, m_settingsRenderer, m_settingsConfig);
 }
 
 void MainMenu::handleInput() {

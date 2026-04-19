@@ -8,6 +8,7 @@
 #include "../../engine/animation/Animator.hpp"
 #include "../../engine/animation/Animation.hpp"
 #include "../../engine/animation/Skeleton.hpp"
+#include <exception>
 
 namespace CatGame {
 
@@ -91,7 +92,13 @@ CatEngine::Entity CatEntity::createCustom(
     // Attach the default cat model and animator. Failure is non-fatal: the
     // entity still has Transform/Health/Movement/Combat and will render as
     // invisible until a model is supplied via loadModel() directly.
-    if (loadModel(ecs, entity, "assets/models/cat_player.gltf")) {
+    //
+    // Path resolution: the on-disk asset is `assets/models/cat.gltf`. The
+    // earlier `cat_player.gltf` name did not exist on disk, which caused
+    // ModelLoader::LoadGLTF to throw `std::runtime_error("Failed to open
+    // file")` and abort the process on the very first cat spawn. Keep this
+    // path synchronized with the real asset filename.
+    if (loadModel(ecs, entity, "assets/models/cat.gltf")) {
         configureAnimations(ecs, entity);
     }
 
@@ -106,10 +113,23 @@ bool CatEntity::loadModel(CatEngine::ECS& ecs, CatEngine::Entity entity, const c
 
     // Route through AssetManager so repeated requests reuse the same Model
     // shared_ptr and upload GPU buffers only once.
+    //
+    // ModelLoader::Load throws std::runtime_error on missing file, unknown
+    // extension, or malformed glTF. That exception must not escape into the
+    // ECS createCustom() path — an uncaught throw from a constructor-like
+    // factory aborts the whole game on first spawn. Catch here, log, and
+    // return false so the caller can fall back to a model-less entity.
     auto& assets = CatEngine::AssetManager::GetInstance();
-    std::shared_ptr<CatEngine::Model> model = assets.LoadModel(modelPath);
+    std::shared_ptr<CatEngine::Model> model;
+    try {
+        model = assets.LoadModel(modelPath);
+    } catch (const std::exception& ex) {
+        Engine::Logger::warn(std::string("CatEntity::loadModel: exception loading '") +
+                             modelPath + "': " + ex.what());
+        return false;
+    }
     if (!model) {
-        Engine::Logger::error(std::string("CatEntity::loadModel: failed to load ") + modelPath);
+        Engine::Logger::warn(std::string("CatEntity::loadModel: failed to load ") + modelPath);
         return false;
     }
 
@@ -177,10 +197,21 @@ bool CatEntity::configureAnimations(CatEngine::ECS& ecs, CatEngine::Entity entit
         auto engineClip = std::make_shared<Engine::Animation>(clip.name, clip.duration);
 
         for (const auto& channel : clip.channels) {
-            Engine::AnimationChannel outChannel(channel.nodeIndex,
-                                                mesh->skeleton->hasBone(std::to_string(channel.nodeIndex))
-                                                    ? std::to_string(channel.nodeIndex)
-                                                    : "");
+            // Resolve the bone name from the glTF node graph. The skeleton was
+            // populated in loadModel() by iterating model->nodes in order and
+            // calling addBone(node.name, ...). Using `std::to_string(nodeIndex)`
+            // here (as the pre-fix code did) compared the numeric index "7"
+            // against the actual bone name "spine" and always missed, so no
+            // animation channel was ever bound to a bone — the cat stood in
+            // bind pose regardless of what clip was playing. Look the name up
+            // directly via the node index.
+            const bool nodeIndexValid =
+                channel.nodeIndex >= 0 &&
+                static_cast<size_t>(channel.nodeIndex) < mesh->model->nodes.size();
+            const std::string& boneName = nodeIndexValid
+                ? mesh->model->nodes[channel.nodeIndex].name
+                : std::string();
+            Engine::AnimationChannel outChannel(channel.nodeIndex, boneName);
 
             if (channel.path == "translation") {
                 outChannel.positionKeyframes.reserve(channel.times.size());

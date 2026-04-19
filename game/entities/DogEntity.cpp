@@ -10,6 +10,7 @@
 #include "../../engine/animation/Animator.hpp"
 #include "../../engine/animation/Animation.hpp"
 #include "../../engine/animation/Skeleton.hpp"
+#include <exception>
 
 namespace CatGame {
 
@@ -18,13 +19,27 @@ namespace {
 // Resolve the on-disk model path for a given dog variant. Kept as a free
 // function so the mapping lives next to the entity factory rather than being
 // threaded through configuration.
+//
+// The `assets/models/enemies/` directory does not exist yet and the per-
+// variant dog models (dog_big / dog_fast / dog_boss / dog_normal) have not
+// been authored. Previously each variant pointed at a different non-existent
+// path, which caused ModelLoader::Load to throw std::runtime_error and
+// abort the game on the first enemy spawn.
+//
+// Until the variant meshes ship, every dog type reuses the single
+// `assets/models/dog.gltf` asset. Scale and tint are still varied per type
+// elsewhere (getStatsForType + proxy draw tinting), so big/fast/boss dogs
+// remain visually distinguishable even while sharing geometry. When proper
+// variant models land, restore the variant-specific paths here and delete
+// this comment.
 const char* modelPathForType(EnemyType type) {
     switch (type) {
-        case EnemyType::BigDog:  return "assets/models/enemies/dog_big.gltf";
-        case EnemyType::FastDog: return "assets/models/enemies/dog_fast.gltf";
-        case EnemyType::BossDog: return "assets/models/enemies/dog_boss.gltf";
+        case EnemyType::BigDog:
+        case EnemyType::FastDog:
+        case EnemyType::BossDog:
         case EnemyType::Dog:
-        default:                 return "assets/models/enemies/dog_normal.gltf";
+        default:
+            return "assets/models/dog.gltf";
     }
 }
 
@@ -34,7 +49,20 @@ const char* modelPathForType(EnemyType type) {
 void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyType type) {
     const char* modelPath = modelPathForType(type);
     auto& assets = CatEngine::AssetManager::GetInstance();
-    std::shared_ptr<CatEngine::Model> model = assets.LoadModel(modelPath);
+
+    // ModelLoader::Load throws std::runtime_error for missing files, unknown
+    // extensions, or malformed glTF. Letting that propagate out of the dog
+    // spawn path would abort the game the first time a wave ticks, which is
+    // what the audit observed. Trap the exception, log it, and leave the
+    // entity without a mesh — AI and combat still work against a proxy cube.
+    std::shared_ptr<CatEngine::Model> model;
+    try {
+        model = assets.LoadModel(modelPath);
+    } catch (const std::exception& ex) {
+        Engine::Logger::warn(std::string("DogEntity: exception loading '") +
+                             modelPath + "': " + ex.what());
+        return;
+    }
     if (!model) {
         Engine::Logger::warn(std::string("DogEntity: failed to load ") + modelPath);
         return;
@@ -80,7 +108,21 @@ void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyT
     for (const auto& clip : model->animations) {
         auto engineClip = std::make_shared<Engine::Animation>(clip.name, clip.duration);
         for (const auto& channel : clip.channels) {
-            Engine::AnimationChannel outChannel(channel.nodeIndex);
+            // Resolve the bone name from the glTF node graph rather than from
+            // the numeric nodeIndex. The skeleton was populated above by
+            // walking model->nodes in order and calling addBone(node.name,
+            // ...), so bones are keyed by their glTF name ("spine", "head",
+            // ...). Using the numeric index as a bone name — which the
+            // earlier code did implicitly via std::to_string — produced
+            // channels that resolved to no bone at all and animations that
+            // silently did nothing. Keep this logic in sync with CatEntity.
+            const bool nodeIndexValid =
+                channel.nodeIndex >= 0 &&
+                static_cast<size_t>(channel.nodeIndex) < model->nodes.size();
+            const std::string& boneName = nodeIndexValid
+                ? model->nodes[channel.nodeIndex].name
+                : std::string();
+            Engine::AnimationChannel outChannel(channel.nodeIndex, boneName);
             if (channel.path == "translation") {
                 outChannel.positionKeyframes.reserve(channel.times.size());
                 for (size_t i = 0; i < channel.times.size() && i < channel.translations.size(); ++i) {

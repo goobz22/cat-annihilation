@@ -8,11 +8,16 @@
 #include <string>
 #include <array>
 
-namespace Engine { class ImGuiLayer; }
+namespace Engine {
+    class ImGuiLayer;
+    class Window;
+}
+namespace CatEngine::Renderer { class Renderer; }
 
 namespace Game {
 
 class GameAudio;
+class GameConfig;
 
 /**
  * @brief Pause Menu overlay
@@ -117,6 +122,21 @@ public:
      */
     void setImGuiLayer(Engine::ImGuiLayer* imguiLayer) { m_imguiLayer = imguiLayer; }
 
+    /**
+     * @brief Wire the pause-menu settings panel to real engine systems.
+     *
+     * Same contract as MainMenu::setSettingsBindings — any argument may be
+     * null to disable that row's wiring. GameConfig is both the source of
+     * initial values and the persistence sink on Close.
+     */
+    void setSettingsBindings(Engine::Window* window,
+                             CatEngine::Renderer::Renderer* renderer,
+                             GameConfig* gameConfig) {
+        m_settingsWindow = window;
+        m_settingsRenderer = renderer;
+        m_settingsConfig = gameConfig;
+    }
+
 private:
     /**
      * @brief Menu button structure
@@ -201,6 +221,12 @@ private:
 
     // Optional ImGui layer (not owned). When set, render() builds widgets via ImGui.
     Engine::ImGuiLayer* m_imguiLayer = nullptr;
+
+    // Settings-panel bindings (not owned). Any may be null if a given row
+    // isn't wired yet; the panel draw code guards every use.
+    Engine::Window* m_settingsWindow = nullptr;
+    CatEngine::Renderer::Renderer* m_settingsRenderer = nullptr;
+    GameConfig* m_settingsConfig = nullptr;
 };
 
 } // namespace Game

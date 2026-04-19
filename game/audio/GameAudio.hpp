@@ -216,6 +216,19 @@ public:
      */
     const std::string& getCurrentMusicTrack() const { return m_currentMusicTrack; }
 
+    /**
+     * @brief Forward access to the engine-level AudioMixer.
+     *
+     * Settings UI (volume sliders, channel toggles) needs to reach the
+     * master / music / SFX volumes owned by the CatEngine::AudioMixer that
+     * AudioEngine holds. GameAudio already stores a reference to the
+     * AudioEngine, so exposing its mixer here is the minimum-surface way to
+     * let MainMenu / PauseMenu settings panels update volumes without
+     * plumbing AudioEngine* through every caller.
+     */
+    CatEngine::AudioMixer& getMixer() { return m_audioEngine.getMixer(); }
+    const CatEngine::AudioMixer& getMixer() const { return m_audioEngine.getMixer(); }
+
 private:
     /**
      * @brief Load a sound file and cache it

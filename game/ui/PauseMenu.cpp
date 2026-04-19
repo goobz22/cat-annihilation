@@ -1,62 +1,129 @@
 #include "PauseMenu.hpp"
 #include "../audio/GameAudio.hpp"
+#include "../config/GameConfig.hpp"
+#include "../../engine/audio/AudioEngine.hpp"
+#include "../../engine/audio/AudioMixer.hpp"
 #include "../../engine/core/Logger.hpp"
+#include "../../engine/core/Window.hpp"
+#include "../../engine/renderer/Renderer.hpp"
 #include "../../engine/ui/ImGuiLayer.hpp"
 
 #include "imgui.h"
 
 namespace Game {
 
-// Settings panel state — same design as MainMenu's panel. The two menus
-// deliberately share neither code nor storage so the pause-menu overlay can
-// evolve independently (e.g. add "Apply & Return to Combat" logic later).
+// Settings panel — same wiring shape as MainMenu. The two menus keep
+// independent open/closed flags (so closing the pause-menu settings
+// doesn't also close the main-menu settings the next time a different
+// build state opens it), but both mutate the shared GameConfig instance
+// so edits in either screen persist and stay in sync.
 namespace {
 
-struct PauseSettingsState {
-    bool  open             = false;
-    float masterVolume     = 0.80F;
-    float musicVolume      = 0.70F;
-    float sfxVolume        = 0.90F;
-    float mouseSensitivity = 1.00F;
-    bool  fullscreen       = false;
-    bool  vsync            = true;
-    bool  invertY          = false;
-};
-
-PauseSettingsState& pauseSettingsState() {
-    static PauseSettingsState state;
-    return state;
+bool& pausePanelOpenFlag() {
+    static bool open = false;
+    return open;
 }
 
-void drawPauseSettingsPanel() {
-    PauseSettingsState& state = pauseSettingsState();
-    if (!state.open) {
+// Edge-trigger tracking identical to MainMenu.cpp — keep in sync with the
+// setters there when adding new rows.
+struct PauseLastApplied {
+    float masterVolume     = -1.0F;
+    float musicVolume      = -1.0F;
+    float sfxVolume        = -1.0F;
+    float mouseSensitivity = -1.0F;
+    int   fullscreen       = -1;
+    int   vsync            = -1;
+    int   invertY          = -1;
+};
+
+PauseLastApplied& pauseLastApplied() {
+    static PauseLastApplied s;
+    return s;
+}
+
+void drawPauseSettingsPanel(GameAudio& audio,
+                            Engine::Window* window,
+                            CatEngine::Renderer::Renderer* renderer,
+                            GameConfig* gameConfig) {
+    bool& open = pausePanelOpenFlag();
+    if (!open) {
+        return;
+    }
+    if (gameConfig == nullptr) {
+        ImGui::SetNextWindowSize(ImVec2(480.0F, 120.0F), ImGuiCond_Appearing);
+        if (ImGui::Begin("Settings", &open)) {
+            ImGui::TextWrapped("Settings are not wired to a GameConfig instance. "
+                               "Call PauseMenu::setSettingsBindings() during init.");
+        }
+        ImGui::End();
         return;
     }
 
+    PauseLastApplied& last = pauseLastApplied();
+
     ImGui::SetNextWindowSize(ImVec2(480.0F, 360.0F), ImGuiCond_Appearing);
-    if (ImGui::Begin("Settings", &state.open)) {
+    if (ImGui::Begin("Settings", &open)) {
         ImGui::TextUnformatted("Audio");
         ImGui::Separator();
-        ImGui::SliderFloat("Master Volume", &state.masterVolume, 0.0F, 1.0F, "%.2f");
-        ImGui::SliderFloat("Music Volume",  &state.musicVolume,  0.0F, 1.0F, "%.2f");
-        ImGui::SliderFloat("SFX Volume",    &state.sfxVolume,    0.0F, 1.0F, "%.2f");
+
+        ImGui::SliderFloat("Master Volume", &gameConfig->audio.masterVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.masterVolume != last.masterVolume) {
+            audio.getMixer().setMasterVolume(gameConfig->audio.masterVolume);
+            last.masterVolume = gameConfig->audio.masterVolume;
+        }
+
+        ImGui::SliderFloat("Music Volume", &gameConfig->audio.musicVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.musicVolume != last.musicVolume) {
+            audio.getMixer().setChannelVolume(CatEngine::AudioMixer::Channel::Music,
+                                              gameConfig->audio.musicVolume);
+            last.musicVolume = gameConfig->audio.musicVolume;
+        }
+
+        ImGui::SliderFloat("SFX Volume", &gameConfig->audio.sfxVolume, 0.0F, 1.0F, "%.2f");
+        if (gameConfig->audio.sfxVolume != last.sfxVolume) {
+            audio.getMixer().setChannelVolume(CatEngine::AudioMixer::Channel::SFX,
+                                              gameConfig->audio.sfxVolume);
+            last.sfxVolume = gameConfig->audio.sfxVolume;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 6.0F));
         ImGui::TextUnformatted("Input");
         ImGui::Separator();
-        ImGui::SliderFloat("Mouse Sensitivity", &state.mouseSensitivity, 0.25F, 4.0F, "%.2f");
-        ImGui::Checkbox("Invert Y Axis", &state.invertY);
+
+        ImGui::SliderFloat("Mouse Sensitivity", &gameConfig->controls.mouseSensitivity,
+                           0.1F, 2.0F, "%.2f");
+        if (gameConfig->controls.mouseSensitivity != last.mouseSensitivity) {
+            last.mouseSensitivity = gameConfig->controls.mouseSensitivity;
+        }
+
+        ImGui::Checkbox("Invert Y Axis", &gameConfig->controls.invertMouseY);
+        const int invertYNow = gameConfig->controls.invertMouseY ? 1 : 0;
+        if (invertYNow != last.invertY) {
+            last.invertY = invertYNow;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 6.0F));
         ImGui::TextUnformatted("Display");
         ImGui::Separator();
-        ImGui::Checkbox("Fullscreen", &state.fullscreen);
-        ImGui::Checkbox("VSync",      &state.vsync);
+
+        ImGui::Checkbox("Fullscreen", &gameConfig->graphics.fullscreen);
+        const int fullscreenNow = gameConfig->graphics.fullscreen ? 1 : 0;
+        if (fullscreenNow != last.fullscreen && window != nullptr) {
+            window->setFullscreen(gameConfig->graphics.fullscreen);
+            last.fullscreen = fullscreenNow;
+        }
+
+        ImGui::Checkbox("VSync", &gameConfig->graphics.vsync);
+        const int vsyncNow = gameConfig->graphics.vsync ? 1 : 0;
+        if (vsyncNow != last.vsync && renderer != nullptr) {
+            renderer->SetVSync(gameConfig->graphics.vsync);
+            last.vsync = vsyncNow;
+        }
 
         ImGui::Dummy(ImVec2(0.0F, 12.0F));
         if (ImGui::Button("Close", ImVec2(120.0F, 0.0F))) {
-            state.open = false;
+            open = false;
+            gameConfig->save("config.json");
         }
     }
     ImGui::End();
@@ -119,7 +186,7 @@ bool PauseMenu::initialize() {
         } else {
             // Toggle the in-pause settings window. A consumer-supplied
             // callback (e.g. to open a dedicated scene) still takes precedence.
-            pauseSettingsState().open = !pauseSettingsState().open;
+            pausePanelOpenFlag() = !pausePanelOpenFlag();
         }
     };
     m_buttons.push_back(settingsButton);
@@ -327,7 +394,7 @@ void PauseMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
     }
 
     // Settings window layers on top of everything else when open.
-    drawPauseSettingsPanel();
+    drawPauseSettingsPanel(m_audio, m_settingsWindow, m_settingsRenderer, m_settingsConfig);
 }
 
 void PauseMenu::handleInput() {

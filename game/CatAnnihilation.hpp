@@ -3,6 +3,8 @@
 #include "../engine/ecs/ECS.hpp"
 #include "../engine/ecs/Entity.hpp"
 #include "../engine/core/Input.hpp"
+#include "../engine/core/Window.hpp"
+#include "../engine/core/touch_input.hpp"
 #include "../engine/renderer/Renderer.hpp"
 #include "../engine/audio/AudioEngine.hpp"
 #include "../engine/ui/ImGuiLayer.hpp"
@@ -29,6 +31,7 @@
 #include "ui/PauseMenu.hpp"
 #include "ui/GameUI.hpp"
 #include "audio/GameAudio.hpp"
+#include "config/GameConfig.hpp"
 #include "world/GameWorld.hpp"
 #include "game_events.hpp"
 #include "../engine/core/save_system.hpp"
@@ -83,7 +86,19 @@ public:
      * @param renderer Pointer to renderer
      * @param audioEngine Pointer to audio engine
      */
+    /**
+     * Construct the game.
+     *
+     * @param input       Keyboard/mouse input system
+     * @param window      Host window — needed so touch input can hook GLFW
+     *                    callbacks and so settings UI can toggle fullscreen.
+     *                    May be null when running in offscreen/test harnesses.
+     * @param renderer    Renderer (used for VSync toggle + draw)
+     * @param audioEngine Audio engine (used for volume routing)
+     * @param imguiLayer  ImGui layer used for menu / HUD drawing
+     */
     explicit CatAnnihilation(Engine::Input* input,
+                            Engine::Window* window,
                             CatEngine::Renderer::Renderer* renderer,
                             CatEngine::AudioEngine* audioEngine,
                             Engine::ImGuiLayer* imguiLayer);
@@ -242,6 +257,14 @@ public:
      */
     bool isStoryMode() const { return isStoryMode_; }
 
+    /**
+     * Attach a GameConfig to the menus so the Settings panel's sliders and
+     * checkboxes actually mutate (and persist) engine settings instead of
+     * editing dead file-local state. Must be called before initializeUI so
+     * the menus receive the bindings at construction time.
+     */
+    void setGameConfig(Game::GameConfig* gameConfig) { gameConfig_ = gameConfig; }
+
 private:
     // ========================================================================
     // Initialization
@@ -350,10 +373,17 @@ private:
 
     CatEngine::ECS ecs_;
     Engine::Input* input_;
+    Engine::Window* window_ = nullptr;
     CatEngine::Renderer::Renderer* renderer_;
     CatEngine::AudioEngine* audioEngine_;
     Engine::ImGuiLayer* imguiLayer_ = nullptr;
     GameEventBus eventBus_;
+
+    // Touch input system. Owned by the game so it lives as long as the
+    // GLFW callbacks it installs do. On desktop builds it operates in
+    // mouse-simulation mode; on mobile builds the same object picks up
+    // real touch events from the platform's GLFW backend.
+    std::unique_ptr<Engine::TouchInput> touchInput_;
 
     // CUDA context (shared between physics and particles)
     std::shared_ptr<CatEngine::CUDA::CudaContext> cudaContext_;
@@ -393,6 +423,12 @@ private:
     std::unique_ptr<GameWorld> gameWorld_;
     std::unique_ptr<Game::GameAudio> gameAudio_;
     std::unique_ptr<Engine::SaveSystem> saveSystem_;
+
+    // Non-owning pointer to the main-loop-owned GameConfig. Menus read
+    // starting values and write through here when the Settings panel's
+    // Close button is clicked. May be null in harnesses that construct
+    // the game without a full config instance.
+    Game::GameConfig* gameConfig_ = nullptr;
 
     // ========================================================================
     // UI Systems

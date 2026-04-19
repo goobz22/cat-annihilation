@@ -8,11 +8,16 @@
 #include <string>
 #include <array>
 
-namespace Engine { class ImGuiLayer; }
+namespace Engine {
+    class ImGuiLayer;
+    class Window;
+}
+namespace CatEngine::Renderer { class Renderer; }
 
 namespace Game {
 
 class GameAudio;
+class GameConfig;
 
 /**
  * @brief Main Menu screen
@@ -112,6 +117,26 @@ public:
      */
     void setImGuiLayer(Engine::ImGuiLayer* imguiLayer) { m_imguiLayer = imguiLayer; }
 
+    /**
+     * @brief Wire the settings panel to the real engine systems.
+     *
+     * Passing non-null pointers here makes the sliders / checkboxes in the
+     * Settings dialog actually affect runtime state (volumes, VSync,
+     * fullscreen, sensitivity). Leaving any pointer null disables that one
+     * row — useful for harnesses that construct a MainMenu without a
+     * full engine backend.
+     *
+     * GameConfig is used both as the source of initial values (first open)
+     * and the sink on Close (settings are persisted when the panel closes).
+     */
+    void setSettingsBindings(Engine::Window* window,
+                             CatEngine::Renderer::Renderer* renderer,
+                             GameConfig* gameConfig) {
+        m_settingsWindow = window;
+        m_settingsRenderer = renderer;
+        m_settingsConfig = gameConfig;
+    }
+
 private:
     /**
      * @brief Menu button structure
@@ -185,6 +210,12 @@ private:
 
     // Optional ImGui layer (not owned). When set, render() builds widgets via ImGui.
     Engine::ImGuiLayer* m_imguiLayer = nullptr;
+
+    // Settings-panel bindings (not owned). Any of these may be null if a
+    // given row isn't wired yet; drawSettingsPanel() guards every use.
+    Engine::Window* m_settingsWindow = nullptr;
+    CatEngine::Renderer::Renderer* m_settingsRenderer = nullptr;
+    GameConfig* m_settingsConfig = nullptr;
 };
 
 } // namespace Game

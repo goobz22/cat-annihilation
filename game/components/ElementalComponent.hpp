@@ -2,113 +2,32 @@
 
 #include "../../engine/ecs/Component.hpp"
 #include "../systems/elemental_magic.hpp"
+
+// Canonical component homes:
+//   - ManaComponent lives in ManaComponent.hpp. Including it here keeps
+//     existing translation units that pull in ElementalComponent.hpp
+//     working without needing to edit every caller.
+//   - ElementalAffinityComponent lives in StoryComponents.hpp (via
+//     GameComponents.hpp). Its schema uses ClanElementType (Fire/Ice/
+//     Lightning/Shadow) to match the story-mode clan system.
+//
+// Earlier revisions of this file redefined both structs with different
+// schemas — the ManaComponent body was identical, but ElementalAffinity
+// was an entirely different type keyed on ElementType rather than
+// ClanElementType. Any translation unit that included both this header
+// and StoryComponents.hpp (or GameComponents.hpp) tripped an ODR
+// violation, silently picking whichever definition the linker saw first.
+// Deleting the duplicates here and re-exporting the canonical types keeps
+// a single definition alive for each component.
+#include "ManaComponent.hpp"
+#include "StoryComponents.hpp"
+
+#include <algorithm>
 #include <array>
 #include <string>
+#include <unordered_map>
 
 namespace CatGame {
-
-/**
- * ManaComponent - Stores entity's mana for spell casting
- */
-struct ManaComponent {
-    int currentMana = 100;
-    int maxMana = 100;
-    float regenRate = 5.0f;  // Mana per second
-    float regenTimer = 0.0f;
-
-    /**
-     * Check if entity has enough mana
-     */
-    bool hasMana(int amount) const {
-        return currentMana >= amount;
-    }
-
-    /**
-     * Consume mana (returns true if successful)
-     */
-    bool consume(int amount) {
-        if (currentMana >= amount) {
-            currentMana -= amount;
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Restore mana
-     */
-    void restore(int amount) {
-        currentMana = std::min(currentMana + amount, maxMana);
-    }
-
-    /**
-     * Update mana regeneration
-     */
-    void update(float dt) {
-        regenTimer += dt;
-        if (regenTimer >= 1.0f) {
-            restore(static_cast<int>(regenRate));
-            regenTimer = 0.0f;
-        }
-    }
-};
-
-/**
- * ElementalAffinityComponent - Entity's elemental skill levels and affinities
- */
-struct ElementalAffinityComponent {
-    // Skill levels for each element (1-10)
-    std::array<int, 4> elementalLevels = {1, 1, 1, 1};
-
-    // XP for each element
-    std::array<int, 4> elementalXP = {0, 0, 0, 0};
-
-    // XP required for next level
-    std::array<int, 4> xpToNextLevel = {100, 100, 100, 100};
-
-    // Preferred element (optional)
-    ElementType preferredElement = ElementType::Fire;
-
-    /**
-     * Get level for a specific element
-     */
-    int getLevel(ElementType element) const {
-        return elementalLevels[static_cast<int>(element)];
-    }
-
-    /**
-     * Set level for a specific element
-     */
-    void setLevel(ElementType element, int level) {
-        elementalLevels[static_cast<int>(element)] = std::clamp(level, 1, 10);
-    }
-
-    /**
-     * Add XP to an element
-     */
-    bool addXP(ElementType element, int xp) {
-        int idx = static_cast<int>(element);
-        elementalXP[idx] += xp;
-
-        // Check for level up
-        if (elementalXP[idx] >= xpToNextLevel[idx] && elementalLevels[idx] < 10) {
-            elementalXP[idx] -= xpToNextLevel[idx];
-            elementalLevels[idx]++;
-            xpToNextLevel[idx] = elementalLevels[idx] * 100;  // Scaling requirement
-            return true;  // Leveled up
-        }
-
-        return false;  // No level up
-    }
-
-    /**
-     * Get XP progress as percentage (0.0 - 1.0)
-     */
-    float getXPProgress(ElementType element) const {
-        int idx = static_cast<int>(element);
-        return static_cast<float>(elementalXP[idx]) / static_cast<float>(xpToNextLevel[idx]);
-    }
-};
 
 /**
  * SpellCasterComponent - Tracks active spells, cooldowns, and casting state

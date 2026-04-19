@@ -9,6 +9,8 @@
 #include "../engine/math/Math.hpp"
 #include "../engine/cuda/particles/ParticleEmitter.hpp"
 #include "../engine/renderer/passes/ScenePass.hpp"
+#include "../engine/renderer/MeshSubmissionSystem.hpp"
+#include "components/MeshComponent.hpp"
 #include "../engine/rhi/vulkan/VulkanCommandBuffer.hpp"
 #include "world/GameWorld.hpp"
 #include "world/Terrain.hpp"
@@ -44,10 +46,12 @@ Engine::mat4 makeVulkanPerspective(float fovyRad, float aspect,
 // ============================================================================
 
 CatAnnihilation::CatAnnihilation(Engine::Input* input,
+                                 Engine::Window* window,
                                  CatEngine::Renderer::Renderer* renderer,
                                  CatEngine::AudioEngine* audioEngine,
                                  Engine::ImGuiLayer* imguiLayer)
     : input_(input)
+    , window_(window)
     , renderer_(renderer)
     , audioEngine_(audioEngine)
     , imguiLayer_(imguiLayer)
@@ -173,6 +177,30 @@ void CatAnnihilation::initializeSystems() {
     customizationSystem_->initialize();
 
     mobileControls_ = std::make_unique<Game::MobileControlsSystem>();
+
+    // Wire TouchInput + MobileControlsSystem. The touch system needs the raw
+    // GLFWwindow to install cursor / mouse-button callbacks — on desktop it
+    // simulates a single touch point via the mouse, on a mobile/touchscreen
+    // build the same object receives real touch events.
+    //
+    // MobileControlsSystem::initialize() accepts a null uiSystem today (the
+    // on-screen joystick / button layer is drawn directly via UIPass once
+    // the UI system is in place). Passing nullptr here is deliberate — it
+    // means "no overlay UI yet" rather than "mobile controls disabled",
+    // and keeps the touch / gesture pipeline live so the rest of the
+    // codebase can consume it without the whole chain silently no-oping.
+    if (window_ != nullptr && window_->getHandle() != nullptr) {
+        touchInput_ = std::make_unique<Engine::TouchInput>(window_->getHandle());
+        touchInput_->initialize();
+
+        const uint32_t screenWidth  = window_->getWidth();
+        const uint32_t screenHeight = window_->getHeight();
+        mobileControls_->initialize(touchInput_.get(),
+                                    /*uiSystem*/ nullptr,
+                                    screenWidth, screenHeight);
+    } else {
+        Engine::Logger::warn("TouchInput skipped: no window handle available");
+    }
 
     Engine::Logger::info("Advanced gameplay systems initialized");
 
@@ -304,6 +332,9 @@ void CatAnnihilation::initializeUI() {
             gameUI_->getHUD().setImGuiLayer(imguiLayer_);
             gameUI_->getWavePopup().setImGuiLayer(imguiLayer_);
         }
+        // Thread settings bindings through to the live main menu so the
+        // Settings panel's sliders / checkboxes drive real engine systems.
+        activeMenu.setSettingsBindings(window_, renderer_, gameConfig_);
     }
 
     // Also wire the ImGui layer onto the legacy mainMenu_/hud_/pauseMenu_ instances
@@ -330,6 +361,7 @@ void CatAnnihilation::initializeUI() {
         if (imguiLayer_ != nullptr) {
             pauseMenu_->setImGuiLayer(imguiLayer_);
         }
+        pauseMenu_->setSettingsBindings(window_, renderer_, gameConfig_);
     }
 
     Engine::Logger::info("UI systems initialized");
@@ -437,6 +469,15 @@ void CatAnnihilation::shutdown() {
     if (mainMenu_ != nullptr) { mainMenu_->shutdown(); }
     if (pauseMenu_ != nullptr) { pauseMenu_->shutdown(); }
 
+    // Tear down touch input before the window is gone — shutdown detaches
+    // the GLFW cursor/mouse callbacks it installed so they can't fire
+    // against a dangling `this` during later GLFW polling.
+    if (mobileControls_ != nullptr) { mobileControls_->shutdown(); }
+    if (touchInput_ != nullptr) {
+        touchInput_->shutdown();
+        touchInput_.reset();
+    }
+
     // Shutdown game systems
     if (gameAudio_ != nullptr) { gameAudio_->shutdown(); }
     // Note: GameWorld, MerchantSystem, DialogSystem, NPCSystem, StoryModeSystem, QuestSystem,
@@ -510,6 +551,12 @@ void CatAnnihilation::update(float dt) {
 
 void CatAnnihilation::updateSystems(float dt) {
     handleInput();
+
+    // Touch input + mobile controls run before the rest of the gameplay
+    // systems so any joystick/button state they produce is visible to
+    // PlayerControlSystem on the same frame.
+    if (touchInput_ != nullptr) { touchInput_->update(dt); }
+    if (mobileControls_ != nullptr) { mobileControls_->update(dt); }
 
     if (dayNightSystem_ != nullptr) { dayNightSystem_->update(dt); }
 
@@ -701,9 +748,18 @@ void CatAnnihilation::render() {
             // Build entity draw list — cat (green tall box) + dogs (red cubes
             // sized by EnemyType). Walks the ECS each frame; trivial at wave
             // populations (< 100 enemies typical).
+            //
+            // Entities that already carry a MeshComponent are routed through
+            // MeshSubmissionSystem below and skipped here — that prevents
+            // double-rendering the same entity as both a proxy cube and a
+            // mesh-sized cube. Entities without a MeshComponent (e.g., a
+            // spawn whose model file failed to load and loadModel() returned
+            // false) still fall through to the proxy-cube path so they
+            // remain visible and debuggable in the scene.
             std::vector<CatEngine::Renderer::ScenePass::EntityDraw> entityDraws;
             entityDraws.reserve(64);
-            if (ecs_.isAlive(playerEntity_)) {
+            if (ecs_.isAlive(playerEntity_) &&
+                !ecs_.hasComponent<MeshComponent>(playerEntity_)) {
                 auto* t = ecs_.getComponent<Engine::Transform>(playerEntity_);
                 if (t != nullptr) {
                     CatEngine::Renderer::ScenePass::EntityDraw d;
@@ -714,8 +770,9 @@ void CatAnnihilation::render() {
                 }
             }
             ecs_.forEach<EnemyComponent, Engine::Transform>(
-                [&](CatEngine::Entity /*e*/, EnemyComponent* enemy, Engine::Transform* t) {
+                [&](CatEngine::Entity enemyEntity, EnemyComponent* enemy, Engine::Transform* t) {
                     if (t == nullptr || enemy == nullptr) return;
+                    if (ecs_.hasComponent<MeshComponent>(enemyEntity)) return;
                     CatEngine::Renderer::ScenePass::EntityDraw d;
                     float sz = 0.6F;
                     Engine::vec3 tint(0.85F, 0.22F, 0.22F); // default dog red
@@ -731,6 +788,19 @@ void CatAnnihilation::render() {
                     d.color = tint;
                     entityDraws.push_back(d);
                 });
+
+            // Submit mesh-backed entities (those carrying Transform +
+            // MeshComponent). The static instance persists across frames so
+            // its internal ring of strong shared_ptr<Model> refs — one slot
+            // per frame in flight — can keep each Model alive until the GPU
+            // fence for its recording frame has signalled. The renderer's
+            // frame index drives the ring slot. Without this, a destroyed
+            // entity's Model could be freed by AssetManager's unused-asset
+            // sweep while the GPU was still reading its vertex buffers.
+            static CatEngine::Renderer::MeshSubmissionSystem meshSubmission;
+            meshSubmission.Submit(ecs_,
+                                  static_cast<std::size_t>(renderer_->GetFrameIndex()),
+                                  entityDraws);
 
             auto* sceneCmdBuffer = renderer_->GetCommandBuffer();
             if (sceneCmdBuffer != nullptr) {
