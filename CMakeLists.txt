@@ -158,6 +158,12 @@ set(ENGINE_CORE_SOURCES
     engine/core/serialization.cpp
     engine/core/save_system.cpp
     engine/core/settings_manager.cpp
+    # touch_input.cpp implements Engine::TouchInput, whose header is consumed
+    # by game/systems/mobile_controls.hpp. Omitting it from this list used to
+    # work only because mobile_controls never called any of TouchInput's
+    # out-of-line methods — once it does, the link would fail with
+    # unresolved externals. Compile it unconditionally to avoid that trap.
+    engine/core/touch_input.cpp
 )
 
 set(ENGINE_MEMORY_SOURCES
