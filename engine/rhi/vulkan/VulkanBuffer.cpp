@@ -290,8 +290,10 @@ void VulkanBuffer::CopyFromHostMemory(const void* srcData, uint64_t size, uint64
     VulkanBuffer stagingBuffer(m_Device, stagingDesc);
     stagingBuffer.UpdateData(srcData, size, 0);
 
-    // Copy via command buffer (would need VulkanDevice to provide a transfer queue/command buffer)
-    // This is a simplified version - production code would use proper command buffer submission
+    // VulkanDevice::CopyBuffer performs a one-time-submit on the graphics queue:
+    // allocate + begin + vkCmdCopyBuffer + end + submit + vkQueueWaitIdle + free.
+    // The staging buffer is destroyed when stagingBuffer goes out of scope, which
+    // is safe because CopyBuffer waits for the queue to idle before returning.
     m_Device->CopyBuffer(stagingBuffer.GetVkBuffer(), m_Buffer, size, 0, dstOffset);
 }
 

@@ -32,13 +32,22 @@ static VkImage GetVulkanImage(IRHITexture* texture) {
     return vulkanTexture->GetVkImage();
 }
 
-// Helper to get VkPipeline from IRHIPipeline
+// Helper to get VkPipeline from IRHIPipeline.
+// Both VulkanGraphicsPipeline and VulkanComputePipeline expose GetVkPipeline(),
+// but they do not share a common Vulkan base, so dispatch on the bind point
+// reported by the IRHIPipeline interface itself.
 static VkPipeline GetVulkanPipeline(IRHIPipeline* pipeline) {
     if (pipeline == nullptr) {
         return VK_NULL_HANDLE;
     }
-    auto* vulkanPipeline = static_cast<VulkanGraphicsPipeline*>(pipeline);
-    return vulkanPipeline->GetVkPipeline();
+    switch (pipeline->GetBindPoint()) {
+        case PipelineBindPoint::Graphics:
+            return static_cast<VulkanGraphicsPipeline*>(pipeline)->GetVkPipeline();
+        case PipelineBindPoint::Compute:
+            return static_cast<VulkanComputePipeline*>(pipeline)->GetVkPipeline();
+        default:
+            return VK_NULL_HANDLE;
+    }
 }
 
 // Helper to convert index type
@@ -237,9 +246,11 @@ void VulkanCommandBuffer::BindPipeline(IRHIPipeline* pipeline) {
         std::cerr.flush();
         return;
     }
-    
-    // Assume graphics pipeline for now - could be extended with pipeline type query
-    vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkPipeline);
+
+    // Dispatch on the pipeline's bind point (graphics vs compute) rather than
+    // hard-coding VK_PIPELINE_BIND_POINT_GRAPHICS.
+    const VkPipelineBindPoint vkBindPoint = ToVulkanPipelineBindPoint(pipeline->GetBindPoint());
+    vkCmdBindPipeline(m_commandBuffer, vkBindPoint, vkPipeline);
     
     if (bindCount <= 10) {
         std::cout << "[VulkanCommandBuffer::BindPipeline] vkCmdBindPipeline called successfully\n";

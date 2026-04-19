@@ -38,8 +38,9 @@ private:
     uint32_t m_height;
 };
 
-VulkanSwapchain::VulkanSwapchain(VulkanDevice* device, VkSurfaceKHR surface, const SwapchainDesc& desc)
+VulkanSwapchain::VulkanSwapchain(VulkanDevice* device, VkInstance instance, VkSurfaceKHR surface, const SwapchainDesc& desc)
     : m_device(device)
+    , m_instance(instance)
     , m_surface(surface)
     , m_width(desc.width)
     , m_height(desc.height)
@@ -67,9 +68,9 @@ VulkanSwapchain::~VulkanSwapchain() {
     CleanupSyncObjects();
     CleanupSwapchain();
 
-    if (m_surface != VK_NULL_HANDLE) {
-        // Need instance handle, but we don't store it - this should be handled by VulkanRHI
-        // For now, we'll leave it - proper cleanup would require refactoring
+    if (m_surface != VK_NULL_HANDLE && m_instance != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+        m_surface = VK_NULL_HANDLE;
     }
 }
 

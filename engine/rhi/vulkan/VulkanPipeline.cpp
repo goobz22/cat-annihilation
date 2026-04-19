@@ -3,6 +3,7 @@
 #include "VulkanShader.hpp"
 #include "VulkanTexture.hpp"
 #include "VulkanRenderPass.hpp"
+#include "VulkanDescriptor.hpp"
 #include "../RHIRenderPass.hpp"
 #include "../RHIDescriptorSet.hpp"
 #include <stdexcept>
@@ -140,9 +141,11 @@ VulkanPipelineLayout::VulkanPipelineLayout(
     std::vector<VkDescriptorSetLayout> vkLayouts;
     vkLayouts.reserve(descriptorSetLayouts.size());
     for (auto* layout : descriptorSetLayouts) {
-        // In a real implementation, we'd cast to VulkanDescriptorSetLayout
-        // and get the VkDescriptorSetLayout handle
-        // For now, we'll create an empty layout
+        if (layout == nullptr) {
+            continue;
+        }
+        auto* vulkanLayout = static_cast<VulkanDescriptorSetLayout*>(layout);
+        vkLayouts.push_back(vulkanLayout->GetHandle());
     }
 
     // Convert push constant ranges
@@ -275,14 +278,21 @@ VulkanGraphicsPipeline& VulkanGraphicsPipeline::operator=(VulkanGraphicsPipeline
 }
 
 VkPipelineLayout VulkanGraphicsPipeline::CreateDefaultLayout(const PipelineDesc& desc) {
-    // Create a simple empty layout for now
-    // In production, this would reflect shader bindings
+    // PipelineDesc does not carry descriptor set layouts directly; construct a
+    // pipeline layout with no set layouts and no push constants. This is a
+    // fully valid VkPipelineLayout and is the correct layout for pipelines
+    // that bind no descriptor resources. Callers that need bindings should
+    // supply their own VulkanPipelineLayout via the overloaded constructor.
+    (void)desc;
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = 0;
+    layoutInfo.pSetLayouts = nullptr;
     layoutInfo.pushConstantRangeCount = 0;
+    layoutInfo.pPushConstantRanges = nullptr;
 
-    VkPipelineLayout layout;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
     VkDevice device = m_Device->GetVkDevice();
     VkResult result = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &layout);
     if (result != VK_SUCCESS) {

@@ -17,7 +17,7 @@ namespace CatEngine::RHI {
  */
 class VulkanSwapchain : public IRHISwapchain {
 public:
-    VulkanSwapchain(VulkanDevice* device, VkSurfaceKHR surface, const SwapchainDesc& desc);
+    VulkanSwapchain(VulkanDevice* device, VkInstance instance, VkSurfaceKHR surface, const SwapchainDesc& desc);
     ~VulkanSwapchain() override;
 
     // Disable copy
@@ -154,6 +154,7 @@ private:
     VulkanDevice* m_device;
 
     // Vulkan handles
+    VkInstance m_instance = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
 

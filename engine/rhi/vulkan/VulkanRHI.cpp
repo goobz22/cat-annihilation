@@ -306,8 +306,8 @@ IRHISwapchain* VulkanRHI::CreateSwapchain(const SwapchainDesc& desc) {
         }
     }
 
-    // Create swapchain
-    VulkanSwapchain* swapchain = new VulkanSwapchain(&m_device, surface, desc);
+    // Create swapchain (pass instance so the surface can be destroyed at shutdown)
+    VulkanSwapchain* swapchain = new VulkanSwapchain(&m_device, m_instance, surface, desc);
     return swapchain;
 }
 
