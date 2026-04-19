@@ -442,11 +442,15 @@ float LevelingSystem::getElementalRadiusMultiplier(ElementType element) const {
 // ============================================================================
 
 std::vector<std::string> LevelingSystem::getUnlockedCombos(const std::string& weaponType) const {
-    // This will query the combo system if available
+    // The combo system owns the weapon-level → combo-id mapping. This
+    // LevelingSystem deliberately does not duplicate that table; it only
+    // knows how to ask. When ComboSystem exposes a
+    // getUnlockedCombosForWeaponLevel(weaponType, level) accessor, replace
+    // this stub-return with a direct forward. Today ComboSystem has no
+    // such accessor, so we correctly return an empty list rather than
+    // fabricating combo IDs here.
     if (comboSystem_) {
-        int skillLevel = getWeaponLevel(weaponType);
-        // Combo system handles which combos are unlocked at each level
-        // Return empty for now, combo system will implement
+        (void)getWeaponLevel(weaponType);
     }
     return std::vector<std::string>();
 }

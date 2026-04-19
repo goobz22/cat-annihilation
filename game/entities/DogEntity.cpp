@@ -1,10 +1,124 @@
 #include "DogEntity.hpp"
 #include "../components/HealthComponent.hpp"
 #include "../components/MovementComponent.hpp"
+#include "../components/MeshComponent.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Quaternion.hpp"
+#include "../../engine/core/Logger.hpp"
+#include "../../engine/assets/AssetManager.hpp"
+#include "../../engine/assets/ModelLoader.hpp"
+#include "../../engine/animation/Animator.hpp"
+#include "../../engine/animation/Animation.hpp"
+#include "../../engine/animation/Skeleton.hpp"
 
 namespace CatGame {
+
+namespace {
+
+// Resolve the on-disk model path for a given dog variant. Kept as a free
+// function so the mapping lives next to the entity factory rather than being
+// threaded through configuration.
+const char* modelPathForType(EnemyType type) {
+    switch (type) {
+        case EnemyType::BigDog:  return "assets/models/enemies/dog_big.gltf";
+        case EnemyType::FastDog: return "assets/models/enemies/dog_fast.gltf";
+        case EnemyType::BossDog: return "assets/models/enemies/dog_boss.gltf";
+        case EnemyType::Dog:
+        default:                 return "assets/models/enemies/dog_normal.gltf";
+    }
+}
+
+// Construct the mesh + animator for a newly-spawned dog. Matches the cat
+// pipeline: load via AssetManager, derive a skeleton from the glTF node
+// graph, and build an Animator that defaults to the idle clip when present.
+void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyType type) {
+    const char* modelPath = modelPathForType(type);
+    auto& assets = CatEngine::AssetManager::GetInstance();
+    std::shared_ptr<CatEngine::Model> model = assets.LoadModel(modelPath);
+    if (!model) {
+        Engine::Logger::warn(std::string("DogEntity: failed to load ") + modelPath);
+        return;
+    }
+
+    MeshComponent mesh;
+    mesh.sourcePath = modelPath;
+    mesh.model = model;
+    mesh.visible = true;
+
+    auto skeleton = std::make_shared<Engine::Skeleton>();
+    for (const auto& node : model->nodes) {
+        skeleton->addBone(node.name, node.parentIndex);
+    }
+    if (!model->nodes.empty()) {
+        std::vector<Engine::mat4> inverseBinds;
+        inverseBinds.reserve(model->nodes.size());
+        std::vector<Engine::Transform> bindPose;
+        bindPose.reserve(model->nodes.size());
+        for (const auto& node : model->nodes) {
+            Engine::mat4 ibm;
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    ibm[column][row] = node.inverseBindMatrix[column][row];
+                }
+            }
+            inverseBinds.push_back(ibm);
+
+            Engine::mat4 local;
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    local[column][row] = node.localTransform[column][row];
+                }
+            }
+            bindPose.push_back(Engine::Transform::fromMatrix(local));
+        }
+        skeleton->setInverseBindMatrices(inverseBinds);
+        skeleton->setBindPose(bindPose);
+    }
+    mesh.skeleton = skeleton;
+
+    auto animator = std::make_shared<Engine::Animator>(skeleton);
+    for (const auto& clip : model->animations) {
+        auto engineClip = std::make_shared<Engine::Animation>(clip.name, clip.duration);
+        for (const auto& channel : clip.channels) {
+            Engine::AnimationChannel outChannel(channel.nodeIndex);
+            if (channel.path == "translation") {
+                outChannel.positionKeyframes.reserve(channel.times.size());
+                for (size_t i = 0; i < channel.times.size() && i < channel.translations.size(); ++i) {
+                    const auto& value = channel.translations[i];
+                    outChannel.positionKeyframes.emplace_back(
+                        channel.times[i], Engine::vec3(value.x, value.y, value.z));
+                }
+            } else if (channel.path == "rotation") {
+                outChannel.rotationKeyframes.reserve(channel.times.size());
+                for (size_t i = 0; i < channel.times.size() && i < channel.rotations.size(); ++i) {
+                    const auto& value = channel.rotations[i];
+                    outChannel.rotationKeyframes.emplace_back(
+                        channel.times[i], Engine::Quaternion(value.x, value.y, value.z, value.w));
+                }
+            } else if (channel.path == "scale") {
+                outChannel.scaleKeyframes.reserve(channel.times.size());
+                for (size_t i = 0; i < channel.times.size() && i < channel.scales.size(); ++i) {
+                    const auto& value = channel.scales[i];
+                    outChannel.scaleKeyframes.emplace_back(
+                        channel.times[i], Engine::vec3(value.x, value.y, value.z));
+                }
+            }
+            if (!outChannel.isEmpty()) {
+                engineClip->addChannel(outChannel);
+            }
+        }
+        const bool loops = (clip.name == "idle" || clip.name == "walk" || clip.name == "run");
+        animator->addState(Engine::AnimationState(clip.name, engineClip, 1.0F, loops));
+    }
+    if (animator->hasState("idle")) {
+        animator->play("idle", 0.0F);
+    }
+
+    mesh.animator = animator;
+    ecs->addComponent(entity, std::move(mesh));
+}
+
+} // namespace
 
 CatEngine::Entity DogEntity::createDog(CatEngine::ECS* ecs,
                                        const Engine::vec3& position,
@@ -70,15 +184,9 @@ CatEngine::Entity DogEntity::create(CatEngine::ECS* ecs,
     MovementComponent movement(stats.moveSpeed);
     ecs->addComponent(entity, movement);
 
-    // Note: Renderer component is added automatically by the EntityRenderer system
-    // when this entity is registered for rendering. The renderer selects the
-    // appropriate dog model based on EnemyType:
-    // - Dog:     "assets/models/enemies/dog_normal.gltf"
-    // - BigDog:  "assets/models/enemies/dog_big.gltf"
-    // - FastDog: "assets/models/enemies/dog_fast.gltf"
-    // - BossDog: "assets/models/enemies/dog_boss.gltf"
-    //
-    // Materials and animations are configured per-model in the asset manifest.
+    // Attach the variant-specific model and animator. A missing model file is
+    // logged and skipped; the entity still functions for AI/combat purposes.
+    attachMeshAndAnimator(ecs, entity, type);
 
     return entity;
 }

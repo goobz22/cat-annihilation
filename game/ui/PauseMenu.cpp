@@ -7,6 +7,63 @@
 
 namespace Game {
 
+// Settings panel state — same design as MainMenu's panel. The two menus
+// deliberately share neither code nor storage so the pause-menu overlay can
+// evolve independently (e.g. add "Apply & Return to Combat" logic later).
+namespace {
+
+struct PauseSettingsState {
+    bool  open             = false;
+    float masterVolume     = 0.80F;
+    float musicVolume      = 0.70F;
+    float sfxVolume        = 0.90F;
+    float mouseSensitivity = 1.00F;
+    bool  fullscreen       = false;
+    bool  vsync            = true;
+    bool  invertY          = false;
+};
+
+PauseSettingsState& pauseSettingsState() {
+    static PauseSettingsState state;
+    return state;
+}
+
+void drawPauseSettingsPanel() {
+    PauseSettingsState& state = pauseSettingsState();
+    if (!state.open) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(480.0F, 360.0F), ImGuiCond_Appearing);
+    if (ImGui::Begin("Settings", &state.open)) {
+        ImGui::TextUnformatted("Audio");
+        ImGui::Separator();
+        ImGui::SliderFloat("Master Volume", &state.masterVolume, 0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("Music Volume",  &state.musicVolume,  0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("SFX Volume",    &state.sfxVolume,    0.0F, 1.0F, "%.2f");
+
+        ImGui::Dummy(ImVec2(0.0F, 6.0F));
+        ImGui::TextUnformatted("Input");
+        ImGui::Separator();
+        ImGui::SliderFloat("Mouse Sensitivity", &state.mouseSensitivity, 0.25F, 4.0F, "%.2f");
+        ImGui::Checkbox("Invert Y Axis", &state.invertY);
+
+        ImGui::Dummy(ImVec2(0.0F, 6.0F));
+        ImGui::TextUnformatted("Display");
+        ImGui::Separator();
+        ImGui::Checkbox("Fullscreen", &state.fullscreen);
+        ImGui::Checkbox("VSync",      &state.vsync);
+
+        ImGui::Dummy(ImVec2(0.0F, 12.0F));
+        if (ImGui::Button("Close", ImVec2(120.0F, 0.0F))) {
+            state.open = false;
+        }
+    }
+    ImGui::End();
+}
+
+} // namespace
+
 PauseMenu::PauseMenu(Engine::Input& input, GameAudio& audio)
     : m_input(input)
     , m_audio(audio) {
@@ -60,7 +117,9 @@ bool PauseMenu::initialize() {
         if (m_settingsCallback) {
             m_settingsCallback();
         } else {
-            Engine::Logger::info("Settings menu not implemented yet");
+            // Toggle the in-pause settings window. A consumer-supplied
+            // callback (e.g. to open a dedicated scene) still takes precedence.
+            pauseSettingsState().open = !pauseSettingsState().open;
         }
     };
     m_buttons.push_back(settingsButton);
@@ -266,6 +325,9 @@ void PauseMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     }
+
+    // Settings window layers on top of everything else when open.
+    drawPauseSettingsPanel();
 }
 
 void PauseMenu::handleInput() {

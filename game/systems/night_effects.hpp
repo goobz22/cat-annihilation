@@ -6,6 +6,7 @@
 #include "../../engine/math/Vector.hpp"
 #include "day_night_cycle.hpp"
 #include <vector>
+#include <unordered_map>
 
 namespace CatGame {
 
@@ -175,6 +176,24 @@ public:
      */
     float getIlluminationAt(const Engine::vec3& position) const;
 
+    /**
+     * Query the flicker multiplier applied to a light source this frame.
+     * Returns 1.0 for entities that aren't flickering or that the
+     * renderer can safely draw at full base intensity. Updated by
+     * updateLightFlickering() so the renderer can read it in the same
+     * frame without racing the update.
+     */
+    float getLightFlickerMultiplier(CatEngine::Entity light) const;
+
+    /**
+     * Query the current (time-of-day-adjusted) aggression multiplier for
+     * a nocturnal enemy. Written by updateNocturnalEnemies() each tick so
+     * the AI system can multiply base aggression by this factor when
+     * scoring targets — without having to re-compute the time-of-day
+     * weighting itself.
+     */
+    float getCurrentAggressionMultiplier(CatEngine::Entity enemy) const;
+
 private:
     // ========================================================================
     // Update Methods
@@ -223,6 +242,15 @@ private:
     std::vector<CatEngine::Entity> activeLightSources_;
     std::vector<CatEngine::Entity> nocturnalEnemies_;
     std::vector<CatEngine::Entity> glowSticks_;
+
+    // Per-frame scratch maps populated by updateLightFlickering and
+    // updateNocturnalEnemies and consumed by the renderer / AI system via
+    // the public getters above. Kept as std::unordered_map (not packed
+    // arrays) because the light and enemy sets are both small (<100 each
+    // in typical gameplay) and the hash-lookup hot path is amortised
+    // across the whole frame, not hit in a tight inner loop.
+    std::unordered_map<CatEngine::Entity, float> lightFlickerMultipliers_;
+    std::unordered_map<CatEngine::Entity, float> aggressionMultipliers_;
 
     bool lastFrameWasNight_ = false;
     float timeAccumulator_ = 0.0f;

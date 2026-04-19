@@ -235,7 +235,9 @@ Systems are designed to be single-threaded. If multi-threading is needed:
 - Defer entity destruction to end of frame
 - Use atomic operations for shared state
 
-## TODO/Future Enhancements
+## Roadmap
+
+Planned extensions to the enemy system, in rough priority order:
 
 1. **Renderer Integration**
    - Add mesh/material components to entities

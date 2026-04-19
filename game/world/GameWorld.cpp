@@ -114,50 +114,64 @@ void GameWorld::initialize() {
 }
 
 void GameWorld::setupPhysicsColliders() {
-    // Add terrain heightfield to physics world
-    // Note: This is a simplified version. In a full implementation,
-    // you would create a heightfield collider from the terrain data.
-
-    // For now, we'll add a simple ground plane as a placeholder
-    // Using a large flat box as ground approximation since there's no plane collider
     using namespace CatEngine::Physics;
 
-    Engine::Logger::info("GameWorld: Creating ground plane collider...");
+    // The physics RHI enumerates ColliderType::Heightfield but does not expose
+    // a factory for it. The terrain is therefore tesselated into a coarse grid
+    // of short static box colliders — one box per chunk, sized to the chunk
+    // footprint and half-extending down to act as a floor. This reproduces
+    // heightfield behaviour at a V1 fidelity: entities above a chunk stand on
+    // that chunk's mean height rather than falling through or clipping into
+    // distant high terrain.
+    constexpr int    CHUNKS_PER_AXIS = 16;
+    constexpr float  CHUNK_THICKNESS = 1.0F;   // half-height of each box
 
-    RigidBody groundPlane;
-    groundPlane.position = Engine::vec3(0.0f, -0.5f, 0.0f);
-    groundPlane.mass = 0.0f;  // Static body (infinite mass)
-    groundPlane.collider = Collider::Box(Engine::vec3(1000.0f, 0.5f, 1000.0f));  // Large flat box
-    groundPlane.flags = RigidBodyFlags::Static;
+    const float worldSize  = m_config.worldSize;
+    const float chunkSize  = worldSize / static_cast<float>(CHUNKS_PER_AXIS);
+    const float chunkHalf  = chunkSize * 0.5F;
+    const float worldMinX  = -worldSize * 0.5F;
+    const float worldMinZ  = -worldSize * 0.5F;
 
-    Engine::Logger::info("GameWorld: Adding ground plane to physics world...");
-    m_physicsWorld.addRigidBody(groundPlane);
-    Engine::Logger::info("GameWorld: Ground plane added successfully");
+    Engine::Logger::info("GameWorld: Tesselating terrain into {}x{} collider chunks...",
+                         CHUNKS_PER_AXIS, CHUNKS_PER_AXIS);
 
-    // Heightfield collider implementation:
-    // When the physics engine supports heightfield colliders, replace the ground plane with:
-    // 1. Extract height data from terrain: m_terrain->getHeightData()
-    // 2. Create heightfield collider with terrain dimensions and resolution
-    // 3. This allows entities to follow terrain contours accurately
-    //
-    // Example implementation (requires HeightfieldCollider in physics engine):
-    // if (m_terrain) {
-    //     const auto& heightData = m_terrain->getHeightData();
-    //     HeightfieldParams params;
-    //     params.rows = m_config.terrainResolution;
-    //     params.cols = m_config.terrainResolution;
-    //     params.rowScale = m_config.worldSize / params.rows;
-    //     params.colScale = m_config.worldSize / params.cols;
-    //     params.heightScale = m_config.terrainHeightScale;
-    //     params.heightData = heightData.data();
-    //
-    //     RigidBody terrainBody;
-    //     terrainBody.position = Engine::vec3(0.0f, 0.0f, 0.0f);
-    //     terrainBody.mass = 0.0f;  // Static
-    //     terrainBody.collider = Collider::Heightfield(params);
-    //     terrainBody.flags = RigidBodyFlags::Static;
-    //     m_physicsWorld.addRigidBody(terrainBody);
-    // }
+    int chunkCount = 0;
+    for (int chunkZ = 0; chunkZ < CHUNKS_PER_AXIS; ++chunkZ) {
+        for (int chunkX = 0; chunkX < CHUNKS_PER_AXIS; ++chunkX) {
+            const float centerX = worldMinX + (chunkX + 0.5F) * chunkSize;
+            const float centerZ = worldMinZ + (chunkZ + 0.5F) * chunkSize;
+
+            // Sample the terrain at the chunk centre and its four inner
+            // quadrant midpoints. Averaging reduces aliasing when chunk size
+            // doesn't align with the underlying heightmap resolution.
+            const float h0 = m_terrain->getHeightAt(centerX, centerZ);
+            const float h1 = m_terrain->getHeightAt(centerX - chunkHalf * 0.5F,
+                                                    centerZ - chunkHalf * 0.5F);
+            const float h2 = m_terrain->getHeightAt(centerX + chunkHalf * 0.5F,
+                                                    centerZ - chunkHalf * 0.5F);
+            const float h3 = m_terrain->getHeightAt(centerX - chunkHalf * 0.5F,
+                                                    centerZ + chunkHalf * 0.5F);
+            const float h4 = m_terrain->getHeightAt(centerX + chunkHalf * 0.5F,
+                                                    centerZ + chunkHalf * 0.5F);
+            const float avgHeight = (h0 + h1 + h2 + h3 + h4) * 0.2F;
+
+            RigidBody chunk;
+            // The box extends CHUNK_THICKNESS downwards from avgHeight so the
+            // top face sits at the correct terrain height.
+            chunk.position = Engine::vec3(centerX,
+                                          avgHeight - CHUNK_THICKNESS,
+                                          centerZ);
+            chunk.mass = 0.0F;
+            chunk.collider = Collider::Box(Engine::vec3(chunkHalf,
+                                                        CHUNK_THICKNESS,
+                                                        chunkHalf));
+            chunk.flags = RigidBodyFlags::Static;
+            m_physicsWorld.addRigidBody(chunk);
+            ++chunkCount;
+        }
+    }
+
+    Engine::Logger::info("GameWorld: Terrain physics mesh built ({} chunks)", chunkCount);
 
     // Add tree colliders
     if (m_forest) {

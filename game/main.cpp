@@ -362,7 +362,12 @@ int main(int argc, char* argv[]) {
             fpsTimer = 0.0f;
         }
 
-        // Cap framerate if needed (FPS limiting handled by VSync for now)
+        // The swapchain is created with VSync enabled, so vkQueuePresentKHR
+        // blocks until the next monitor refresh and the main loop is
+        // naturally rate-limited to the display refresh rate. An explicit
+        // CPU-side frame cap is only needed if the swapchain is
+        // reconfigured to IMMEDIATE mode (tearing, uncapped) — wire in a
+        // sleep-to-target-frame-time here when that mode is exposed.
     }
 
     // ========================================================================

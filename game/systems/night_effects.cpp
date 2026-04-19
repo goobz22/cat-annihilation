@@ -1,4 +1,5 @@
 #include "night_effects.hpp"
+#include "../components/MovementComponent.hpp"
 #include "../../engine/math/Math.hpp"
 #include "../../engine/math/Noise.hpp"
 #include "../../engine/ecs/Component.hpp"
@@ -424,13 +425,24 @@ void NightEffectsSystem::updateLightFlickering(float /*dt*/) {
         }
 
         if (light->flickerAmount > 0.0f && light->isActive) {
-            // Use Perlin noise for flickering
+            // Sample Perlin noise once per frame per light, centered on
+            // 1.0 so the resulting multiplier oscillates symmetrically
+            // around the base intensity rather than only darkening it.
             float noise = s_perlin.noise(timeAccumulator_ * light->flickerSpeed);
             float flicker = 1.0f + (noise * light->flickerAmount);
 
-            // Apply flicker to intensity (stored in a per-frame variable, not modifying base)
-            // This would need a separate "current intensity" field in production
-            (void)flicker; // Suppress unused warning for now
+            // Write the multiplier into the per-frame lookup map so the
+            // renderer can multiply NightLightSource::baseIntensity by
+            // this value when assembling the scene's light list. Keeping
+            // the base intensity pristine lets gameplay code reason about
+            // "the light's real brightness" independent of flicker — the
+            // flicker lives entirely in this rendering-side cache.
+            lightFlickerMultipliers_[lightEntity] = flicker;
+        } else {
+            // Non-flickering lights drop out of the map so the renderer's
+            // lookup returns the default 1.0 multiplier instead of a
+            // stale flicker value from a previous frame.
+            lightFlickerMultipliers_.erase(lightEntity);
         }
     }
 }
@@ -470,12 +482,12 @@ void NightEffectsSystem::updateNocturnalEnemies(float /*dt*/) {
             continue;
         }
 
-        // Get aggression multiplier
+        // Compute and cache this frame's aggression multiplier. The AI
+        // system reads it through getCurrentAggressionMultiplier() when
+        // scoring targets, which keeps the time-of-day math in one place
+        // instead of making every AI goal re-derive it from the day cycle.
         float aggression = getEnemyAggressionMultiplier(enemy);
-
-        // This would be passed to the AI system
-        // ai->setAggressionMultiplier(enemy, aggression);
-        (void)aggression; // Suppress unused warning for now
+        aggressionMultipliers_[enemy] = aggression;
     }
 }
 
@@ -585,10 +597,53 @@ float NightEffectsSystem::calculateLightModifier(const Engine::vec3& position) c
     return std::min(modifier, 0.7f);  // Cap at 0.7 additional visibility
 }
 
-float NightEffectsSystem::calculateMovementModifier(CatEngine::Entity /*entity*/, float /*dt*/) const {
-    // In production, this would track velocity/movement
-    // For now, return a placeholder
-    return 0.0f;
+float NightEffectsSystem::calculateMovementModifier(CatEngine::Entity entity, float /*dt*/) const {
+    // Moving entities are easier to spot at night. The modifier is additive
+    // to baseVisibility so it must stay small (max 0.3) to avoid swamping the
+    // lighting contribution. Below the walk threshold an entity is treated as
+    // stationary and gets no penalty.
+    if (ecs_ == nullptr) {
+        return 0.0F;
+    }
+
+    const auto* movement = ecs_->getComponent<MovementComponent>(entity);
+    if (movement == nullptr) {
+        return 0.0F;
+    }
+
+    constexpr float WALK_THRESHOLD = 0.5F;   // units/sec — ignore idle jitter
+    constexpr float RUN_THRESHOLD  = 6.0F;   // units/sec — full penalty at run
+    constexpr float MAX_MODIFIER   = 0.30F;
+
+    const float speed = movement->getCurrentSpeed();
+    if (speed <= WALK_THRESHOLD) {
+        return 0.0F;
+    }
+
+    const float t = std::clamp(
+        (speed - WALK_THRESHOLD) / (RUN_THRESHOLD - WALK_THRESHOLD),
+        0.0F, 1.0F);
+    return MAX_MODIFIER * t;
+}
+
+// ============================================================================
+// Per-frame multiplier queries
+// ============================================================================
+
+float NightEffectsSystem::getLightFlickerMultiplier(CatEngine::Entity light) const {
+    // Defaulting to 1.0 means the renderer can unconditionally multiply the
+    // base intensity by this value — lights that aren't flickering (or
+    // haven't been updated yet this frame) pass through unchanged.
+    auto it = lightFlickerMultipliers_.find(light);
+    return (it != lightFlickerMultipliers_.end()) ? it->second : 1.0f;
+}
+
+float NightEffectsSystem::getCurrentAggressionMultiplier(CatEngine::Entity enemy) const {
+    // Default of 1.0 keeps non-nocturnal enemies on their baseline
+    // aggression curve when the AI system happens to query this for an
+    // entity outside the nocturnalEnemies_ set.
+    auto it = aggressionMultipliers_.find(enemy);
+    return (it != aggressionMultipliers_.end()) ? it->second : 1.0f;
 }
 
 } // namespace CatGame

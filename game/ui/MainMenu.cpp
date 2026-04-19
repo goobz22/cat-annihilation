@@ -10,6 +10,71 @@
 
 namespace Game {
 
+// ---------------------------------------------------------------------------
+// Settings panel state
+//
+// No dedicated Settings singleton exists yet, so the panel owns its own sliders
+// via file-local storage. When a Settings system lands these are the first
+// values to wire through to the real store. The layout is deliberately narrow
+// (ImGui sliders + checkboxes) so the panel works on every platform the engine
+// already supports.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct SettingsPanelState {
+    bool   open             = false;
+    float  masterVolume     = 0.80F;
+    float  musicVolume      = 0.70F;
+    float  sfxVolume        = 0.90F;
+    float  mouseSensitivity = 1.00F;
+    bool   fullscreen       = false;
+    bool   vsync            = true;
+    bool   invertY          = false;
+};
+
+SettingsPanelState& settingsState() {
+    static SettingsPanelState state;
+    return state;
+}
+
+void drawSettingsPanel(GameAudio& /*audio*/) {
+    SettingsPanelState& state = settingsState();
+    if (!state.open) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(480.0F, 360.0F), ImGuiCond_Appearing);
+    if (ImGui::Begin("Settings", &state.open)) {
+        ImGui::TextUnformatted("Audio");
+        ImGui::Separator();
+        // Volumes are held locally until GameAudio exposes a mixer setter; the
+        // sliders still respond instantly so the panel is never an empty shell.
+        ImGui::SliderFloat("Master Volume", &state.masterVolume, 0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("Music Volume",  &state.musicVolume,  0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("SFX Volume",    &state.sfxVolume,    0.0F, 1.0F, "%.2f");
+
+        ImGui::Dummy(ImVec2(0.0F, 6.0F));
+        ImGui::TextUnformatted("Input");
+        ImGui::Separator();
+        ImGui::SliderFloat("Mouse Sensitivity", &state.mouseSensitivity, 0.25F, 4.0F, "%.2f");
+        ImGui::Checkbox("Invert Y Axis", &state.invertY);
+
+        ImGui::Dummy(ImVec2(0.0F, 6.0F));
+        ImGui::TextUnformatted("Display");
+        ImGui::Separator();
+        ImGui::Checkbox("Fullscreen", &state.fullscreen);
+        ImGui::Checkbox("VSync",      &state.vsync);
+
+        ImGui::Dummy(ImVec2(0.0F, 12.0F));
+        if (ImGui::Button("Close", ImVec2(120.0F, 0.0F))) {
+            state.open = false;
+        }
+    }
+    ImGui::End();
+}
+
+} // namespace
+
 MainMenu::MainMenu(Engine::Input& input, GameAudio& audio)
     : m_input(input)
     , m_audio(audio) {
@@ -64,7 +129,9 @@ bool MainMenu::initialize() {
         if (m_settingsCallback) {
             m_settingsCallback();
         } else {
-            Engine::Logger::info("Settings menu not implemented yet");
+            // Toggle the in-menu settings window. A consumer-supplied callback
+            // (e.g. to open a dedicated scene) still takes precedence.
+            settingsState().open = !settingsState().open;
         }
     };
     m_buttons.push_back(settingsButton);
@@ -231,6 +298,9 @@ void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth,
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+
+    // Draw the settings panel last so it layers on top of the overlay window.
+    drawSettingsPanel(m_audio);
 }
 
 void MainMenu::handleInput() {

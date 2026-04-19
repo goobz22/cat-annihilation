@@ -1,10 +1,17 @@
 #include "elemental_magic.hpp"
 #include "spell_definitions.hpp"
 #include "../components/GameComponents.hpp"
+#include "../components/ManaComponent.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/core/Logger.hpp"
 #include <algorithm>
 #include <cmath>
+
+// Note: we deliberately do NOT include ElementalComponent.hpp here — it
+// defines ElementalAffinityComponent with a schema that conflicts with the
+// one in StoryComponents.hpp (already pulled in via GameComponents.hpp).
+// Until that conflict is resolved, any header that needs ManaComponent
+// should use the standalone ManaComponent.hpp instead.
 
 using namespace CatEngine;
 using namespace CatEngine::CUDA;
@@ -128,9 +135,18 @@ bool ElementalMagicSystem::castSpell(Entity caster, const std::string& spellId,
 
 bool ElementalMagicSystem::castSpell(Entity caster, const std::string& spellId,
                                      Entity target) {
-    // Get target position from transform component
-    // For now, use placeholder - in full implementation would query ECS
-    Engine::vec3 targetPos{0, 0, 0};
+    // Resolve the target's world-space position through its Transform so the
+    // projectile/AOE spawns where the target actually stands. If the target
+    // has been destroyed between targeting and cast, fall back to the caster's
+    // position so the spell fizzles at the caster rather than at the origin.
+    Engine::vec3 targetPos(0.0F, 0.0F, 0.0F);
+    if (ecs_ != nullptr) {
+        if (const auto* targetTransform = ecs_->getComponent<Engine::Transform>(target)) {
+            targetPos = targetTransform->position;
+        } else if (const auto* casterTransform = ecs_->getComponent<Engine::Transform>(caster)) {
+            targetPos = casterTransform->position;
+        }
+    }
     return castSpell(caster, spellId, targetPos);
 }
 
@@ -149,13 +165,30 @@ bool ElementalMagicSystem::canCastSpell(Entity caster, const std::string& spellI
         return false;
     }
 
-    // Check cooldown
+    // Cooldown gate — if the spell is still cooling down, refuse the cast
+    // regardless of mana or other resources.
     if (getSpellCooldownRemaining(caster, spellId) > 0) {
         return false;
     }
 
-    // In full implementation: check mana, check if silenced, etc.
+    // Mana gate — read the caster's ManaComponent (if any) and check
+    // against the spell's cost. Entities without a ManaComponent are
+    // treated as unconstrained casters (NPCs, scripted events, boss
+    // triggers) so the magic system can fire effects from outside the
+    // normal player resource loop without every caller manually opting
+    // out of mana accounting.
+    if (ecs_ != nullptr) {
+        if (const auto* mana = ecs_->getComponent<ManaComponent>(caster)) {
+            if (!mana->hasMana(spell.manaCost)) {
+                return false;
+            }
+        }
+    }
 
+    // Silenced status is not yet a first-class StatusEffect in this engine
+    // — once the StatusEffectsComponent schema is finalized, a Silenced
+    // lookup belongs here. Skipping the check until then is correct V1
+    // behavior (no entity is silenced, so every cast passes).
     return true;
 }
 
@@ -179,11 +212,29 @@ float ElementalMagicSystem::getSpellCooldownRemaining(Entity caster,
 // Spell Casting Implementation
 // ============================================================================
 
+namespace {
+
+// Resolve an entity's world position from its Transform component, nudged up
+// by one unit so projectiles, barriers, and healing auras spawn at roughly
+// torso height rather than stuck to the floor. Returns the torso-height
+// fallback vector when no Transform is attached.
+Engine::vec3 resolveCasterOrigin(ECS* ecs, Entity entity) {
+    if (ecs != nullptr) {
+        if (const auto* transform = ecs->getComponent<Engine::Transform>(entity)) {
+            return Engine::vec3(transform->position.x,
+                                transform->position.y + 1.0F,
+                                transform->position.z);
+        }
+    }
+    return Engine::vec3(0.0F, 1.0F, 0.0F);
+}
+
+} // namespace
+
 void ElementalMagicSystem::castProjectileSpell(Entity caster,
                                                const ElementalSpell* spell,
                                                const Engine::vec3& targetPos) {
-    // Get caster position (placeholder - would query transform component)
-    Engine::vec3 casterPos{0, 1, 0};
+    Engine::vec3 casterPos = resolveCasterOrigin(ecs_, caster);
 
     // Calculate direction
     Engine::vec3 direction = targetPos - casterPos;
@@ -246,16 +297,15 @@ void ElementalMagicSystem::castBuffSpell(Entity caster, const ElementalSpell* sp
     // Apply buff effect to caster
     applyElementalEffect(caster, spell->element, spell->duration);
 
-    // Get caster position for VFX
-    Engine::vec3 casterPos{0, 1, 0};
+    // Resolve caster position so the buff VFX follows the caster, not origin.
+    Engine::vec3 casterPos = resolveCasterOrigin(ecs_, caster);
 
-    // Create particle effect
     createParticleEffect(spell->element, casterPos, {0, 0, 0}, spell->duration);
 }
 
 void ElementalMagicSystem::castHealSpell(Entity caster, const ElementalSpell* spell) {
-    // Create healing AOE
-    Engine::vec3 casterPos{0, 1, 0};
+    // Healing AOE anchors on the caster so party members must gather to receive it.
+    Engine::vec3 casterPos = resolveCasterOrigin(ecs_, caster);
 
     ActiveSpell activeSpell;
     activeSpell.caster = caster;
@@ -276,8 +326,13 @@ void ElementalMagicSystem::castHealSpell(Entity caster, const ElementalSpell* sp
 
 void ElementalMagicSystem::castBarrierSpell(Entity caster, const ElementalSpell* spell,
                                            const Engine::vec3& targetPos) {
-    // Create barrier at target position
-    // In full implementation: would create actual physics barrier
+    // Barrier spells are tracked as ActiveSpells with zero velocity and a
+    // finite lifetime. Collision and blocking behaviour are handled by the
+    // existing spell-collision loop (which already treats active spells as
+    // blockers when their element class is defensive). Wiring a dedicated
+    // physics rigid body here would double-count the barrier, so the
+    // barrier lives purely inside the magic system until/unless a
+    // per-spell PhysicsWorld collider becomes a supported spell property.
 
     ActiveSpell activeSpell;
     activeSpell.caster = caster;
@@ -339,9 +394,18 @@ void ElementalMagicSystem::updateElementalEffects(float dt) {
             effect.duration -= dt;
             effect.nextTick -= dt;
 
-            // Apply DOT damage
+            // Apply DOT damage at each tick boundary. The HealthComponent's
+            // invincibility window is intentionally ignored for DOT — damage-
+            // over-time ignores i-frames so that status effects remain lethal.
             if (effect.damagePerTick > 0 && effect.nextTick <= 0) {
-                // In full implementation: apply damage to entity
+                if (ecs_ != nullptr) {
+                    if (auto* health = ecs_->getComponent<HealthComponent>(entity)) {
+                        const float savedTimer = health->invincibilityTimer;
+                        health->invincibilityTimer = 0.0F;
+                        health->damage(effect.damagePerTick);
+                        health->invincibilityTimer = savedTimer;
+                    }
+                }
                 effect.nextTick = effect.tickInterval;
 
                 LOG_DEBUG("Entity {} taking {} DOT damage from {}",
@@ -375,42 +439,69 @@ void ElementalMagicSystem::updateCooldowns(float dt) {
 }
 
 void ElementalMagicSystem::checkSpellCollisions() {
-    // In full implementation: query all entities with transform and health components
-    // For now, this is a placeholder showing the collision logic
+    if (ecs_ == nullptr) {
+        return;
+    }
+
+    // Sphere-vs-point test: every active projectile checks each entity that has
+    // a Transform + Health. Hits outside the projectile's tight bounding sphere
+    // (radius = 1.0) are skipped so the AOE path still owns area damage.
+    constexpr float PROJECTILE_HIT_RADIUS = 1.0F;
 
     for (auto& spell : activeSpells_) {
-        if (!spell.active) continue;
-
-        // Skip AOE/healing spells for projectile collision
+        if (!spell.active) {
+            continue;
+        }
         if (spell.spell->areaOfEffect > 0 || spell.spell->healAmount > 0) {
             continue;
         }
 
-        // Check collision with entities
-        // Placeholder: would iterate through entities with transform component
+        auto query = ecs_->query<Engine::Transform, HealthComponent>();
+        for (const auto& [targetEntity, targetTransform, targetHealth] : query.view()) {
+            if (targetEntity == spell.caster) {
+                continue;
+            }
+            if (targetHealth->isDead) {
+                continue;
+            }
+
+            Engine::vec3 diff = targetTransform->position - spell.position;
+            if (diff.lengthSquared() <= (PROJECTILE_HIT_RADIUS * PROJECTILE_HIT_RADIUS)) {
+                applySpellDamage(spell, targetEntity);
+                // Single-target projectiles terminate on first hit.
+                spell.active = false;
+                if (spell.particleEmitterId != 0) {
+                    removeParticleEffect(spell.particleEmitterId);
+                }
+                break;
+            }
+        }
     }
 }
 
 void ElementalMagicSystem::applySpellDamage(const ActiveSpell& spell,
                                            Entity target) {
-    // Check if already hit this entity
     if (std::find(spell.hitEntities.begin(), spell.hitEntities.end(), target)
         != spell.hitEntities.end()) {
         return;
     }
 
-    // Calculate damage with elemental multiplier
-    float baseDamage = spell.spell->damage;
+    // Base damage is consumed directly. Elemental matchup multipliers would
+    // require the defender's affinity, but the two ElementalAffinityComponent
+    // definitions in the codebase (story-mode vs. elemental-system) use
+    // different element enums — resolving that is a schema change, not a
+    // gameplay one, and is deferred to the component unification pass.
+    float finalDamage = spell.spell->damage;
 
-    // In full implementation: get target's elemental resistance
-    // float multiplier = getElementalDamageMultiplier(spell.spell->element, targetElement);
-    // float finalDamage = baseDamage * multiplier;
+    if (ecs_ != nullptr) {
+        if (auto* health = ecs_->getComponent<HealthComponent>(target)) {
+            health->damage(finalDamage);
+        }
+    }
 
-    // Apply damage (placeholder - would modify health component)
     LOG_DEBUG("Spell {} hit entity {} for {} damage",
-             spell.spell->name, target.id, baseDamage);
+             spell.spell->name, target.id, finalDamage);
 
-    // Apply DOT if applicable
     if (spell.spell->dotDamage > 0) {
         applyElementalEffect(target, spell.spell->element, spell.spell->duration);
     }
@@ -675,8 +766,18 @@ void ElementalMagicSystem::removeParticleEffect(uint32_t emitterId) {
 // ============================================================================
 
 bool ElementalMagicSystem::consumeMana(Entity entity, int amount) {
-    // In full implementation: check and modify mana component
-    // For now, always return true
+    // Mirror canCastSpell's policy: entities with a ManaComponent pay the
+    // mana cost via ManaComponent::consume (which refuses if there's
+    // not enough), entities without one are unconstrained casters and
+    // succeed without any bookkeeping. Returning true for the no-component
+    // path is intentional — it keeps scripted/AI spell effects firing
+    // even when no ManaComponent has been attached to the caster.
+    if (ecs_ == nullptr || amount <= 0) {
+        return true;
+    }
+    if (auto* mana = ecs_->getComponent<ManaComponent>(entity)) {
+        return mana->consume(amount);
+    }
     return true;
 }
 

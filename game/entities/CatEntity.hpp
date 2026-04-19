@@ -46,19 +46,23 @@ public:
     );
 
     /**
-     * Load cat model and animations (placeholder for future asset system)
+     * Load cat model from disk and attach it to the entity as a MeshComponent.
      * @param ecs ECS system
      * @param entity Entity to load model for
-     * @param modelPath Path to cat model file
+     * @param modelPath Path to cat model file (glTF or GLB)
+     * @return true if the model was loaded and attached
      */
-    static void loadModel(CatEngine::ECS& ecs, CatEngine::Entity entity, const char* modelPath);
+    static bool loadModel(CatEngine::ECS& ecs, CatEngine::Entity entity, const char* modelPath);
 
     /**
-     * Configure cat animations (placeholder for future animation system)
+     * Build an Animator for the cat's skeleton and register clips found in the model.
+     * Requires loadModel() to have succeeded — this method reads the MeshComponent
+     * attached during loading.
      * @param ecs ECS system
-     * @param entity Entity to configure animations for
+     * @param entity Entity whose MeshComponent supplies the skeleton
+     * @return true if an animator was attached (even with zero clips)
      */
-    static void configureAnimations(CatEngine::ECS& ecs, CatEngine::Entity entity);
+    static bool configureAnimations(CatEngine::ECS& ecs, CatEngine::Entity entity);
 
 private:
     // Default values

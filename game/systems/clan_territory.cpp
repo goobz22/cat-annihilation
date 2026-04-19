@@ -621,7 +621,8 @@ void ClanTerritorySystem::createNeutralTerritories() {
     battleground.type = TerritoryType::Neutral;
     battleground.zoneType = ZoneType::PvPZone;
     battleground.controlStatus = ControlStatus::Unclaimed;
-    battleground.controllingClan = Clan::MistClan; // Placeholder
+    // No clan owns a contested battleground until a capture mechanic resolves it.
+    battleground.controllingClan = Clan::None;
     battleground.boundary = TerritoryHelpers::createCircularBoundary(
         Engine::vec3(0.0f, 0.0f, 0.0f), 100.0f
     );
@@ -640,7 +641,8 @@ void ClanTerritorySystem::createSacredTerritories() {
     nexus.type = TerritoryType::Sacred;
     nexus.zoneType = ZoneType::BossZone;
     nexus.controlStatus = ControlStatus::Unclaimed;
-    nexus.controllingClan = Clan::MistClan; // Placeholder
+    // Sacred ground belongs to no clan; only a boss-zone victory assigns control.
+    nexus.controllingClan = Clan::None;
     nexus.boundary = TerritoryHelpers::createCircularBoundary(
         Engine::vec3(0.0f, 100.0f, 0.0f), 80.0f
     );

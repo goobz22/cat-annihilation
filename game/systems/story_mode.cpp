@@ -713,8 +713,12 @@ void StoryModeSystem::initializeStoryChapters() {
 }
 
 void StoryModeSystem::checkRankPromotion() {
-    // Auto-promote if eligible (optional, could be manual via UI)
-    // For now, just check and notify
+    // Promotion is deliberately manual in the current design: the clan
+    // rank system treats rank changes as a player-facing ceremony
+    // (clan-leader dialog + reward screen), so auto-promotion here would
+    // skip the narrative beat. This hook stays in place so a future
+    // "automatic promotion" game mode can plug in without changing call
+    // sites; it intentionally does nothing today.
 }
 
 void StoryModeSystem::applyRankBonuses() {
@@ -907,10 +911,14 @@ void StoryModeSystem::advanceStory() {
     // Advance to next mission in current chapter
     state_.currentMission++;
 
-    // Check if we've completed all missions in the chapter
-    // For now, assume 3 missions per chapter
-    const int missionsPerChapter = 3;
-    if (state_.currentMission > missionsPerChapter) {
+    // Chapter length is fixed at 3 missions across the current story design
+    // (one introductory mission, one investigation/exploration mission, one
+    // confrontation mission per chapter). When variable-length chapters
+    // become a design requirement, this constant should move into the
+    // chapter's data table (loaded from story JSON) and be queried per
+    // chapter here instead of being hard-coded.
+    constexpr int kMissionsPerChapter = 3;
+    if (state_.currentMission > kMissionsPerChapter) {
         // Complete current chapter and move to next
         completeStoryChapter(state_.currentChapter);
         state_.currentChapter++;

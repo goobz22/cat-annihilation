@@ -1,6 +1,10 @@
 #include "mobile_controls.hpp"
 #include "../../engine/core/Logger.hpp"
 #include "../../engine/ui/UISystem.hpp"
+// UIPass is what this file actually submits quads against; UISystem.hpp only
+// carries a forward declaration of UIPass, so we need the full definition
+// here for UIPass::QuadDesc and UIPass::DrawQuad to resolve.
+#include "../../engine/renderer/passes/UIPass.hpp"
 #include <fstream>
 #include <algorithm>
 #include <cmath>
@@ -599,25 +603,89 @@ bool MobileControlsSystem::isPointInRect(glm::vec2 point, glm::vec2 topLeft, glm
            point.y >= topLeft.y && point.y <= topLeft.y + size.y;
 }
 
-// Rendering (Note: Actual rendering would use the UIPass interface)
+// ---------------------------------------------------------------------------
+// Rendering
+//
+// UIPass only exposes axis-aligned textured quads, not circles. Joysticks and
+// buttons are therefore drawn as square quads inscribing their logical circle.
+// When a proper circle-drawing pipeline or SDF texture is wired in, swap the
+// SubmitCircleAsQuad helper below for a native path — call-site stays the same.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Submit a circle-bounding quad. center is the circle centre in screen pixels;
+// the quad is sized to 2 * radius so a later fragment shader can inscribe the
+// actual disc using the [0..1] UV coordinates.
+void SubmitCircleAsQuad(CatEngine::Renderer::UIPass* uiPass,
+                        glm::vec2 center,
+                        float radius,
+                        glm::vec4 color,
+                        float depth) {
+    CatEngine::Renderer::UIPass::QuadDesc desc;
+    desc.x = center.x - radius;
+    desc.y = center.y - radius;
+    desc.width = radius * 2.0F;
+    desc.height = radius * 2.0F;
+    desc.r = color.r;
+    desc.g = color.g;
+    desc.b = color.b;
+    desc.a = color.a;
+    desc.depth = depth;
+    desc.texture = nullptr;
+    uiPass->DrawQuad(desc);
+}
+
+void SubmitRectQuad(CatEngine::Renderer::UIPass* uiPass,
+                    glm::vec2 topLeft,
+                    glm::vec2 size,
+                    glm::vec4 color,
+                    float depth) {
+    CatEngine::Renderer::UIPass::QuadDesc desc;
+    desc.x = topLeft.x;
+    desc.y = topLeft.y;
+    desc.width = size.x;
+    desc.height = size.y;
+    desc.r = color.r;
+    desc.g = color.g;
+    desc.b = color.b;
+    desc.a = color.a;
+    desc.depth = depth;
+    desc.texture = nullptr;
+    uiPass->DrawQuad(desc);
+}
+
+} // namespace
+
 void MobileControlsSystem::renderJoystick(const VirtualJoystick& joystick, CatEngine::Renderer::UIPass* uiPass) {
-    // Render outer circle (base)
-    // Render inner circle (thumb) at current offset
-    // This would use the UIPass to submit draw commands
+    if (uiPass == nullptr) {
+        return;
+    }
 
-    // Placeholder - actual implementation would submit geometry to UIPass
-    float effectiveOpacity = m_globalOpacity * joystick.opacity;
+    const float effectiveOpacity = m_globalOpacity * joystick.opacity;
 
-    // Submit base circle
-    // uiPass->drawCircle(joystick.centerPosition, joystick.outerRadius * m_globalScale, joystick.baseColor * effectiveOpacity);
+    // Base ring — rendered slightly behind the thumb so the thumb reads as
+    // "on top" of the outer circle when pressed.
+    glm::vec4 baseColor = joystick.baseColor;
+    baseColor.a *= effectiveOpacity;
+    SubmitCircleAsQuad(uiPass, joystick.centerPosition,
+                       joystick.outerRadius * m_globalScale,
+                       baseColor, 0.80F);
 
-    // Submit thumb circle
+    // Thumb — position reflects the stored currentOffset so the visual tracks
+    // touch input without an extra update pass.
+    glm::vec4 thumbColor = joystick.thumbColor;
+    thumbColor.a *= effectiveOpacity;
     glm::vec2 thumbPos = joystick.centerPosition + joystick.currentOffset * m_globalScale;
-    // uiPass->drawCircle(thumbPos, joystick.innerRadius * m_globalScale, joystick.thumbColor * effectiveOpacity);
+    SubmitCircleAsQuad(uiPass, thumbPos,
+                       joystick.innerRadius * m_globalScale,
+                       thumbColor, 0.82F);
 }
 
 void MobileControlsSystem::renderButton(const VirtualButton& button, CatEngine::Renderer::UIPass* uiPass) {
-    // Choose color based on state
+    if (uiPass == nullptr) {
+        return;
+    }
+
     glm::vec4 color = button.normalColor;
     if (!button.isEnabled) {
         color = button.disabledColor;
@@ -625,28 +693,33 @@ void MobileControlsSystem::renderButton(const VirtualButton& button, CatEngine::
         color = button.pressedColor;
     }
 
-    float effectiveOpacity = m_globalOpacity * button.opacity;
+    const float effectiveOpacity = m_globalOpacity * button.opacity;
+    color.a *= effectiveOpacity;
 
-    // Submit button circle
-    // uiPass->drawCircle(button.position, button.radius * m_globalScale, color * effectiveOpacity);
+    SubmitCircleAsQuad(uiPass, button.position,
+                       button.radius * m_globalScale,
+                       color, 0.84F);
 
-    // Submit button label if exists
-    // if (!button.label.empty()) {
-    //     uiPass->drawText(button.label, button.position, ...);
-    // }
-
-    // Draw cooldown overlay if active
-    if (button.currentCooldown > 0.0f && button.cooldown > 0.0f) {
-        float cooldownPercent = button.currentCooldown / button.cooldown;
-        // uiPass->drawCooldownOverlay(button.position, button.radius * m_globalScale, cooldownPercent);
+    // Cooldown is shown as a dimming disc overlay whose opacity tracks the
+    // remaining fraction — full-dim at cast, clear at ready.
+    if (button.currentCooldown > 0.0F && button.cooldown > 0.0F) {
+        const float cooldownPercent = button.currentCooldown / button.cooldown;
+        SubmitCircleAsQuad(uiPass, button.position,
+                           button.radius * m_globalScale,
+                           glm::vec4(0.0F, 0.0F, 0.0F, 0.55F * cooldownPercent),
+                           0.86F);
     }
 }
 
 void MobileControlsSystem::renderSwipeZone(const SwipeZone& zone, CatEngine::Renderer::UIPass* uiPass) {
-    // Only render in customization mode for debugging
-    if (m_customizationMode) {
-        // uiPass->drawRect(zone.position, zone.size, glm::vec4(1.0f, 1.0f, 0.0f, 0.2f));
+    if (uiPass == nullptr || !m_customizationMode) {
+        return;
     }
+
+    // Customization-mode visual: a translucent yellow rectangle so designers
+    // can see exactly which screen region captures a given swipe gesture.
+    SubmitRectQuad(uiPass, zone.position, zone.size,
+                   glm::vec4(1.0F, 1.0F, 0.0F, 0.20F), 0.78F);
 }
 
 // Create Default Layouts

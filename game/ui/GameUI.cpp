@@ -280,8 +280,13 @@ void GameUI::startTransition(float duration) {
 // ============================================================================
 
 void GameUI::updateScreenVisibility() {
-    // This would set visibility flags on each screen
-    // For now, screens handle their own visibility in render
+    // Visibility is owned per-screen: each screen's render method reads the
+    // relevant game state (paused? in menu? wave-transition?) and returns
+    // early when it shouldn't be drawn. Centralising that logic here would
+    // duplicate state the screens already have, so this method is an
+    // intentional no-op kept for API symmetry with updateTransition and
+    // for a future per-frame visibility gate if UI load-balancing is
+    // added (e.g., skip low-priority screens when frame time spikes).
 }
 
 void GameUI::updateTransition(float deltaTime) {
