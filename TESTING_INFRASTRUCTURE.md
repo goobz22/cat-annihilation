@@ -1,19 +1,50 @@
 # Cat Annihilation Testing Infrastructure
 
-**Complete testing system for the CUDA/Vulkan game engine**
+**Testing system for the CUDA/Vulkan game engine**
 
-## 📋 Overview
+## Overview
 
-A comprehensive testing infrastructure has been created for the Cat Annihilation game engine, enabling **GPU-free testing** of all game systems using mock implementations.
+A GPU-free testing infrastructure exists for the Cat Annihilation game engine:
+Catch2-based unit and integration tests run against mock implementations of
+the GPU-dependent subsystems so CI can execute them without a CUDA or Vulkan
+SDK present.
 
-## 🎯 Key Features
+## ⚠️ Current status: broad drift
 
-✅ **23 test files** with comprehensive coverage
-✅ **~3,800 lines** of test code
-✅ **No GPU required** - runs on any CI/CD system
-✅ **Catch2 framework** - industry-standard testing
-✅ **GitHub Actions CI** - automated testing on every commit
-✅ **Code validation** - syntax and structure checks
+As of 2026-04-19 the test suite has accumulated significant API drift
+against the current game code. Out of 15 test files, 10 fail to compile
+because they reference symbols that have been renamed or removed:
+
+- `test_serialization.cpp`, `test_cat_customization.cpp` — use
+  `CatCustomization`, `AccessoryType::Hat/Cape`, `FurColor::Orange/Black`
+  which no longer exist. The current code is `CatCustomizationSystem` with a
+  `FurColors` glm::vec3 struct (not an enum).
+- `test_npc_system.cpp` — calls `NPCSystem::initialize/createNPC/getReputation/
+  changeReputation/setReputation`, none of which are members of the current
+  `CatGame::NPCSystem` class.
+- `integration/test_system_integration.cpp` — uses `DayNightCycle` (should
+  be `DayNightCycleSystem`), `MockECS::ECS*` passed where `CatEngine::ECS*`
+  is expected, and several undeclared identifiers (`Shadow`, `dayNight`).
+- Other test files fail in cascading ways from related drift.
+
+Two drifted files (`test_serialization.cpp`, `test_npc_system.cpp`,
+`test_cat_customization.cpp`) are currently commented out in
+`tests/CMakeLists.txt`. The rest still live in the tree with the
+expectation that they will be rewritten against the current API in a
+dedicated triage pass — when that happens, uncomment the skipped entries
+and fix the drifted includes in `integration/*.cpp`.
+
+Until that pass is done, the ninja build uses `-DBUILD_TESTS=OFF` so the
+game binary compiles cleanly on Windows without touching the test targets.
+
+## Key features (when the tests are rewritten)
+
+- **15 test files** covering unit and integration scope
+- **No GPU required** — mocks stand in for Vulkan + CUDA
+- **Catch2** (v2.13.10 single-header) as the test framework
+- **GitHub Actions CI** workflow at `.github/workflows/ci.yml`
+- **Code validation** via `scripts/validate_code.sh` (syntax + include
+  structure checks that run without compiling)
 
 ## 📁 Directory Structure
 
