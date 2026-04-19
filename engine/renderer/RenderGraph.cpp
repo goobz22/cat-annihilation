@@ -1,8 +1,19 @@
 #include "RenderGraph.hpp"
+#include "../rhi/vulkan/VulkanCommandBuffer.hpp"
+#include "../rhi/vulkan/VulkanTexture.hpp"
+#include "../rhi/vulkan/VulkanBuffer.hpp"
+#include <vulkan/vulkan.h>
 #include <algorithm>
 #include <queue>
 #include <set>
 #include <sstream>
+
+// The render graph is RHI-agnostic at the public interface level, but barrier
+// insertion currently has exactly one backend — Vulkan — so the body of
+// InsertBarriers reaches through the RHI abstraction via static_cast to the
+// concrete Vulkan types. If a second backend (D3D12, Metal) is added, the
+// barrier logic should move behind a new RHI-level barrier method rather
+// than expanding the cast-tower here.
 
 namespace CatEngine::Renderer {
 
@@ -177,30 +188,39 @@ void RenderGraph::Execute(RHI::IRHICommandBuffer* cmdBuffer) {
         Compile();
     }
 
-    // Execute passes in dependency order
+    // Each Execute() is one GPU frame through the graph, so the per-frame
+    // barrier counter resets here. InsertBarriers bumps it every time it
+    // emits a pipeline barrier; the total is surfaced via GetStatistics().
+    lastBarrierCount = 0;
+
+    // Walk passes in the topologically-sorted order computed by Compile().
+    // For each pass we first stage any transitions the pass's resource
+    // usages require (versus the state left by previous passes), then call
+    // pass->Execute() which records the pass's actual draw/dispatch work
+    // into the same command buffer. The barrier is therefore always
+    // queued immediately before the commands that observe the new state.
     for (uint32_t passIndex : executionOrder) {
         if (passIndex < passes.size()) {
             auto* pass = passes[passIndex];
-
-            // Insert barriers before pass execution
-            // In production, track resource states and insert only necessary barriers
-            InsertBarriers(cmdBuffer);
-
-            // Execute the pass
+            InsertBarriers(cmdBuffer, pass);
             pass->Execute(cmdBuffer);
         }
     }
 }
 
 void RenderGraph::Reset() {
-    // Deallocate transient resources
+    // Free transient textures/buffers created during the last compile so they
+    // don't leak across graph rebuilds. Non-transient, non-imported resources
+    // are destroyed via the loop below (imported resources are owned by the
+    // caller and are intentionally left alone).
     DeallocateTransientResources();
 
-    // Clear passes (but don't delete them - they're owned by the graph)
-    // passes.clear();
-    // passNameMap.clear();
+    // Passes are owned by the graph and live across Reset() calls — the user
+    // typically rebuilds pass definitions each frame via the public Add*Pass
+    // API, and RenderGraph::~RenderGraph handles the final delete. Clearing
+    // them here would force the caller to re-add passes after every frame,
+    // which is not the contract.
 
-    // Clear resources
     for (auto& resource : resources) {
         if (!resource.isImported && !resource.isTransient) {
             if (resource.type == ResourceType::Texture && resource.texture) {
@@ -214,8 +234,15 @@ void RenderGraph::Reset() {
     resources.clear();
     resourceNameMap.clear();
 
+    // Any tracked access/stage info belonged to resources we just destroyed —
+    // clearing these maps prevents the next Execute() from inheriting stale
+    // state that would produce either missing or incorrect barriers.
+    currentAccess.clear();
+    currentStage.clear();
+
     executionOrder.clear();
     isCompiled = false;
+    lastBarrierCount = 0;
     nextResourceID = 1;
 }
 
@@ -306,8 +333,11 @@ RenderGraph::Statistics RenderGraph::GetStatistics() const {
         }
     }
 
-    // Barrier count would be tracked during execution
-    stats.barrierCount = 0;
+    // Populated by the most recent Execute() — useful for validating that a
+    // pass-dependency arrangement isn't producing pathological barrier
+    // counts (e.g., a pass bouncing a storage image between passes that
+    // alternate read/write every frame).
+    stats.barrierCount = lastBarrierCount;
 
     return stats;
 }
@@ -425,20 +455,195 @@ void RenderGraph::DeallocateTransientResources() {
     }
 }
 
-void RenderGraph::InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer) {
-    // In production, track resource states and insert proper pipeline barriers
-    // This is a simplified placeholder
+namespace {
 
-    // For each resource used in upcoming passes:
-    // 1. Track previous state
-    // 2. Determine required state for next usage
-    // 3. Insert barrier if state transition is needed
+// Map the RHI-level ShaderStage bitmask into Vulkan pipeline stage flags so
+// barrier construction doesn't sprinkle the same switch throughout the file.
+// Only the stages the render graph actually uses for resource access are
+// listed; anything else falls through to ALL_COMMANDS which is the safe
+// (though coarse) default.
+VkPipelineStageFlags ToVkPipelineStage(CatEngine::RHI::ShaderStage stage) {
+    using S = CatEngine::RHI::ShaderStage;
+    VkPipelineStageFlags out = 0;
+    auto has = [&](S bit) {
+        return (static_cast<uint32_t>(stage) & static_cast<uint32_t>(bit)) != 0u;
+    };
+    if (has(S::Vertex))       out |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+    if (has(S::Fragment))     out |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    if (has(S::Geometry))     out |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
+    if (has(S::TessControl))  out |= VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT;
+    if (has(S::TessEval))     out |= VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT;
+    if (has(S::Compute))      out |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    if (out == 0)             out = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    return out;
+}
 
-    // Example barrier (simplified):
-    // cmdBuffer->PipelineBarrier(
-    //     srcStage, dstStage,
-    //     memoryBarriers, bufferBarriers, imageBarriers
-    // );
+// Derive the access-mask bits for a shader-side access. Writes get both READ
+// and WRITE bits because almost every write-followed-by-read pattern in this
+// engine reads the same data back via a different binding type (e.g., storage
+// image written by compute and sampled by fragment), and shader WRITE without
+// READ would skip a cache flush that later sampling needs.
+//
+// The isTexture parameter is kept because a future engine change — binding
+// some buffer storage-descriptors under a different access class, or adding
+// INDIRECT_COMMAND_READ for draw-indirect buffers — needs to discriminate
+// buffer vs image without rewriting every caller. Today both paths resolve
+// to the same bits; diverging them is a one-line change when it becomes
+// needed.
+VkAccessFlags AccessMaskFor(CatEngine::Renderer::ResourceAccess access,
+                            bool /*isTexture*/) {
+    using A = CatEngine::Renderer::ResourceAccess;
+    if (access == A::Read) {
+        return VK_ACCESS_SHADER_READ_BIT;
+    }
+    // Both Write and ReadWrite collapse to read+write: a pure "write" still
+    // needs the read bit so subsequent shader reads see the flushed write,
+    // which matches the "writes flush, reads invalidate" Vulkan memory model.
+    return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+}
+
+// Pick the image layout a texture should sit in while a pass accesses it
+// under the given access mode. Read -> SHADER_READ_ONLY, any write ->
+// GENERAL (covers storage images, compute writes, and arbitrary
+// read-modify-write). Color/depth attachment layouts are handled by the
+// render-pass itself, not by the render-graph barrier path.
+VkImageLayout LayoutFor(CatEngine::Renderer::ResourceAccess access) {
+    using A = CatEngine::Renderer::ResourceAccess;
+    if (access == A::Read) return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    return VK_IMAGE_LAYOUT_GENERAL;
+}
+
+} // namespace
+
+void RenderGraph::InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer,
+                                 RenderGraphPass* pass) {
+    if (!cmdBuffer || !pass) return;
+
+    // The render graph cannot issue pipeline barriers without a Vulkan
+    // command buffer — the abstract IRHICommandBuffer only exposes a no-op
+    // PipelineBarrier(). Cast down; the engine is Vulkan-only today.
+    auto* vulkanCmd = static_cast<RHI::VulkanCommandBuffer*>(cmdBuffer);
+
+    // Collect one Vulkan barrier descriptor per resource that actually needs
+    // a transition. Batching all barriers for the pass into a single
+    // vkCmdPipelineBarrier call is cheaper than emitting them one at a time,
+    // and matches how the Vulkan spec recommends you drive the API.
+    std::vector<VkImageMemoryBarrier>  imageBarriers;
+    std::vector<VkBufferMemoryBarrier> bufferBarriers;
+
+    VkPipelineStageFlags aggregateSrcStage = 0;
+    VkPipelineStageFlags aggregateDstStage = 0;
+
+    for (const auto& usage : pass->GetResourceUsages()) {
+        auto* resource = GetResource(usage.resource);
+        if (!resource) continue;
+
+        // Check whether this resource has been accessed before in the current
+        // frame's graph execution. If not, the resource enters this pass
+        // "fresh" and we still emit a barrier from TOP_OF_PIPE so any
+        // previous-frame work on the same resource is correctly ordered.
+        auto accessIt = currentAccess.find(resource->id);
+        auto stageIt  = currentStage.find(resource->id);
+
+        const bool hasPriorState = (accessIt != currentAccess.end());
+        const ResourceAccess prevAccess = hasPriorState ? accessIt->second
+                                                        : ResourceAccess::Read;
+        const RHI::ShaderStage prevStage = (stageIt != currentStage.end())
+                                               ? stageIt->second
+                                               : RHI::ShaderStage::All;
+
+        const bool needsBarrier =
+            !hasPriorState ||
+            prevAccess != usage.access ||
+            prevStage != usage.shaderStages ||
+            // A write followed by another write on the same resource still
+            // needs a write-after-write barrier so the second write sees the
+            // flushed cache state from the first. The access enum equality
+            // check above doesn't catch that case, so be explicit here.
+            (prevAccess != ResourceAccess::Read &&
+             usage.access != ResourceAccess::Read);
+
+        if (!needsBarrier) continue;
+
+        const VkPipelineStageFlags srcStage =
+            hasPriorState ? ToVkPipelineStage(prevStage)
+                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        const VkPipelineStageFlags dstStage = ToVkPipelineStage(usage.shaderStages);
+
+        aggregateSrcStage |= srcStage;
+        aggregateDstStage |= dstStage;
+
+        if (resource->type == ResourceType::Texture && resource->texture) {
+            auto* vkTex = static_cast<RHI::VulkanTexture*>(resource->texture);
+
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = hasPriorState
+                              ? LayoutFor(prevAccess)
+                              : VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = LayoutFor(usage.access);
+            b.srcAccessMask = hasPriorState
+                                  ? AccessMaskFor(prevAccess, true)
+                                  : 0;
+            b.dstAccessMask = AccessMaskFor(usage.access, true);
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = vkTex->GetVkImage();
+            b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.baseMipLevel   = 0;
+            b.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+            b.subresourceRange.baseArrayLayer = 0;
+            b.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+
+            imageBarriers.push_back(b);
+        } else if (resource->type == ResourceType::Buffer && resource->buffer) {
+            auto* vkBuf = static_cast<RHI::VulkanBuffer*>(resource->buffer);
+
+            VkBufferMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.srcAccessMask = hasPriorState
+                                  ? AccessMaskFor(prevAccess, false)
+                                  : 0;
+            b.dstAccessMask = AccessMaskFor(usage.access, false);
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.buffer = vkBuf->GetVkBuffer();
+            b.offset = 0;
+            b.size   = VK_WHOLE_SIZE;
+
+            bufferBarriers.push_back(b);
+        }
+
+        // Update the tracked state unconditionally — even if the barrier
+        // didn't physically land in the arrays (e.g., a transient resource
+        // that hasn't been allocated yet), the logical access is what the
+        // next pass will diff against.
+        currentAccess[resource->id] = usage.access;
+        currentStage[resource->id]  = usage.shaderStages;
+    }
+
+    if (imageBarriers.empty() && bufferBarriers.empty()) {
+        return;
+    }
+
+    // One combined pipeline barrier covers every resource transition the
+    // pass needs. Memory barriers (global, non-resource-specific) are left
+    // empty — the render graph always knows the resources it touches, so
+    // per-resource barriers are both sufficient and more precise.
+    vulkanCmd->PipelineBarrierFull(
+        aggregateSrcStage,
+        aggregateDstStage,
+        0,                            // dependencyFlags
+        nullptr, 0,                   // no global memory barriers
+        bufferBarriers.empty() ? nullptr : bufferBarriers.data(),
+        static_cast<uint32_t>(bufferBarriers.size()),
+        imageBarriers.empty() ? nullptr : imageBarriers.data(),
+        static_cast<uint32_t>(imageBarriers.size())
+    );
+
+    lastBarrierCount += static_cast<uint32_t>(
+        imageBarriers.size() + bufferBarriers.size()
+    );
 }
 
 RenderGraph::Resource* RenderGraph::GetResource(ResourceHandle handle) {

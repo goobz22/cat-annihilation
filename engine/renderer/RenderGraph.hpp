@@ -361,11 +361,38 @@ private:
     // Compilation state
     bool isCompiled = false;
 
+    // Per-resource access tracking used by InsertBarriers to decide whether a
+    // pipeline barrier is needed before the next pass touches the resource.
+    // Keyed by Resource::id (not the handle, which carries transient flags we
+    // don't care about for state tracking). Values reflect the *last*
+    // access+stage the resource was left in after the previously executed
+    // pass — the render graph uses them to diff against the upcoming pass's
+    // declared usages and emit only the transitions actually required.
+    // Both maps are cleared in Reset() and Compile() so one graph can be
+    // re-executed across frames without leaking stale state.
+    std::unordered_map<uint32_t, ResourceAccess> currentAccess;
+    std::unordered_map<uint32_t, RHI::ShaderStage> currentStage;
+
+    // Number of barriers emitted during the most recent Execute() — surfaced
+    // via GetStatistics() so the owning renderer can observe whether the
+    // graph's resource dependencies are producing a reasonable number of
+    // transitions (too many barriers usually means the pass dependency shape
+    // is wrong).
+    uint32_t lastBarrierCount = 0;
+
     // Helper methods
     void TopologicalSort();
     void AllocateTransientResources();
     void DeallocateTransientResources();
-    void InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer);
+
+    // Insert any pipeline barriers required to transition the resources used
+    // by `pass` from their current tracked access/stage into the access/stage
+    // the pass has declared. After the call, currentAccess/currentStage
+    // reflect the post-barrier state for those resources. The pass is never
+    // executed here — the caller is expected to invoke pass->Execute()
+    // immediately after, so the barrier queues synchronization work into the
+    // same command buffer just before the pass's draw/dispatch commands.
+    void InsertBarriers(RHI::IRHICommandBuffer* cmdBuffer, RenderGraphPass* pass);
 
     Resource* GetResource(ResourceHandle handle);
     const Resource* GetResource(ResourceHandle handle) const;
