@@ -4,6 +4,7 @@
 #include "Blackboard.hpp"
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace CatEngine {
@@ -14,6 +15,7 @@ namespace CatEngine {
 struct BTDebugInfo {
     std::vector<std::string> runningNodePath;  // Path to currently running node
     std::string currentNodeName;               // Name of current node
+    std::string structuredText;                // Full indented tree with running markers
     BTStatus lastStatus;                       // Last returned status
     float totalTime;                           // Total time tree has been running
 };
@@ -84,7 +86,21 @@ public:
     }
 
     /**
-     * Get debug information about current execution
+     * Record a parent -> child relationship as the tree is built. The builder
+     * calls this so the tree can produce recursive debug dumps without needing
+     * private accessors on BTSelector/BTSequence/BTParallel.
+     */
+    void registerChild(BTNode* parent, BTNode* child) {
+        if (parent && child) {
+            childMap_[parent].push_back(child);
+        }
+    }
+
+    /**
+     * Get debug information about current execution. Walks the registered
+     * child map to produce a nested, indented textual dump of the live tree
+     * with running nodes flagged, and extracts the linear path from root to
+     * the deepest currently-running node.
      */
     BTDebugInfo getDebugInfo() const {
         BTDebugInfo info;
@@ -92,9 +108,11 @@ public:
         info.lastStatus = lastStatus_;
         info.totalTime = totalTime_;
 
-        // Build running node path
-        if (root_ && root_->isRunning()) {
-            buildRunningPath(root_.get(), info.runningNodePath);
+        if (root_) {
+            if (root_->isRunning()) {
+                buildRunningPath(root_.get(), info.runningNodePath);
+            }
+            info.structuredText = dumpStructure(root_.get(), 0);
         }
 
         return info;
@@ -123,8 +141,13 @@ public:
 
 private:
     void buildRunningPath(BTNode* node, std::vector<std::string>& path) const;
+    std::string dumpStructure(BTNode* node, int depth) const;
 
     std::unique_ptr<BTNode> root_;
+    // Shadow child registry populated by BehaviorTreeBuilder. Owned node
+    // lifetime stays with the composites themselves; this map holds raw
+    // observer pointers that are valid as long as root_ is alive.
+    std::unordered_map<BTNode*, std::vector<BTNode*>> childMap_;
     BTStatus lastStatus_ = BTStatus::Success;
     float totalTime_ = 0.0f;
     bool debugMode_ = false;
@@ -213,7 +236,14 @@ public:
         if (root_) {
             tree->setRoot(std::move(root_));
         }
+        // Transfer the parent->child registry we accumulated during building.
+        for (auto& [parent, children] : parentChildPairs_) {
+            for (BTNode* child : children) {
+                tree->registerChild(parent, child);
+            }
+        }
         nodeStack_.clear();
+        parentChildPairs_.clear();
         return tree;
     }
 
@@ -223,8 +253,8 @@ private:
             // This is the root
             root_ = std::move(node);
         } else {
-            // Add to parent composite node
             BTNode* parent = nodeStack_.back();
+            BTNode* childPtr = node.get();
 
             if (auto* selector = dynamic_cast<BTSelector*>(parent)) {
                 selector->addChild(std::move(node));
@@ -232,12 +262,21 @@ private:
                 sequence->addChild(std::move(node));
             } else if (auto* parallel = dynamic_cast<BTParallel*>(parent)) {
                 parallel->addChild(std::move(node));
+            } else {
+                // Not a composite; ownership stays with the parent decorator
+                // via its own constructor channel.
+                return;
             }
+
+            parentChildPairs_[parent].push_back(childPtr);
         }
     }
 
     std::unique_ptr<BTNode> root_;
     std::vector<BTNode*> nodeStack_;
+    // Mirror of the composite addChild() relationships. Transferred into the
+    // BehaviorTree at build() so debug traversal has a structural view.
+    std::unordered_map<BTNode*, std::vector<BTNode*>> parentChildPairs_;
 };
 
 } // namespace CatEngine

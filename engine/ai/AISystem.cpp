@@ -1,4 +1,5 @@
 #include "AISystem.hpp"
+#include "../core/Logger.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -72,12 +73,24 @@ void AISystem::updateBehaviorTrees(float dt) {
         // Store reference position in blackboard
         ai->blackboard.set("referencePosition", referencePosition_);
 
+        // Publish the ECS and the owning entity into the local blackboard so
+        // factory-built lambdas can resolve target transforms without needing
+        // to close over system-level pointers at construction time.
+        ai->blackboard.local()->set("ecs", ecs_);
+        ai->blackboard.local()->set("self", data.entity);
+
         // Tick behavior tree
         ai->behaviorTree->tick(actualDt, *ai->blackboard.local());
 
         if (debugMode_) {
             auto debugInfo = ai->behaviorTree->getDebugInfo();
-            // In a real implementation, would send this to debug visualization
+            Engine::Logger::debug(
+                "[AI] Entity {} status={} time={:.3f}s path='{}'\n{}",
+                data.entity.id,
+                static_cast<int>(debugInfo.lastStatus),
+                debugInfo.totalTime,
+                debugInfo.currentNodeName,
+                debugInfo.structuredText);
         }
     }
 }
@@ -282,14 +295,31 @@ std::unique_ptr<BehaviorTree> AIFactory::createChaseAI(Entity targetEntity) {
                 return true;
             }, "FindTarget")
             .action([](float dt, Blackboard& bb) {
-                // Move toward target
                 Entity* target = bb.get<Entity>("target");
-                if (!target) {
+                vec3* selfPos = bb.get<vec3>("position");
+                ECS** ecsPtr = bb.get<ECS*>("ecs");
+                if (!target || !selfPos || !ecsPtr || !*ecsPtr) {
                     return BTStatus::Failure;
                 }
 
-                // In real implementation, would calculate path to target
-                // and set desired velocity
+                auto* tx = (*ecsPtr)->getComponent<TransformComponent>(*target);
+                if (!tx) {
+                    return BTStatus::Failure;
+                }
+
+                bb.set("target_position", tx->position);
+
+                vec3 toTarget = tx->position - *selfPos;
+                float distSq = toTarget.lengthSquared();
+                if (distSq < 0.0001f) {
+                    bb.set("desired_velocity", vec3::zero());
+                    return BTStatus::Success;
+                }
+
+                // Produce a unit desired-velocity vector; the steering stage
+                // scales it by the entity's maxSpeed and blends in flocking.
+                vec3 desired = toTarget.normalized();
+                bb.set("desired_velocity", desired);
                 return BTStatus::Running;
             }, "ChaseTarget")
         .end()
@@ -365,19 +395,40 @@ std::unique_ptr<BehaviorTree> AIFactory::createGuardAI(Entity targetEntity,
             // Try to chase if target is nearby
             .sequence()
                 .condition([targetEntity, detectionRange](Blackboard& bb) {
-                    // Check if target is in range
                     vec3* position = bb.get<vec3>("position");
-                    if (!position) {
+                    ECS** ecsPtr = bb.get<ECS*>("ecs");
+                    if (!position || !ecsPtr || !*ecsPtr) {
                         return false;
                     }
 
-                    // In real implementation, would get target position
-                    // For now, just check if we have a target
+                    auto* tx = (*ecsPtr)->getComponent<TransformComponent>(targetEntity);
+                    if (!tx) {
+                        return false;
+                    }
+
+                    float distSq = (tx->position - *position).lengthSquared();
+                    if (distSq > detectionRange * detectionRange) {
+                        return false;
+                    }
+
                     bb.set("target", targetEntity);
+                    bb.set("target_position", tx->position);
                     return true;
                 }, "DetectTarget")
                 .action([](float dt, Blackboard& bb) {
-                    // Chase the target
+                    vec3* selfPos = bb.get<vec3>("position");
+                    vec3* targetPos = bb.get<vec3>("target_position");
+                    if (!selfPos || !targetPos) {
+                        return BTStatus::Failure;
+                    }
+
+                    vec3 toTarget = *targetPos - *selfPos;
+                    if (toTarget.lengthSquared() < 0.0001f) {
+                        bb.set("desired_velocity", vec3::zero());
+                        return BTStatus::Success;
+                    }
+
+                    bb.set("desired_velocity", toTarget.normalized());
                     return BTStatus::Running;
                 }, "ChaseTarget")
             .end()
@@ -412,19 +463,43 @@ std::unique_ptr<BehaviorTree> AIFactory::createFleeAI(Entity targetEntity, float
     return builder
         .sequence()
             .condition([targetEntity, fleeDistance](Blackboard& bb) {
-                // Check if target is too close
                 vec3* position = bb.get<vec3>("position");
-                if (!position) {
+                ECS** ecsPtr = bb.get<ECS*>("ecs");
+                if (!position || !ecsPtr || !*ecsPtr) {
                     return false;
                 }
 
-                // In real implementation, would check actual distance to target
+                auto* tx = (*ecsPtr)->getComponent<TransformComponent>(targetEntity);
+                if (!tx) {
+                    return false;
+                }
+
+                float distSq = (tx->position - *position).lengthSquared();
+                if (distSq > fleeDistance * fleeDistance) {
+                    return false;
+                }
+
                 bb.set("target", targetEntity);
+                bb.set("target_position", tx->position);
                 bb.set("fleeDistance", fleeDistance);
                 return true;
             }, "CheckThreat")
             .action([](float dt, Blackboard& bb) {
-                // Flee from target
+                vec3* selfPos = bb.get<vec3>("position");
+                vec3* targetPos = bb.get<vec3>("target_position");
+                if (!selfPos || !targetPos) {
+                    return BTStatus::Failure;
+                }
+
+                // Flee = unit vector pointing away from the threat. Steering
+                // stage scales into world-space velocity.
+                vec3 away = *selfPos - *targetPos;
+                if (away.lengthSquared() < 0.0001f) {
+                    bb.set("desired_velocity", vec3::zero());
+                    return BTStatus::Success;
+                }
+
+                bb.set("desired_velocity", away.normalized());
                 return BTStatus::Running;
             }, "Flee")
         .end()
