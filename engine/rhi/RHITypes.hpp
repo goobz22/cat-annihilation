@@ -558,6 +558,14 @@ struct PipelineDesc {
     class IRHIRenderPass* renderPass = nullptr;
     uint32_t subpass = 0;
 
+    // Pipeline layout — descriptor-set layouts + push-constant ranges the
+    // pipeline binds against. Optional: passing nullptr builds an empty
+    // layout (valid for pipelines that sample nothing and accept no push
+    // constants). Passes that do bind descriptors MUST supply this,
+    // otherwise BindDescriptorSets against the pipeline will validation-
+    // error at draw time.
+    class IRHIPipelineLayout* pipelineLayout = nullptr;
+
     const char* debugName = nullptr;
 };
 
@@ -566,6 +574,9 @@ struct PipelineDesc {
  */
 struct ComputePipelineDesc {
     class IRHIShader* shader = nullptr;
+    // Same layout contract as PipelineDesc::pipelineLayout above — required
+    // for any compute dispatch that reads/writes bound buffers or images.
+    class IRHIPipelineLayout* pipelineLayout = nullptr;
     const char* debugName = nullptr;
 };
 

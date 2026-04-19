@@ -52,6 +52,21 @@ public:
                          uint32_t layerCount = VK_REMAINING_ARRAY_LAYERS);
 
     /**
+     * Update the tracked current layout WITHOUT emitting a barrier.
+     *
+     * For callers that have already issued a vkCmdPipelineBarrier themselves
+     * (e.g. VulkanCommandBuffer::CopyBufferToTexture performs its own
+     * UNDEFINED -> TRANSFER_DST -> SHADER_READ transitions inline). Using
+     * this keeps m_CurrentLayout consistent so subsequent TransitionLayout()
+     * calls derive the correct srcAccessMask/oldLayout pair.
+     *
+     * Do NOT call this unless you actually emitted the transition yourself.
+     */
+    void SetCurrentLayoutAfterExternalTransition(VkImageLayout newLayout) {
+        m_CurrentLayout = newLayout;
+    }
+
+    /**
      * Upload texture data from host memory
      */
     void UploadData(const void* data, uint64_t size, uint32_t mipLevel = 0, uint32_t arrayLayer = 0);

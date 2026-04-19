@@ -233,11 +233,30 @@ void VulkanRHI::DestroyFramebuffer(IRHIFramebuffer* framebuffer) {
 }
 
 IRHIPipeline* VulkanRHI::CreateGraphicsPipeline(const PipelineDesc& desc) {
+    // If the caller supplied a pipeline layout (the usual case for passes
+    // that bind descriptors), route through the layout-aware constructor
+    // so the VkPipeline is created against that layout instead of an empty
+    // default. An empty default pipeline layout compiles fine but produces
+    // validation errors the moment any BindDescriptorSets call arrives
+    // against the pipeline — the default declares zero descriptor sets.
+    if (desc.pipelineLayout != nullptr) {
+        auto* layout = static_cast<VulkanPipelineLayout*>(desc.pipelineLayout);
+        auto* pipeline = new VulkanGraphicsPipeline(&m_device, desc, layout);
+        return pipeline;
+    }
     auto* pipeline = new VulkanGraphicsPipeline(&m_device, desc);
     return pipeline;
 }
 
 IRHIPipeline* VulkanRHI::CreateComputePipeline(const ComputePipelineDesc& desc) {
+    // Same layout contract as CreateGraphicsPipeline: use the caller's
+    // layout when provided so BindDescriptorSets in compute dispatches
+    // resolves against the correct set layouts instead of an empty default.
+    if (desc.pipelineLayout != nullptr) {
+        auto* layout = static_cast<VulkanPipelineLayout*>(desc.pipelineLayout);
+        auto* pipeline = new VulkanComputePipeline(&m_device, desc, layout);
+        return pipeline;
+    }
     auto* pipeline = new VulkanComputePipeline(&m_device, desc);
     return pipeline;
 }

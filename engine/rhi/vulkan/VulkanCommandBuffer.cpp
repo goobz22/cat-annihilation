@@ -455,6 +455,46 @@ void VulkanCommandBuffer::CopyBufferToTexture(
 ) {
     VkBuffer vkBuffer = GetVulkanBuffer(srcBuffer);
     VkImage vkImage = GetVulkanImage(dstTexture);
+    auto* vulkanTexture = static_cast<VulkanTexture*>(dstTexture);
+
+    // ------------------------------------------------------------------
+    // Pre-transition: UNDEFINED -> TRANSFER_DST_OPTIMAL.
+    //
+    // Every caller in the engine so far (BitmapFont atlas, GPUScene texture
+    // uploads) treats this as the first use of a freshly created image, so
+    // we transition from UNDEFINED (any prior content is discarded) into
+    // TRANSFER_DST_OPTIMAL so vkCmdCopyBufferToImage has the layout it
+    // requires. srcStage=TOP_OF_PIPE + srcAccess=0 because nothing on the
+    // GPU has touched this image yet; dstStage=TRANSFER + dstAccess=
+    // TRANSFER_WRITE guarantees the subsequent copy's writes are correctly
+    // ordered with respect to this layout change.
+    // ------------------------------------------------------------------
+    {
+        VkImageMemoryBarrier preBarrier{};
+        preBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        preBarrier.srcAccessMask = 0;
+        preBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        preBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        preBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        preBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarrier.image = vkImage;
+        preBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        preBarrier.subresourceRange.baseMipLevel = mipLevel;
+        preBarrier.subresourceRange.levelCount = 1;
+        preBarrier.subresourceRange.baseArrayLayer = arrayLayer;
+        preBarrier.subresourceRange.layerCount = 1;
+
+        vkCmdPipelineBarrier(
+            m_commandBuffer,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &preBarrier
+        );
+    }
 
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
@@ -475,6 +515,62 @@ void VulkanCommandBuffer::CopyBufferToTexture(
         1,
         &region
     );
+
+    // ------------------------------------------------------------------
+    // Post-transition: TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL.
+    //
+    // V1 assumes every caller of CopyBufferToTexture wants the texture
+    // usable as a sampled image afterwards — that is true for the
+    // BitmapFont atlas and GPUScene texture uploads. If future non-shader
+    // consumers appear (e.g. a blit source that stays in TRANSFER_SRC),
+    // add a CopyBufferToTexture overload with an explicit finalLayout
+    // parameter rather than quietly skipping this transition.
+    //
+    // srcStage=TRANSFER + srcAccess=TRANSFER_WRITE drains the copy's
+    // writes. dstStage covers every shader stage that might sample the
+    // atlas (vertex for sprite quads, fragment for the actual sampling,
+    // compute for GPU-driven pipelines) and dstAccess=SHADER_READ makes
+    // those reads happen-after the layout change.
+    // ------------------------------------------------------------------
+    {
+        VkImageMemoryBarrier postBarrier{};
+        postBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        postBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        postBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        postBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        postBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        postBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        postBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        postBarrier.image = vkImage;
+        postBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        postBarrier.subresourceRange.baseMipLevel = mipLevel;
+        postBarrier.subresourceRange.levelCount = 1;
+        postBarrier.subresourceRange.baseArrayLayer = arrayLayer;
+        postBarrier.subresourceRange.layerCount = 1;
+
+        vkCmdPipelineBarrier(
+            m_commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+                | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &postBarrier
+        );
+    }
+
+    // Sync VulkanTexture's layout tracker so any future call to
+    // VulkanTexture::TransitionLayout() derives the correct oldLayout /
+    // srcAccessMask from SHADER_READ_ONLY_OPTIMAL rather than from a
+    // stale UNDEFINED snapshot. We did the actual barrier inline above;
+    // this setter intentionally does NOT emit another one.
+    if (vulkanTexture != nullptr) {
+        vulkanTexture->SetCurrentLayoutAfterExternalTransition(
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
 }
 
 void VulkanCommandBuffer::CopyTextureToBuffer(
