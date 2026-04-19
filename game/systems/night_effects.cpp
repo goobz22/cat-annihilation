@@ -414,36 +414,15 @@ float NightEffectsSystem::getIlluminationAt(const Engine::vec3& position) const 
 // ============================================================================
 
 void NightEffectsSystem::updateLightFlickering(float /*dt*/) {
+    // Flicker computation is a no-op until a renderer-side consumer exists
+    // (see the deferred-feature note in night_effects.hpp). We still walk
+    // the active-light list so the method has a shape ready to restore
+    // once a Scene → LightManager bridge lands — but the actual per-frame
+    // multiplier write is gone because nothing was reading it.
+    (void)s_perlin;
+    (void)timeAccumulator_;
     for (const auto& lightEntity : activeLightSources_) {
-        if (!ecs_->hasComponent<NightLightSource>(lightEntity)) {
-            continue;
-        }
-
-        auto* light = ecs_->getComponent<NightLightSource>(lightEntity);
-        if (light == nullptr) {
-            continue;
-        }
-
-        if (light->flickerAmount > 0.0f && light->isActive) {
-            // Sample Perlin noise once per frame per light, centered on
-            // 1.0 so the resulting multiplier oscillates symmetrically
-            // around the base intensity rather than only darkening it.
-            float noise = s_perlin.noise(timeAccumulator_ * light->flickerSpeed);
-            float flicker = 1.0f + (noise * light->flickerAmount);
-
-            // Write the multiplier into the per-frame lookup map so the
-            // renderer can multiply NightLightSource::baseIntensity by
-            // this value when assembling the scene's light list. Keeping
-            // the base intensity pristine lets gameplay code reason about
-            // "the light's real brightness" independent of flicker — the
-            // flicker lives entirely in this rendering-side cache.
-            lightFlickerMultipliers_[lightEntity] = flicker;
-        } else {
-            // Non-flickering lights drop out of the map so the renderer's
-            // lookup returns the default 1.0 multiplier instead of a
-            // stale flicker value from a previous frame.
-            lightFlickerMultipliers_.erase(lightEntity);
-        }
+        (void)lightEntity;
     }
 }
 
@@ -475,19 +454,15 @@ void NightEffectsSystem::updatePlayerVisibility(float dt) {
 }
 
 void NightEffectsSystem::updateNocturnalEnemies(float /*dt*/) {
-    // Nocturnal enemies get more aggressive at night
-    // This would integrate with the AI system in production
+    // The per-frame aggression-multiplier cache was removed (see the
+    // deferred-feature note in night_effects.hpp). Iteration stays so a
+    // future AI hook can subscribe here without a structural change —
+    // today it just keeps despawn tracking honest by skipping dead
+    // entities for symmetry with other passes over nocturnalEnemies_.
     for (const auto& enemy : nocturnalEnemies_) {
         if (!ecs_->isAlive(enemy)) {
             continue;
         }
-
-        // Compute and cache this frame's aggression multiplier. The AI
-        // system reads it through getCurrentAggressionMultiplier() when
-        // scoring targets, which keeps the time-of-day math in one place
-        // instead of making every AI goal re-derive it from the day cycle.
-        float aggression = getEnemyAggressionMultiplier(enemy);
-        aggressionMultipliers_[enemy] = aggression;
     }
 }
 
@@ -626,24 +601,9 @@ float NightEffectsSystem::calculateMovementModifier(CatEngine::Entity entity, fl
     return MAX_MODIFIER * t;
 }
 
-// ============================================================================
-// Per-frame multiplier queries
-// ============================================================================
-
-float NightEffectsSystem::getLightFlickerMultiplier(CatEngine::Entity light) const {
-    // Defaulting to 1.0 means the renderer can unconditionally multiply the
-    // base intensity by this value — lights that aren't flickering (or
-    // haven't been updated yet this frame) pass through unchanged.
-    auto it = lightFlickerMultipliers_.find(light);
-    return (it != lightFlickerMultipliers_.end()) ? it->second : 1.0f;
-}
-
-float NightEffectsSystem::getCurrentAggressionMultiplier(CatEngine::Entity enemy) const {
-    // Default of 1.0 keeps non-nocturnal enemies on their baseline
-    // aggression curve when the AI system happens to query this for an
-    // entity outside the nocturnalEnemies_ set.
-    auto it = aggressionMultipliers_.find(enemy);
-    return (it != aggressionMultipliers_.end()) ? it->second : 1.0f;
-}
+// Per-frame multiplier queries removed — see the deferred-feature note in
+// night_effects.hpp. getEnemyAggressionMultiplier() (the pull-style API)
+// is still available for callers that already hold a NightEffectsSystem*
+// and want to compute the value on demand.
 
 } // namespace CatGame

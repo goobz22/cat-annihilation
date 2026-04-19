@@ -442,17 +442,25 @@ float LevelingSystem::getElementalRadiusMultiplier(ElementType element) const {
 // ============================================================================
 
 std::vector<std::string> LevelingSystem::getUnlockedCombos(const std::string& weaponType) const {
-    // The combo system owns the weapon-level → combo-id mapping. This
-    // LevelingSystem deliberately does not duplicate that table; it only
-    // knows how to ask. When ComboSystem exposes a
-    // getUnlockedCombosForWeaponLevel(weaponType, level) accessor, replace
-    // this stub-return with a direct forward. Today ComboSystem has no
-    // such accessor, so we correctly return an empty list rather than
-    // fabricating combo IDs here.
-    if (comboSystem_) {
-        (void)getWeaponLevel(weaponType);
+    // Forward to ComboSystem, which owns the (weaponType -> ComboMove table)
+    // mapping and already filters by weapon level internally (it reads
+    // getWeaponLevel() off the LevelingSystem pointer it was initialize()'d
+    // with — see combo_system.cpp getUnlockedCombos / isComboUnlocked).
+    //
+    // We only return the combo *names* here because this API's contract is
+    // "list of unlocked combo IDs"; callers that want the full move data
+    // should talk to ComboSystem::getUnlockedCombos directly.
+    if (!comboSystem_) {
+        return std::vector<std::string>();
     }
-    return std::vector<std::string>();
+
+    std::vector<ComboMove> unlockedMoves = comboSystem_->getUnlockedCombos(weaponType);
+    std::vector<std::string> comboNames;
+    comboNames.reserve(unlockedMoves.size());
+    for (const auto& move : unlockedMoves) {
+        comboNames.push_back(move.name);
+    }
+    return comboNames;
 }
 
 // ============================================================================

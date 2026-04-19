@@ -6,7 +6,6 @@
 #include "../../engine/math/Vector.hpp"
 #include "day_night_cycle.hpp"
 #include <vector>
-#include <unordered_map>
 
 namespace CatGame {
 
@@ -176,23 +175,22 @@ public:
      */
     float getIlluminationAt(const Engine::vec3& position) const;
 
-    /**
-     * Query the flicker multiplier applied to a light source this frame.
-     * Returns 1.0 for entities that aren't flickering or that the
-     * renderer can safely draw at full base intensity. Updated by
-     * updateLightFlickering() so the renderer can read it in the same
-     * frame without racing the update.
-     */
-    float getLightFlickerMultiplier(CatEngine::Entity light) const;
-
-    /**
-     * Query the current (time-of-day-adjusted) aggression multiplier for
-     * a nocturnal enemy. Written by updateNocturnalEnemies() each tick so
-     * the AI system can multiply base aggression by this factor when
-     * scoring targets — without having to re-compute the time-of-day
-     * weighting itself.
-     */
-    float getCurrentAggressionMultiplier(CatEngine::Entity enemy) const;
+    // Per-frame multiplier queries were removed intentionally. The
+    // writer maps (lightFlickerMultipliers_ / aggressionMultipliers_)
+    // were being populated but never consumed: the engine's
+    // Engine::Renderer::LightManager is a pure renderer-layer singleton
+    // with no ECS bridge, and NightEffectsSystem itself was never
+    // instantiated by CatAnnihilation, so there was no way for an AI
+    // system to look up an aggression multiplier through it either.
+    //
+    // Re-introducing these queries is blocked on two upstream pieces:
+    //   1. A Scene→LightManager bridge that actually submits per-entity
+    //      NightLightSource data to the GPU lighting UBO (see
+    //      engine/renderer/lighting/LightManager.hpp).
+    //   2. Wiring NightEffectsSystem into CatAnnihilation::initializeSystems
+    //      so EnemyAISystem has an owner to query.
+    //
+    // Once either path is built, restore the getters + their writer maps.
 
 private:
     // ========================================================================
@@ -243,14 +241,11 @@ private:
     std::vector<CatEngine::Entity> nocturnalEnemies_;
     std::vector<CatEngine::Entity> glowSticks_;
 
-    // Per-frame scratch maps populated by updateLightFlickering and
-    // updateNocturnalEnemies and consumed by the renderer / AI system via
-    // the public getters above. Kept as std::unordered_map (not packed
-    // arrays) because the light and enemy sets are both small (<100 each
-    // in typical gameplay) and the hash-lookup hot path is amortised
-    // across the whole frame, not hit in a tight inner loop.
-    std::unordered_map<CatEngine::Entity, float> lightFlickerMultipliers_;
-    std::unordered_map<CatEngine::Entity, float> aggressionMultipliers_;
+    // Note: per-frame flicker / aggression maps used to live here. They were
+    // written every frame but never read (see the deferred-feature comment
+    // in the public section). Removed together with their getters to avoid
+    // the dead-accounting the audit flagged. Restore them alongside a real
+    // renderer + AI consumer, not ahead of one.
 
     bool lastFrameWasNight_ = false;
     float timeAccumulator_ = 0.0f;

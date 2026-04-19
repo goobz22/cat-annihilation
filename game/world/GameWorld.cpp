@@ -141,18 +141,26 @@ void GameWorld::setupPhysicsColliders() {
             const float centerX = worldMinX + (chunkX + 0.5F) * chunkSize;
             const float centerZ = worldMinZ + (chunkZ + 0.5F) * chunkSize;
 
-            // Sample the terrain at the chunk centre and its four inner
-            // quadrant midpoints. Averaging reduces aliasing when chunk size
-            // doesn't align with the underlying heightmap resolution.
+            // Sample the terrain at the chunk centre plus four outer-quadrant
+            // points. Using 0.75F of the chunk half-extent places the outer
+            // samples near the chunk *edges* (not the chunk corners, which
+            // would double-sample the boundary shared with neighbouring
+            // chunks) so the 5-tap average reflects the chunk's interior
+            // height distribution rather than clustering near the centre.
+            // This matters where the chunk grid is coarser than the
+            // underlying heightmap — with the old 0.5F offsets the four
+            // non-centre taps landed only 1/4 of the way out, leaving the
+            // chunk perimeter unsampled and producing aliased cliffs.
+            constexpr float SAMPLE_REACH = 0.75F;
             const float h0 = m_terrain->getHeightAt(centerX, centerZ);
-            const float h1 = m_terrain->getHeightAt(centerX - chunkHalf * 0.5F,
-                                                    centerZ - chunkHalf * 0.5F);
-            const float h2 = m_terrain->getHeightAt(centerX + chunkHalf * 0.5F,
-                                                    centerZ - chunkHalf * 0.5F);
-            const float h3 = m_terrain->getHeightAt(centerX - chunkHalf * 0.5F,
-                                                    centerZ + chunkHalf * 0.5F);
-            const float h4 = m_terrain->getHeightAt(centerX + chunkHalf * 0.5F,
-                                                    centerZ + chunkHalf * 0.5F);
+            const float h1 = m_terrain->getHeightAt(centerX - chunkHalf * SAMPLE_REACH,
+                                                    centerZ - chunkHalf * SAMPLE_REACH);
+            const float h2 = m_terrain->getHeightAt(centerX + chunkHalf * SAMPLE_REACH,
+                                                    centerZ - chunkHalf * SAMPLE_REACH);
+            const float h3 = m_terrain->getHeightAt(centerX - chunkHalf * SAMPLE_REACH,
+                                                    centerZ + chunkHalf * SAMPLE_REACH);
+            const float h4 = m_terrain->getHeightAt(centerX + chunkHalf * SAMPLE_REACH,
+                                                    centerZ + chunkHalf * SAMPLE_REACH);
             const float avgHeight = (h0 + h1 + h2 + h3 + h4) * 0.2F;
 
             RigidBody chunk;
@@ -161,7 +169,14 @@ void GameWorld::setupPhysicsColliders() {
             chunk.position = Engine::vec3(centerX,
                                           avgHeight - CHUNK_THICKNESS,
                                           centerZ);
-            chunk.mass = 0.0F;
+            // Use setMass() rather than assigning `mass` directly: setMass
+            // also drives `invMass` to 0 for static bodies. If only `mass`
+            // were zeroed, `invMass` would still be its ctor default (1.0F)
+            // and the first impulse applied to a terrain chunk would send
+            // it flying as though it had unit mass. The two fields MUST
+            // agree for static bodies — see RigidBody::setMass in
+            // engine/cuda/physics/RigidBody.hpp.
+            chunk.setMass(0.0F);
             chunk.collider = Collider::Box(Engine::vec3(chunkHalf,
                                                         CHUNK_THICKNESS,
                                                         chunkHalf));

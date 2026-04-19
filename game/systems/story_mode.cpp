@@ -98,8 +98,15 @@ void StoryModeSystem::update(float dt) {
     // Update territory system
     territorySystem_.update(dt);
 
-    // Check for rank promotion opportunities
-    checkRankPromotion();
+    // Note: checkRankPromotion() is intentionally NOT called here. Rank
+    // promotion is a player-facing ceremony triggered from the clan-leader
+    // dialog + reward screen (see promoteRank() below, which is the actual
+    // mutator). Polling checkRankPromotion() every frame would either (a)
+    // duplicate that flow automatically and skip the narrative beat, or (b)
+    // — given the current no-op body — waste a per-frame virtual call.
+    // The method is kept on the class so a future "automatic promotion"
+    // game mode can plug in without changing call sites, but its call
+    // site lives at the dialog trigger, not in this hot loop.
 
     // Update story progress (0-100%)
     if (chapters_.size() > 0) {
