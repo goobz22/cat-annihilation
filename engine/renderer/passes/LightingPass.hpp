@@ -103,9 +103,12 @@ private:
     void CreateHDRBuffer(uint32_t width, uint32_t height);
 
     /**
-     * Create lighting pipeline (fullscreen quad)
+     * Create lighting pipeline (fullscreen quad).
+     * @return true on success, false if shader load or pipeline creation
+     *         failed. Callers should disable the pass on failure rather than
+     *         run Execute() with a null pipeline.
      */
-    void CreatePipeline();
+    bool CreatePipeline();
 
     /**
      * Create descriptor sets

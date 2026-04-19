@@ -541,7 +541,10 @@ void UIPass::CreatePipelines() {
     // Load shaders from compiled SPIR-V files
     auto uiVertCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/ui.vert.spv");
     auto uiFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/ui.frag.spv");
-    auto textSdfFragCode = RHI::ShaderLoader::LoadSPIRV("shaders/ui/text_sdf.frag.spv");
+    // text_sdf.frag has been retired; text rendering uses the bitmap-font path
+    // with the standard UI quad pipeline (ui.vert + ui.frag + sampled atlas).
+    // The SDF fragment shader was never actually bound to a pipeline, so the
+    // load+shader-creation calls here were dead weight holding open a file.
 
     // Vertex shader (shared)
     RHI::ShaderDesc vertDesc{};
@@ -565,16 +568,8 @@ void UIPass::CreatePipelines() {
         uiFragShader_.reset(rhi_->CreateShader(fragDesc));
     }
 
-    // Fragment shader for SDF text
-    RHI::ShaderDesc textFragDesc{};
-    textFragDesc.stage = RHI::ShaderStage::Fragment;
-    textFragDesc.code = textSdfFragCode.empty() ? nullptr : textSdfFragCode.data();
-    textFragDesc.codeSize = textSdfFragCode.size();
-    textFragDesc.entryPoint = "main";
-    textFragDesc.debugName = "TextSDFFrag";
-    if (!textSdfFragCode.empty()) {
-        textSDFFragShader_.reset(rhi_->CreateShader(textFragDesc));
-    }
+    // (No SDF text fragment shader — see note above; the bitmap-font path is
+    // rendered through the regular ui.frag sampler.)
 
     // Create quad pipeline
     {

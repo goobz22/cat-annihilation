@@ -1,10 +1,13 @@
 #include "GeometryPass.hpp"
 #include "../Renderer.hpp"
 #include "../GPUScene.hpp"
+#include "../Mesh.hpp"
 #include "../../math/Frustum.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <fstream>
+#include <iostream>
 #include <vector>
 
 namespace CatEngine::Renderer {
@@ -115,9 +118,21 @@ void GeometryPass::Setup(RHI::IRHI* rhi, Renderer* renderer) {
 
     m_RenderPass = m_RHI->CreateRenderPass(renderPassDesc);
 
-    // Create pipelines and descriptor sets
-    CreatePipelines();
+    // Order matters: CreateDescriptorSets() builds the IRHIPipelineLayout
+    // that CreatePipelines() attaches to each pipeline via
+    // pipelineDesc.pipelineLayout. Reversing the order would leave the
+    // pipelines linked to the RHI's empty default layout and silently
+    // break every BindDescriptorSets call issued in Execute().
     CreateDescriptorSets();
+
+    // If pipeline creation fails (for example because the SPIR-V blobs are
+    // missing from disk), disable the pass so Execute() early-outs instead
+    // of hitting BindPipeline(nullptr) later.
+    if (!CreatePipelines()) {
+        std::cerr << "[GeometryPass] CreatePipelines failed; disabling pass\n";
+        SetEnabled(false);
+        return;
+    }
 }
 
 void GeometryPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex) {
@@ -213,13 +228,14 @@ void GeometryPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frame
         );
     }
 
-    // Render skinned geometry with skinned pipeline. Skinned instances are
-    // distinguished by having bone data uploaded alongside their mesh; in this
-    // engine build the skinning tag lives on the mesh-side pipeline selection.
-    // The opaque loop above already covers static meshes, so binding the
-    // skinned pipeline here is a no-op until a dedicated skinned-instance
-    // accessor lands on GPUScene. Keep the pipeline bound so a future skinned
-    // instance list slots in without a second Execute rewrite.
+    // Skinned meshes share the G-Buffer output but need the bone-index /
+    // bone-weight vertex attributes — hence the dedicated m_SkinnedPipeline.
+    // GPUScene does not yet expose a "visible skinned instances" accessor
+    // separate from the static visible list, so there is no skinned draw
+    // loop here today. Binding the pipeline without drawing is deliberately
+    // cheap (it just sets state) and leaves the pipeline object referenced
+    // in command-buffer captures, which makes wiring up the skinned instance
+    // iterator a single-site change rather than an Execute() rewrite.
     if (m_SkinnedPipeline) {
         commandBuffer->BindPipeline(m_SkinnedPipeline);
     }
@@ -355,13 +371,32 @@ void GeometryPass::CreateGBufferTargets(uint32_t width, uint32_t height) {
     m_DepthBuffer = m_RHI->CreateTexture(depthDesc);
 }
 
-void GeometryPass::CreatePipelines() {
-    // Load compiled SPIR-V shaders from disk. Paths are resolved relative to
-    // the executable's working directory — the build system copies the
-    // shaders/ tree next to the binary.
-    std::vector<uint8_t> gbufferVertCode = LoadSpirvBinary("shaders/geometry/gbuffer.vert.spv");
-    std::vector<uint8_t> gbufferFragCode = LoadSpirvBinary("shaders/geometry/gbuffer.frag.spv");
-    std::vector<uint8_t> skinnedVertCode = LoadSpirvBinary("shaders/geometry/skinned.vert.spv");
+bool GeometryPass::CreatePipelines() {
+    // Load compiled SPIR-V shaders from disk. The CMake build emits all SPIR-V
+    // into shaders/compiled/<name>.spv (flattened, no source-tree directories
+    // preserved — see CMakeLists.txt's compile_shaders target), and the whole
+    // shaders/ tree is copied next to the binary via a POST_BUILD step. So
+    // runtime paths resolve relative to the executable's working directory.
+    const char* kOpaqueVertPath  = "shaders/compiled/gbuffer.vert.spv";
+    const char* kOpaqueFragPath  = "shaders/compiled/gbuffer.frag.spv";
+    const char* kSkinnedVertPath = "shaders/compiled/skinned.vert.spv";
+
+    std::vector<uint8_t> gbufferVertCode = LoadSpirvBinary(kOpaqueVertPath);
+    std::vector<uint8_t> gbufferFragCode = LoadSpirvBinary(kOpaqueFragPath);
+    std::vector<uint8_t> skinnedVertCode = LoadSpirvBinary(kSkinnedVertPath);
+
+    if (gbufferVertCode.empty()) {
+        std::cerr << "[GeometryPass] Failed to load " << kOpaqueVertPath << "\n";
+        return false;
+    }
+    if (gbufferFragCode.empty()) {
+        std::cerr << "[GeometryPass] Failed to load " << kOpaqueFragPath << "\n";
+        return false;
+    }
+    if (skinnedVertCode.empty()) {
+        std::cerr << "[GeometryPass] Failed to load " << kSkinnedVertPath << "\n";
+        return false;
+    }
 
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
@@ -369,8 +404,10 @@ void GeometryPass::CreatePipelines() {
     vertDesc.debugName = "gbuffer.vert";
     vertDesc.code = gbufferVertCode.data();
     vertDesc.codeSize = gbufferVertCode.size();
-    if (vertDesc.codeSize > 0) {
-        m_GeometryVertShader = m_RHI->CreateShader(vertDesc);
+    m_GeometryVertShader = m_RHI->CreateShader(vertDesc);
+    if (!m_GeometryVertShader) {
+        std::cerr << "[GeometryPass] CreateShader failed for gbuffer.vert\n";
+        return false;
     }
 
     RHI::ShaderDesc fragDesc{};
@@ -379,8 +416,10 @@ void GeometryPass::CreatePipelines() {
     fragDesc.debugName = "gbuffer.frag";
     fragDesc.code = gbufferFragCode.data();
     fragDesc.codeSize = gbufferFragCode.size();
-    if (fragDesc.codeSize > 0) {
-        m_GeometryFragShader = m_RHI->CreateShader(fragDesc);
+    m_GeometryFragShader = m_RHI->CreateShader(fragDesc);
+    if (!m_GeometryFragShader) {
+        std::cerr << "[GeometryPass] CreateShader failed for gbuffer.frag\n";
+        return false;
     }
 
     RHI::ShaderDesc skinnedVertDesc{};
@@ -389,62 +428,53 @@ void GeometryPass::CreatePipelines() {
     skinnedVertDesc.debugName = "skinned.vert";
     skinnedVertDesc.code = skinnedVertCode.data();
     skinnedVertDesc.codeSize = skinnedVertCode.size();
-    if (skinnedVertDesc.codeSize > 0) {
-        m_SkinnedVertShader = m_RHI->CreateShader(skinnedVertDesc);
+    m_SkinnedVertShader = m_RHI->CreateShader(skinnedVertDesc);
+    if (!m_SkinnedVertShader) {
+        std::cerr << "[GeometryPass] CreateShader failed for skinned.vert\n";
+        return false;
     }
 
-    // Create pipeline layout
-    // Define descriptor set layouts for camera, materials, instances, etc.
+    // Vertex input state for the opaque pipeline. The single source of truth
+    // for this engine's vertex layout is Mesh.hpp::Vertex — keep the pipeline
+    // in sync with it by driving the attributes directly off of the static
+    // Vertex::GetAttributes() / Vertex::GetBinding() helpers. This guarantees
+    // the pipeline cannot drift from the CPU-side struct's layout/offsets,
+    // which was the root cause of the original C++/shader mismatch.
+    RHI::VertexInputState opaqueVertexInput{};
+    opaqueVertexInput.bindings.push_back(Vertex::GetBinding());
+    for (const auto& attr : Vertex::GetAttributes()) {
+        opaqueVertexInput.attributes.push_back(attr);
+    }
 
-    // Vertex input state
-    RHI::VertexInputState vertexInput{};
-
-    // Binding 0: Per-vertex data (position, normal, tangent, UV)
-    RHI::VertexBinding vertexBinding{};
-    vertexBinding.binding = 0;
-    vertexBinding.stride = sizeof(float) * 14; // 3 pos + 3 normal + 4 tangent + 2 uv + 2 uv2
-    vertexBinding.inputRate = RHI::VertexInputRate::Vertex;
-    vertexInput.bindings.push_back(vertexBinding);
-
-    // Position attribute (location 0)
-    RHI::VertexAttribute posAttr{};
-    posAttr.location = 0;
-    posAttr.binding = 0;
-    posAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
-    posAttr.offset = 0;
-    vertexInput.attributes.push_back(posAttr);
-
-    // Normal attribute (location 1)
-    RHI::VertexAttribute normalAttr{};
-    normalAttr.location = 1;
-    normalAttr.binding = 0;
-    normalAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
-    normalAttr.offset = sizeof(float) * 3;
-    vertexInput.attributes.push_back(normalAttr);
-
-    // Tangent attribute (location 2)
-    RHI::VertexAttribute tangentAttr{};
-    tangentAttr.location = 2;
-    tangentAttr.binding = 0;
-    tangentAttr.format = RHI::TextureFormat::RGBA32_SFLOAT;
-    tangentAttr.offset = sizeof(float) * 6;
-    vertexInput.attributes.push_back(tangentAttr);
-
-    // UV attribute (location 3)
-    RHI::VertexAttribute uvAttr{};
-    uvAttr.location = 3;
-    uvAttr.binding = 0;
-    uvAttr.format = RHI::TextureFormat::RG32_SFLOAT;
-    uvAttr.offset = sizeof(float) * 10;
-    vertexInput.attributes.push_back(uvAttr);
-
-    // UV2 attribute (location 4)
-    RHI::VertexAttribute uv2Attr{};
-    uv2Attr.location = 4;
-    uv2Attr.binding = 0;
-    uv2Attr.format = RHI::TextureFormat::RG32_SFLOAT;
-    uv2Attr.offset = sizeof(float) * 12;
-    vertexInput.attributes.push_back(uv2Attr);
+    // Skinned pipeline adds per-vertex bone indices (ivec4) and weights (vec4)
+    // on top of the standard Vertex attributes. The CPU struct is
+    // Mesh.hpp::SkinnedVertex = Vertex + int32_t joints[4] + float weights[4].
+    // Layout locations 5 and 6 match shaders/geometry/skinned.vert.
+    RHI::VertexInputState skinnedVertexInput{};
+    RHI::VertexBinding skinnedBinding{};
+    skinnedBinding.binding = 0;
+    skinnedBinding.stride = sizeof(SkinnedVertex);
+    skinnedBinding.inputRate = RHI::VertexInputRate::Vertex;
+    skinnedVertexInput.bindings.push_back(skinnedBinding);
+    // Reuse the first five attributes from the standard Vertex layout; their
+    // offsets are correct for SkinnedVertex because it begins with a Vertex.
+    for (const auto& attr : Vertex::GetAttributes()) {
+        skinnedVertexInput.attributes.push_back(attr);
+    }
+    // joints (ivec4): CPU-side int32_t[4], so format is 4-channel SInt.
+    RHI::VertexAttribute jointsAttr{};
+    jointsAttr.location = 5;
+    jointsAttr.binding = 0;
+    jointsAttr.format = RHI::TextureFormat::RGBA32_SINT;
+    jointsAttr.offset = offsetof(SkinnedVertex, joints);
+    skinnedVertexInput.attributes.push_back(jointsAttr);
+    // weights (vec4): CPU-side float[4]
+    RHI::VertexAttribute weightsAttr{};
+    weightsAttr.location = 6;
+    weightsAttr.binding = 0;
+    weightsAttr.format = RHI::TextureFormat::RGBA32_SFLOAT;
+    weightsAttr.offset = offsetof(SkinnedVertex, weights);
+    skinnedVertexInput.attributes.push_back(weightsAttr);
 
     // Rasterization state
     RHI::RasterizationState rasterState{};
@@ -453,60 +483,128 @@ void GeometryPass::CreatePipelines() {
     rasterState.depthBiasEnable = false;
     rasterState.lineWidth = 1.0f;
 
-    // Depth/Stencil state
+    // Depth/Stencil state — full writes, Less compare (standard G-Buffer fill).
     RHI::DepthStencilState depthState{};
     depthState.depthTestEnable = true;
     depthState.depthWriteEnable = true;
     depthState.depthCompareOp = RHI::CompareOp::Less;
     depthState.stencilTestEnable = false;
 
-    // Blend state (no blending for G-Buffer)
+    // Blend state — no blending on any G-Buffer MRT attachment.
     RHI::BlendAttachmentState blendState{};
     blendState.blendEnable = false;
     blendState.colorWriteMask = 0xF; // RGBA
 
-    // Create opaque pipeline
+    // Create opaque pipeline.
     RHI::PipelineDesc pipelineDesc{};
-    // pipelineDesc.shaders = { m_GeometryVertShader, m_GeometryFragShader };
-    pipelineDesc.vertexInput = vertexInput;
+    pipelineDesc.shaders = { m_GeometryVertShader, m_GeometryFragShader };
+    pipelineDesc.vertexInput = opaqueVertexInput;
+    // Wire the pipeline layout built in CreateDescriptorSets so the GPU-side
+    // pipeline binds against our set-0 camera UBO + set-1 material bindings
+    // instead of an empty default layout. Without this, BindDescriptorSets
+    // in Execute() validates against zero declared sets and errors.
+    pipelineDesc.pipelineLayout = m_PipelineLayout;
     pipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
     pipelineDesc.rasterization = rasterState;
     pipelineDesc.depthStencil = depthState;
+    // One blend-attachment per G-Buffer color attachment (position, normal,
+    // albedo, emission) — must match the render pass's color-attachment count.
     pipelineDesc.blendAttachments = { blendState, blendState, blendState, blendState };
     pipelineDesc.renderPass = m_RenderPass;
     pipelineDesc.subpass = 0;
     pipelineDesc.debugName = "GeometryPass_Opaque";
-    // m_OpaquePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    m_OpaquePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    if (!m_OpaquePipeline) {
+        std::cerr << "[GeometryPass] CreateGraphicsPipeline failed for Opaque\n";
+        return false;
+    }
 
-    // Create skinned pipeline (with different vertex shader)
-    // pipelineDesc.shaders = { m_SkinnedVertShader, m_GeometryFragShader };
+    // Create skinned pipeline: same state, different vertex shader + vertex
+    // input (extra bone-index/weight attributes).
+    pipelineDesc.shaders = { m_SkinnedVertShader, m_GeometryFragShader };
+    pipelineDesc.vertexInput = skinnedVertexInput;
     pipelineDesc.debugName = "GeometryPass_Skinned";
-    // m_SkinnedPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    m_SkinnedPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    if (!m_SkinnedPipeline) {
+        std::cerr << "[GeometryPass] CreateGraphicsPipeline failed for Skinned\n";
+        return false;
+    }
+
+    return true;
 }
 
 void GeometryPass::CreateDescriptorSets() {
-    // Create descriptor sets for per-frame data (camera, scene uniforms, etc.)
-    // This would typically create 2-3 sets for double/triple buffering
+    // Descriptor set layout for the G-Buffer fill pass. Two sets are declared
+    // by the gbuffer.vert / gbuffer.frag shaders:
+    //
+    //   set = 0:
+    //     binding 0: CameraData uniform buffer (view, projection, viewProj,
+    //                invViewProj, cameraPos, near/far) — used by vertex stage.
+    //
+    //   set = 1:
+    //     binding 0..4: Material textures (albedo, normal, metallicRoughness,
+    //                   ao, emission) as combined image+samplers — fragment.
+    //     binding 5:    MaterialData uniform buffer (factors + use-map flags).
+    //
+    // We don't currently declare push constants here even though the shader
+    // uses them for the per-object model / normal matrix. Push constants do
+    // not live in descriptor sets, and the Vulkan backend's
+    // CreateGraphicsPipeline(PipelineDesc) currently ignores set layouts
+    // entirely — it always builds an empty default VkPipelineLayout. That is
+    // an RHI-API gap (PipelineDesc has no pipelineLayout field). We still
+    // create the descriptor-set-layouts + IRHIPipelineLayout here so that
+    // once PipelineDesc is extended to accept a layout, the existing wiring
+    // continues to work without changes.
 
-    // Example descriptor set layout:
-    // Set 0:
-    //   - Binding 0: Camera uniform buffer (MVP matrices, view pos, etc.)
-    //   - Binding 1: Scene uniform buffer (time, etc.)
-    // Set 1:
-    //   - Binding 0: Material textures (albedo, normal, roughness, metallic, etc.)
-    // Set 2:
-    //   - Binding 0: Instance data storage buffer
+    // ---- set = 0: per-frame camera UBO -------------------------------------
+    RHI::DescriptorSetLayoutDesc set0Desc{};
+    set0Desc.debugName = "GeometryPass_Set0_Camera";
+    RHI::DescriptorBinding cameraBinding{};
+    cameraBinding.binding = 0;
+    cameraBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    cameraBinding.descriptorCount = 1;
+    cameraBinding.stageFlags = RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment;
+    set0Desc.bindings.push_back(cameraBinding);
+    RHI::IRHIDescriptorSetLayout* set0Layout = m_RHI->CreateDescriptorSetLayout(set0Desc);
 
-    const uint32_t frameCount = 3; // Triple buffering
+    // ---- set = 1: per-material textures + material UBO --------------------
+    RHI::DescriptorSetLayoutDesc set1Desc{};
+    set1Desc.debugName = "GeometryPass_Set1_Material";
+    for (uint32_t i = 0; i < 5; ++i) {
+        RHI::DescriptorBinding texBinding{};
+        texBinding.binding = i;
+        texBinding.descriptorType = RHI::DescriptorType::CombinedImageSampler;
+        texBinding.descriptorCount = 1;
+        texBinding.stageFlags = RHI::ShaderStage::Fragment;
+        set1Desc.bindings.push_back(texBinding);
+    }
+    RHI::DescriptorBinding materialUBOBinding{};
+    materialUBOBinding.binding = 5;
+    materialUBOBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    materialUBOBinding.descriptorCount = 1;
+    materialUBOBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set1Desc.bindings.push_back(materialUBOBinding);
+    RHI::IRHIDescriptorSetLayout* set1Layout = m_RHI->CreateDescriptorSetLayout(set1Desc);
+
+    // Build the pipeline layout from the two descriptor-set layouts. Note: as
+    // described above, this layout is currently NOT attached to the pipeline
+    // objects created in CreatePipelines() — the RHI does not plumb it
+    // through PipelineDesc. It is still created (and destroyed in Cleanup)
+    // so that the rest of the descriptor wiring is ready for the RHI fix.
+    RHI::IRHIDescriptorSetLayout* setLayouts[2] = { set0Layout, set1Layout };
+    m_PipelineLayout = m_RHI->CreatePipelineLayout(setLayouts, 2);
+
+    // Triple-buffered per-frame descriptor sets. The per-frame set is set 0
+    // (camera UBO rotates per frame); set 1 is per-material and lives on the
+    // material system, not here.
+    const uint32_t frameCount = 3;
     m_DescriptorSets.resize(frameCount, nullptr);
 
-    // In production, this would create actual descriptor sets:
-    /*
-    for (uint32_t i = 0; i < frameCount; ++i) {
-        m_DescriptorSets[i] = m_RHI->CreateDescriptorSet(descriptorSetLayout);
-        // Update descriptor set with buffers/textures
-    }
-    */
+    // Release the raw set-layout handles now that they're owned by the
+    // pipeline layout. The pipeline layout implementation retains its own
+    // reference, matching how other passes dispose of transient layouts.
+    m_RHI->DestroyDescriptorSetLayout(set0Layout);
+    m_RHI->DestroyDescriptorSetLayout(set1Layout);
 }
 
 void GeometryPass::DestroyGBufferTargets() {

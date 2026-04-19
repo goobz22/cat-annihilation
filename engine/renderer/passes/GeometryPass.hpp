@@ -64,9 +64,12 @@ private:
     void CreateGBufferTargets(uint32_t width, uint32_t height);
 
     /**
-     * Create pipelines for geometry rendering
+     * Create pipelines for geometry rendering.
+     * @return true on success, false if shader load or pipeline creation failed.
+     *         Callers should disable the pass on failure instead of running
+     *         Execute() with a null pipeline.
      */
-    void CreatePipelines();
+    bool CreatePipelines();
 
     /**
      * Create descriptor sets

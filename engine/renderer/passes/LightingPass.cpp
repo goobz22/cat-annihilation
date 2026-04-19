@@ -2,7 +2,41 @@
 #include "GeometryPass.hpp"
 #include "../Renderer.hpp"
 
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <vector>
+
 namespace CatEngine::Renderer {
+
+namespace {
+
+// Load a compiled SPIR-V binary from disk. Local copy of the helper in
+// GeometryPass.cpp — kept per-TU to avoid introducing a new header + CMake
+// source-list churn; the implementation is intentionally identical.
+// Returns an empty vector on failure; callers treat that as a hard error.
+std::vector<uint8_t> LoadSpirvBinary(const char* path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return {};
+    }
+
+    std::streamsize size = file.tellg();
+    if (size <= 0 || (size % 4) != 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (!file) {
+        return {};
+    }
+    return bytes;
+}
+
+} // namespace
 
 LightingPass::LightingPass() = default;
 
@@ -64,9 +98,21 @@ void LightingPass::Setup(RHI::IRHI* rhi, Renderer* renderer) {
     // Create light buffers
     CreateLightBuffers();
 
-    // Create pipeline and descriptor sets
-    CreatePipeline();
+    // Order matters: CreateDescriptorSets() builds the IRHIPipelineLayout
+    // that CreatePipeline() attaches via pipelineDesc.pipelineLayout. If
+    // the descriptor layout isn't ready first, the pipeline gets the RHI's
+    // empty default layout and every BindDescriptorSets call in Execute()
+    // fails validation.
     CreateDescriptorSets();
+
+    // On pipeline-create failure (for example, missing SPIR-V on disk)
+    // disable the pass so Execute() skips cleanly instead of binding a
+    // null pipeline.
+    if (!CreatePipeline()) {
+        std::cerr << "[LightingPass] CreatePipeline failed; disabling pass\n";
+        SetEnabled(false);
+        return;
+    }
 }
 
 void LightingPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex) {
@@ -289,44 +335,75 @@ void LightingPass::CreateHDRBuffer(uint32_t width, uint32_t height) {
     m_HDRColorBuffer = m_RHI->CreateTexture(hdrDesc);
 }
 
-void LightingPass::CreatePipeline() {
-    // Load shaders
-    // Note: In production, these would load from compiled SPIR-V files
+bool LightingPass::CreatePipeline() {
+    // CMake's compile_shaders target writes SPIR-V flat into shaders/compiled/
+    // (no per-stage subfolders) and POST_BUILD copies the whole shaders tree
+    // next to the binary, so runtime paths use the compiled/ subfolder rather
+    // than the source lighting/ one.
+    const char* kVertPath = "shaders/compiled/deferred.vert.spv";
+    const char* kFragPath = "shaders/compiled/deferred.frag.spv";
+
+    std::vector<uint8_t> vertCode = LoadSpirvBinary(kVertPath);
+    std::vector<uint8_t> fragCode = LoadSpirvBinary(kFragPath);
+
+    if (vertCode.empty()) {
+        std::cerr << "[LightingPass] Failed to load " << kVertPath << "\n";
+        return false;
+    }
+    if (fragCode.empty()) {
+        std::cerr << "[LightingPass] Failed to load " << kFragPath << "\n";
+        return false;
+    }
 
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "deferred.vert";
-    // m_FullscreenVertShader = m_RHI->CreateShader(vertDesc);
+    vertDesc.code = vertCode.data();
+    vertDesc.codeSize = vertCode.size();
+    m_FullscreenVertShader = m_RHI->CreateShader(vertDesc);
+    if (!m_FullscreenVertShader) {
+        std::cerr << "[LightingPass] CreateShader failed for deferred.vert\n";
+        return false;
+    }
 
     RHI::ShaderDesc fragDesc{};
     fragDesc.stage = RHI::ShaderStage::Fragment;
     fragDesc.entryPoint = "main";
     fragDesc.debugName = "deferred.frag";
-    // m_DeferredFragShader = m_RHI->CreateShader(fragDesc);
+    fragDesc.code = fragCode.data();
+    fragDesc.codeSize = fragCode.size();
+    m_DeferredFragShader = m_RHI->CreateShader(fragDesc);
+    if (!m_DeferredFragShader) {
+        std::cerr << "[LightingPass] CreateShader failed for deferred.frag\n";
+        return false;
+    }
 
-    // Vertex input state (empty - fullscreen triangle generated in vertex shader)
+    // Vertex input state — deferred.vert synthesises a fullscreen triangle
+    // from gl_VertexIndex, so there is no vertex buffer and no attributes.
     RHI::VertexInputState vertexInput{};
 
-    // Rasterization state
+    // Rasterization state — fullscreen pass, no culling.
     RHI::RasterizationState rasterState{};
-    rasterState.cullMode = RHI::CullMode::None;  // No culling for fullscreen quad
+    rasterState.cullMode = RHI::CullMode::None;
     rasterState.frontFace = RHI::FrontFace::CounterClockwise;
     rasterState.lineWidth = 1.0f;
 
-    // Depth/Stencil state (no depth test for fullscreen pass)
+    // Depth/Stencil state — deferred lighting shades every fragment; we rely
+    // on the shader's `discard` for skybox pixels (gPos.w == 0.0) rather than
+    // a depth test here.
     RHI::DepthStencilState depthState{};
     depthState.depthTestEnable = false;
     depthState.depthWriteEnable = false;
 
-    // Blend state (no blending for deferred output)
+    // Blend state — first write to HDR output, no blending. The ForwardPass
+    // will later blend on top with Load/Store.
     RHI::BlendAttachmentState blendState{};
     blendState.blendEnable = false;
-    blendState.colorWriteMask = 0xF; // RGBA
+    blendState.colorWriteMask = 0xF;
 
-    // Create lighting pipeline
     RHI::PipelineDesc pipelineDesc{};
-    // pipelineDesc.shaders = { m_FullscreenVertShader, m_DeferredFragShader };
+    pipelineDesc.shaders = { m_FullscreenVertShader, m_DeferredFragShader };
     pipelineDesc.vertexInput = vertexInput;
     pipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
     pipelineDesc.rasterization = rasterState;
@@ -335,43 +412,104 @@ void LightingPass::CreatePipeline() {
     pipelineDesc.renderPass = m_RenderPass;
     pipelineDesc.subpass = 0;
     pipelineDesc.debugName = "DeferredLighting";
-    // m_LightingPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    m_LightingPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    if (!m_LightingPipeline) {
+        std::cerr << "[LightingPass] CreateGraphicsPipeline failed\n";
+        return false;
+    }
+
+    return true;
 }
 
 void LightingPass::CreateDescriptorSets() {
-    // Create descriptor sets for G-Buffer textures and light data
-    // This would typically create 2-3 sets for double/triple buffering
+    // Descriptor layout mirrors shaders/lighting/deferred.frag / .vert exactly:
+    //
+    //   set = 0:  (per-frame camera + light data — hot, rotates per frame)
+    //     binding 0: CameraData UBO
+    //     binding 1: LightData   UBO  (directional + day/night + point/spot
+    //                                  arrays; sizeof is ~tens of KB — the
+    //                                  shader declares it as a uniform block
+    //                                  so we match with UniformBuffer.)
+    //
+    //   set = 1:  (G-Buffer samples + shadow map + clustered light lists —
+    //             per-pass, stable across the frame)
+    //     binding 0: gPosition   (sampler2D)
+    //     binding 1: gNormal     (sampler2D)
+    //     binding 2: gAlbedo     (sampler2D)
+    //     binding 3: gEmission   (sampler2D)
+    //     binding 4: shadowMap   (sampler2DArray — cascaded)
+    //     binding 5: clusterLightIndices  SSBO
+    //     binding 6: clusterLightGrid     SSBO
+    //
+    // Notes on descriptor-type choice:
+    //  * sampler2D/sampler2DArray map to CombinedImageSampler (a single
+    //    descriptor pointing at both the view and the sampler), which is
+    //    what GLSL's `uniform sampler*` declares on the Vulkan side.
+    //  * The two `buffer` declarations in the shader are read/write-capable
+    //    storage buffers (SSBO), so they use StorageBuffer even though this
+    //    pass only reads them.
+    //
+    // The resulting IRHIPipelineLayout will not actually be attached to the
+    // pipeline until PipelineDesc grows a pipelineLayout field — the Vulkan
+    // backend currently fabricates an empty default layout inside
+    // CreateGraphicsPipeline(). See comment in GeometryPass::CreateDescriptorSets.
 
-    // Example descriptor set layout:
-    // Set 0:
-    //   - Binding 0: G-Buffer Position texture + sampler
-    //   - Binding 1: G-Buffer Normal texture + sampler
-    //   - Binding 2: G-Buffer Albedo texture + sampler
-    //   - Binding 3: G-Buffer Emission texture + sampler
-    //   - Binding 4: Shadow map texture + comparison sampler
-    //   - Binding 5: Directional light uniform buffer
-    //   - Binding 6: Point lights storage buffer
-    //   - Binding 7: Spot lights storage buffer
-    //   - Binding 8: Light counts uniform buffer
-    //   - Binding 9: Camera uniform buffer (for inverse matrices)
+    // ---- set = 0 ---------------------------------------------------------
+    RHI::DescriptorSetLayoutDesc set0Desc{};
+    set0Desc.debugName = "LightingPass_Set0_Frame";
+    RHI::DescriptorBinding cameraBinding{};
+    cameraBinding.binding = 0;
+    cameraBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    cameraBinding.descriptorCount = 1;
+    cameraBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set0Desc.bindings.push_back(cameraBinding);
+    RHI::DescriptorBinding lightsBinding{};
+    lightsBinding.binding = 1;
+    lightsBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    lightsBinding.descriptorCount = 1;
+    lightsBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set0Desc.bindings.push_back(lightsBinding);
+    RHI::IRHIDescriptorSetLayout* set0Layout = m_RHI->CreateDescriptorSetLayout(set0Desc);
 
-    const uint32_t frameCount = 3; // Triple buffering
+    // ---- set = 1 ---------------------------------------------------------
+    RHI::DescriptorSetLayoutDesc set1Desc{};
+    set1Desc.debugName = "LightingPass_Set1_GBuffer";
+    for (uint32_t i = 0; i < 5; ++i) {
+        // G-Buffer sampled images (gPosition/gNormal/gAlbedo/gEmission) plus
+        // the cascaded shadow map at binding 4 — all CombinedImageSampler.
+        RHI::DescriptorBinding imageBinding{};
+        imageBinding.binding = i;
+        imageBinding.descriptorType = RHI::DescriptorType::CombinedImageSampler;
+        imageBinding.descriptorCount = 1;
+        imageBinding.stageFlags = RHI::ShaderStage::Fragment;
+        set1Desc.bindings.push_back(imageBinding);
+    }
+    RHI::DescriptorBinding clusterIndicesBinding{};
+    clusterIndicesBinding.binding = 5;
+    clusterIndicesBinding.descriptorType = RHI::DescriptorType::StorageBuffer;
+    clusterIndicesBinding.descriptorCount = 1;
+    clusterIndicesBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set1Desc.bindings.push_back(clusterIndicesBinding);
+    RHI::DescriptorBinding clusterGridBinding{};
+    clusterGridBinding.binding = 6;
+    clusterGridBinding.descriptorType = RHI::DescriptorType::StorageBuffer;
+    clusterGridBinding.descriptorCount = 1;
+    clusterGridBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set1Desc.bindings.push_back(clusterGridBinding);
+    RHI::IRHIDescriptorSetLayout* set1Layout = m_RHI->CreateDescriptorSetLayout(set1Desc);
+
+    // Pipeline layout carries both sets in order.
+    RHI::IRHIDescriptorSetLayout* setLayouts[2] = { set0Layout, set1Layout };
+    m_PipelineLayout = m_RHI->CreatePipelineLayout(setLayouts, 2);
+
+    // Triple-buffered per-frame descriptor sets (set 0 rotates each frame so
+    // the CPU can overwrite the camera/light UBOs without stalling the GPU).
+    const uint32_t frameCount = 3;
     m_DescriptorSets.resize(frameCount, nullptr);
 
-    // In production, this would create actual descriptor sets and update them
-    // with the G-Buffer textures from GeometryPass and light buffers
-    /*
-    for (uint32_t i = 0; i < frameCount; ++i) {
-        m_DescriptorSets[i] = m_RHI->CreateDescriptorSet(descriptorSetLayout);
-
-        // Update descriptor set with G-Buffer textures
-        if (m_GeometryPass) {
-            // Bind G-Buffer textures
-            // Bind light buffers
-            // Bind shadow map
-        }
-    }
-    */
+    // Transient layout handles — the pipeline layout keeps its own reference.
+    m_RHI->DestroyDescriptorSetLayout(set0Layout);
+    m_RHI->DestroyDescriptorSetLayout(set1Layout);
 }
 
 void LightingPass::CreateLightBuffers() {

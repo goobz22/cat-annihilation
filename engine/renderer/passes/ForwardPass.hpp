@@ -86,9 +86,12 @@ public:
 
 private:
     /**
-     * Create pipelines for transparent rendering
+     * Create pipelines for transparent rendering.
+     * @return true on success, false if shader load or pipeline creation
+     *         failed. Callers should disable the pass on failure rather than
+     *         run Execute() with a null pipeline.
      */
-    void CreatePipelines();
+    bool CreatePipelines();
 
     /**
      * Create descriptor sets

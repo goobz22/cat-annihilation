@@ -3,9 +3,43 @@
 #include "LightingPass.hpp"
 #include "../Renderer.hpp"
 #include "../GPUScene.hpp"
+#include "../Mesh.hpp"
+
 #include <algorithm>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <vector>
 
 namespace CatEngine::Renderer {
+
+namespace {
+
+// Load a compiled SPIR-V binary from disk. Local copy of the helper in
+// GeometryPass.cpp / LightingPass.cpp — kept per-TU to avoid adding a new
+// header + CMake source-list churn; the implementation is intentionally
+// identical.
+std::vector<uint8_t> LoadSpirvBinary(const char* path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return {};
+    }
+
+    std::streamsize size = file.tellg();
+    if (size <= 0 || (size % 4) != 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (!file) {
+        return {};
+    }
+    return bytes;
+}
+
+} // namespace
 
 ForwardPass::ForwardPass() = default;
 
@@ -52,9 +86,20 @@ void ForwardPass::Setup(RHI::IRHI* rhi, Renderer* renderer) {
 
     m_RenderPass = m_RHI->CreateRenderPass(renderPassDesc);
 
-    // Create pipelines and descriptor sets
-    CreatePipelines();
+    // Order matters: CreateDescriptorSets() builds the IRHIPipelineLayout
+    // that CreatePipelines() attaches via pipelineDesc.pipelineLayout.
+    // Reversed, the pipelines would be linked to the RHI's empty default
+    // layout, and every BindDescriptorSets call in Execute() would
+    // validation-error against that zero-set layout.
     CreateDescriptorSets();
+
+    // Disable the pass on shader / pipeline failure so Execute() cannot
+    // bind a null pipeline.
+    if (!CreatePipelines()) {
+        std::cerr << "[ForwardPass] CreatePipelines failed; disabling pass\n";
+        SetEnabled(false);
+        return;
+    }
 }
 
 void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIndex) {
@@ -135,9 +180,13 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
         );
     }
 
-    // Particles use a separate pipeline. When a particle-system accessor lands
-    // on GPUScene, bind and draw here; until then keep the pipeline bound so
-    // render-doc captures show the state the future code will depend on.
+    // A particle pipeline is intentionally not created by this pass today —
+    // there are no particle.vert / particle.frag SPIR-V blobs in the shader
+    // tree (only the compute-side particle_update.comp). The null-guarded
+    // bind below keeps the hook point in place so a later revision that adds
+    // the shader set + a particle-system accessor on GPUScene only has to
+    // populate m_ParticlePipeline; no changes to Execute() or Cleanup() are
+    // required.
     if (m_ParticlePipeline) {
         commandBuffer->BindPipeline(m_ParticlePipeline);
     }
@@ -227,104 +276,116 @@ void ForwardPass::Resize(uint32_t width, uint32_t height) {
     // This is handled by the RHI backend
 }
 
-void ForwardPass::CreatePipelines() {
-    // Load shaders
-    // Note: In production, these would load from compiled SPIR-V files
+bool ForwardPass::CreatePipelines() {
+    // Load compiled SPIR-V blobs. The build system flattens everything into
+    // shaders/compiled/ (see CMakeLists.txt compile_shaders target), copied
+    // next to the binary by the POST_BUILD step.
+    //
+    // This pass builds TWO pipelines today:
+    //   * m_TransparentPipeline        — forward.vert + transparent.frag
+    //                                    (full PBR + refraction/reflection for
+    //                                    glass-ish materials)
+    //   * m_TransparentSimplePipeline  — forward.vert + forward.frag
+    //                                    (the simpler directional+point+spot
+    //                                    lighting path; used when the caller
+    //                                    turns on SetSimplifiedLighting(true)).
+    //
+    // There is no particle pipeline in this revision: the project does not
+    // ship a particle.vert / particle.frag today (only particle_update.comp),
+    // so the old particle-pipeline placeholders were removed rather than kept
+    // as always-null stubs that the draw loop would just skip.
+    const char* kForwardVertPath   = "shaders/compiled/forward.vert.spv";
+    const char* kTransparentPath   = "shaders/compiled/transparent.frag.spv";
+    const char* kForwardFragPath   = "shaders/compiled/forward.frag.spv";
+
+    std::vector<uint8_t> forwardVertCode      = LoadSpirvBinary(kForwardVertPath);
+    std::vector<uint8_t> transparentFragCode  = LoadSpirvBinary(kTransparentPath);
+    std::vector<uint8_t> forwardFragCode      = LoadSpirvBinary(kForwardFragPath);
+
+    if (forwardVertCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kForwardVertPath << "\n";
+        return false;
+    }
+    if (transparentFragCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kTransparentPath << "\n";
+        return false;
+    }
+    if (forwardFragCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kForwardFragPath << "\n";
+        return false;
+    }
 
     RHI::ShaderDesc vertDesc{};
     vertDesc.stage = RHI::ShaderStage::Vertex;
     vertDesc.entryPoint = "main";
     vertDesc.debugName = "forward.vert";
-    // m_ForwardVertShader = m_RHI->CreateShader(vertDesc);
+    vertDesc.code = forwardVertCode.data();
+    vertDesc.codeSize = forwardVertCode.size();
+    m_ForwardVertShader = m_RHI->CreateShader(vertDesc);
+    if (!m_ForwardVertShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for forward.vert\n";
+        return false;
+    }
 
     RHI::ShaderDesc fragDesc{};
     fragDesc.stage = RHI::ShaderStage::Fragment;
     fragDesc.entryPoint = "main";
     fragDesc.debugName = "transparent.frag";
-    // m_TransparentFragShader = m_RHI->CreateShader(fragDesc);
+    fragDesc.code = transparentFragCode.data();
+    fragDesc.codeSize = transparentFragCode.size();
+    m_TransparentFragShader = m_RHI->CreateShader(fragDesc);
+    if (!m_TransparentFragShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for transparent.frag\n";
+        return false;
+    }
 
+    // The "simple" variant reuses shaders/forward/forward.frag — the PBR path
+    // that isn't specialised for refractive materials. Calling it "simple"
+    // here is a historical name on the C++ side; the shader itself is still
+    // full-featured, just without the environment-map reflection/refraction
+    // branches that transparent.frag adds.
     RHI::ShaderDesc simpleFragDesc{};
     simpleFragDesc.stage = RHI::ShaderStage::Fragment;
     simpleFragDesc.entryPoint = "main";
-    simpleFragDesc.debugName = "transparent_simple.frag";
-    // m_TransparentSimpleFragShader = m_RHI->CreateShader(simpleFragDesc);
+    simpleFragDesc.debugName = "forward.frag";
+    simpleFragDesc.code = forwardFragCode.data();
+    simpleFragDesc.codeSize = forwardFragCode.size();
+    m_TransparentSimpleFragShader = m_RHI->CreateShader(simpleFragDesc);
+    if (!m_TransparentSimpleFragShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for forward.frag\n";
+        return false;
+    }
 
-    RHI::ShaderDesc particleVertDesc{};
-    particleVertDesc.stage = RHI::ShaderStage::Vertex;
-    particleVertDesc.entryPoint = "main";
-    particleVertDesc.debugName = "particle.vert";
-    // m_ParticleVertShader = m_RHI->CreateShader(particleVertDesc);
-
-    RHI::ShaderDesc particleFragDesc{};
-    particleFragDesc.stage = RHI::ShaderStage::Fragment;
-    particleFragDesc.entryPoint = "main";
-    particleFragDesc.debugName = "particle.frag";
-    // m_ParticleFragShader = m_RHI->CreateShader(particleFragDesc);
-
-    // Vertex input state (same as geometry pass)
+    // Vertex input — identical to the GeometryPass opaque layout, driven off
+    // engine/renderer/Mesh.hpp::Vertex so the two passes always agree. Keeping
+    // both pipelines on the same source-of-truth avoids a repeat of the
+    // original audit bug where the C++ attribute order drifted from the
+    // shader's `layout(location=…)` declarations.
     RHI::VertexInputState vertexInput{};
+    vertexInput.bindings.push_back(Vertex::GetBinding());
+    for (const auto& attr : Vertex::GetAttributes()) {
+        vertexInput.attributes.push_back(attr);
+    }
 
-    // Binding 0: Per-vertex data
-    RHI::VertexBinding vertexBinding{};
-    vertexBinding.binding = 0;
-    vertexBinding.stride = sizeof(float) * 14; // 3 pos + 3 normal + 4 tangent + 2 uv + 2 uv2
-    vertexBinding.inputRate = RHI::VertexInputRate::Vertex;
-    vertexInput.bindings.push_back(vertexBinding);
-
-    // Position attribute (location 0)
-    RHI::VertexAttribute posAttr{};
-    posAttr.location = 0;
-    posAttr.binding = 0;
-    posAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
-    posAttr.offset = 0;
-    vertexInput.attributes.push_back(posAttr);
-
-    // Normal attribute (location 1)
-    RHI::VertexAttribute normalAttr{};
-    normalAttr.location = 1;
-    normalAttr.binding = 0;
-    normalAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
-    normalAttr.offset = sizeof(float) * 3;
-    vertexInput.attributes.push_back(normalAttr);
-
-    // Tangent attribute (location 2)
-    RHI::VertexAttribute tangentAttr{};
-    tangentAttr.location = 2;
-    tangentAttr.binding = 0;
-    tangentAttr.format = RHI::TextureFormat::RGBA32_SFLOAT;
-    tangentAttr.offset = sizeof(float) * 6;
-    vertexInput.attributes.push_back(tangentAttr);
-
-    // UV attribute (location 3)
-    RHI::VertexAttribute uvAttr{};
-    uvAttr.location = 3;
-    uvAttr.binding = 0;
-    uvAttr.format = RHI::TextureFormat::RG32_SFLOAT;
-    uvAttr.offset = sizeof(float) * 10;
-    vertexInput.attributes.push_back(uvAttr);
-
-    // UV2 attribute (location 4)
-    RHI::VertexAttribute uv2Attr{};
-    uv2Attr.location = 4;
-    uv2Attr.binding = 0;
-    uv2Attr.format = RHI::TextureFormat::RG32_SFLOAT;
-    uv2Attr.offset = sizeof(float) * 12;
-    vertexInput.attributes.push_back(uv2Attr);
-
-    // Rasterization state
+    // Rasterization — transparent geometry often needs both sides visible
+    // (thin foliage, glass panels seen from either face), so culling is off.
     RHI::RasterizationState rasterState{};
-    rasterState.cullMode = RHI::CullMode::None;  // Often no culling for transparent objects
+    rasterState.cullMode = RHI::CullMode::None;
     rasterState.frontFace = RHI::FrontFace::CounterClockwise;
     rasterState.lineWidth = 1.0f;
 
-    // Depth/Stencil state (depth test enabled, but NO depth writes)
+    // Depth test on, depth WRITES off. The G-Buffer depth buffer is bound
+    // read-only in the render pass (Load/Store); writing would corrupt the
+    // already-lit deferred scene behind the transparent surface.
     RHI::DepthStencilState depthState{};
     depthState.depthTestEnable = true;
-    depthState.depthWriteEnable = false;  // CRITICAL: No depth writes for transparency
+    depthState.depthWriteEnable = false;
     depthState.depthCompareOp = RHI::CompareOp::Less;
     depthState.stencilTestEnable = false;
 
-    // Blend state (alpha blending)
+    // Alpha blending: premultiplied-style src-alpha/one-minus-src-alpha for
+    // color, additive for alpha — matches the sorting (back-to-front) the
+    // Execute() loop performs.
     RHI::BlendAttachmentState blendState{};
     blendState.blendEnable = true;
     blendState.srcColorBlendFactor = RHI::BlendFactor::SrcAlpha;
@@ -333,11 +394,11 @@ void ForwardPass::CreatePipelines() {
     blendState.srcAlphaBlendFactor = RHI::BlendFactor::One;
     blendState.dstAlphaBlendFactor = RHI::BlendFactor::OneMinusSrcAlpha;
     blendState.alphaBlendOp = RHI::BlendOp::Add;
-    blendState.colorWriteMask = 0xF; // RGBA
+    blendState.colorWriteMask = 0xF;
 
-    // Create transparent pipeline (full PBR lighting)
+    // Transparent pipeline (full PBR + reflection/refraction).
     RHI::PipelineDesc pipelineDesc{};
-    // pipelineDesc.shaders = { m_ForwardVertShader, m_TransparentFragShader };
+    pipelineDesc.shaders = { m_ForwardVertShader, m_TransparentFragShader };
     pipelineDesc.vertexInput = vertexInput;
     pipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
     pipelineDesc.rasterization = rasterState;
@@ -346,59 +407,132 @@ void ForwardPass::CreatePipelines() {
     pipelineDesc.renderPass = m_RenderPass;
     pipelineDesc.subpass = 0;
     pipelineDesc.debugName = "ForwardPass_Transparent";
-    // m_TransparentPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    m_TransparentPipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    if (!m_TransparentPipeline) {
+        std::cerr << "[ForwardPass] CreateGraphicsPipeline failed for Transparent\n";
+        return false;
+    }
 
-    // Create simplified lighting pipeline
-    // pipelineDesc.shaders = { m_ForwardVertShader, m_TransparentSimpleFragShader };
+    // Simplified lighting pipeline — swaps only the fragment shader, every
+    // other state (vertex input, blending, depth) is identical.
+    pipelineDesc.shaders = { m_ForwardVertShader, m_TransparentSimpleFragShader };
     pipelineDesc.debugName = "ForwardPass_TransparentSimple";
-    // m_TransparentSimplePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    m_TransparentSimplePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    if (!m_TransparentSimplePipeline) {
+        std::cerr << "[ForwardPass] CreateGraphicsPipeline failed for TransparentSimple\n";
+        return false;
+    }
 
-    // Create particle pipeline
-    // Particles often use point sprites or billboards with different vertex layout
-    RHI::VertexInputState particleVertexInput{};
-    // Particle vertex format would go here
-
-    // Additive blending for particles
-    RHI::BlendAttachmentState additiveBlend{};
-    additiveBlend.blendEnable = true;
-    additiveBlend.srcColorBlendFactor = RHI::BlendFactor::SrcAlpha;
-    additiveBlend.dstColorBlendFactor = RHI::BlendFactor::One;  // Additive
-    additiveBlend.colorBlendOp = RHI::BlendOp::Add;
-    additiveBlend.srcAlphaBlendFactor = RHI::BlendFactor::One;
-    additiveBlend.dstAlphaBlendFactor = RHI::BlendFactor::One;
-    additiveBlend.alphaBlendOp = RHI::BlendOp::Add;
-    additiveBlend.colorWriteMask = 0xF;
-
-    // pipelineDesc.shaders = { m_ParticleVertShader, m_ParticleFragShader };
-    pipelineDesc.vertexInput = particleVertexInput;
-    pipelineDesc.blendAttachments = { additiveBlend };
-    pipelineDesc.debugName = "ForwardPass_Particles";
-    // m_ParticlePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
+    return true;
 }
 
 void ForwardPass::CreateDescriptorSets() {
-    // Create descriptor sets for transparent rendering
-    // Similar to geometry pass but may include additional light data
+    // Descriptor layout matches shaders/forward/{forward,transparent}.frag
+    // and forward.vert. Both fragment shaders share the same set 0 / set 1
+    // layout; transparent.frag extends set 1 with an extra opacity sampler
+    // and a slightly bigger MaterialData UBO, plus a set 2 for environment +
+    // scene sampling. We declare the superset so a single pipeline layout
+    // serves both pipelines (transparent AND simple):
+    //
+    //   set = 0:  per-frame uniform data
+    //     binding 0: CameraData  UBO   (vert + frag)
+    //     binding 1: ShadowData  UBO   (vert only — lightViewProj)
+    //     binding 2: LightData   UBO   (frag — directional + point + spot)
+    //
+    //   set = 1:  per-material
+    //     binding 0..4: albedo / normal / metallicRoughness / ao / emission
+    //                   (CombinedImageSampler, frag)
+    //     binding 5:    opacity map     (CombinedImageSampler, frag — used by
+    //                                    transparent.frag only; declared here
+    //                                    so forward.frag's set-1 is still a
+    //                                    valid subset)
+    //     binding 6:    MaterialData UBO (frag)
+    //
+    //   set = 2:  per-scene environment + framebuffer samplers (transparent
+    //             path only — forward.frag does not bind any of these,
+    //             which is fine in Vulkan as long as the *layout* is
+    //             compatible; unbound descriptors are just unread.)
+    //     binding 0: environmentMap    (CombinedImageSampler samplerCube)
+    //     binding 1: sceneDepth        (CombinedImageSampler)
+    //     binding 2: sceneColor        (CombinedImageSampler)
+    //
+    // As with GeometryPass / LightingPass, the IRHIPipelineLayout built here
+    // is not currently wired into the pipeline objects — PipelineDesc has no
+    // pipelineLayout field and the Vulkan backend synthesises an empty
+    // default layout inside CreateGraphicsPipeline(). This pass's descriptor
+    // work is staged for when that RHI gap is closed.
 
-    // Example descriptor set layout:
-    // Set 0:
-    //   - Binding 0: Camera uniform buffer
-    //   - Binding 1: Directional light
-    //   - Binding 2: Point lights (if using forward lighting)
-    //   - Binding 3: Spot lights
-    //   - Binding 4: Material textures
-    //   - Binding 5: Environment map (for reflections)
+    // ---- set = 0 ---------------------------------------------------------
+    RHI::DescriptorSetLayoutDesc set0Desc{};
+    set0Desc.debugName = "ForwardPass_Set0_Frame";
+    RHI::DescriptorBinding cameraBinding{};
+    cameraBinding.binding = 0;
+    cameraBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    cameraBinding.descriptorCount = 1;
+    cameraBinding.stageFlags = RHI::ShaderStage::Vertex | RHI::ShaderStage::Fragment;
+    set0Desc.bindings.push_back(cameraBinding);
+    RHI::DescriptorBinding shadowBinding{};
+    shadowBinding.binding = 1;
+    shadowBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    shadowBinding.descriptorCount = 1;
+    shadowBinding.stageFlags = RHI::ShaderStage::Vertex;
+    set0Desc.bindings.push_back(shadowBinding);
+    RHI::DescriptorBinding lightsBinding{};
+    lightsBinding.binding = 2;
+    lightsBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    lightsBinding.descriptorCount = 1;
+    lightsBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set0Desc.bindings.push_back(lightsBinding);
+    RHI::IRHIDescriptorSetLayout* set0Layout = m_RHI->CreateDescriptorSetLayout(set0Desc);
 
-    const uint32_t frameCount = 3; // Triple buffering
+    // ---- set = 1 ---------------------------------------------------------
+    RHI::DescriptorSetLayoutDesc set1Desc{};
+    set1Desc.debugName = "ForwardPass_Set1_Material";
+    for (uint32_t i = 0; i < 6; ++i) {
+        // 0..4 = PBR maps, 5 = opacity map (used by transparent.frag).
+        RHI::DescriptorBinding imageBinding{};
+        imageBinding.binding = i;
+        imageBinding.descriptorType = RHI::DescriptorType::CombinedImageSampler;
+        imageBinding.descriptorCount = 1;
+        imageBinding.stageFlags = RHI::ShaderStage::Fragment;
+        set1Desc.bindings.push_back(imageBinding);
+    }
+    RHI::DescriptorBinding materialUBOBinding{};
+    materialUBOBinding.binding = 6;
+    materialUBOBinding.descriptorType = RHI::DescriptorType::UniformBuffer;
+    materialUBOBinding.descriptorCount = 1;
+    materialUBOBinding.stageFlags = RHI::ShaderStage::Fragment;
+    set1Desc.bindings.push_back(materialUBOBinding);
+    RHI::IRHIDescriptorSetLayout* set1Layout = m_RHI->CreateDescriptorSetLayout(set1Desc);
+
+    // ---- set = 2 ---------------------------------------------------------
+    RHI::DescriptorSetLayoutDesc set2Desc{};
+    set2Desc.debugName = "ForwardPass_Set2_Environment";
+    for (uint32_t i = 0; i < 3; ++i) {
+        // 0 = environmentMap (cube), 1 = sceneDepth, 2 = sceneColor.
+        // All three are sampled images; Vulkan does not distinguish 2D vs
+        // cube at the descriptor-set-layout level — the view type on the
+        // IRHITextureView is what matters at bind time.
+        RHI::DescriptorBinding envBinding{};
+        envBinding.binding = i;
+        envBinding.descriptorType = RHI::DescriptorType::CombinedImageSampler;
+        envBinding.descriptorCount = 1;
+        envBinding.stageFlags = RHI::ShaderStage::Fragment;
+        set2Desc.bindings.push_back(envBinding);
+    }
+    RHI::IRHIDescriptorSetLayout* set2Layout = m_RHI->CreateDescriptorSetLayout(set2Desc);
+
+    RHI::IRHIDescriptorSetLayout* setLayouts[3] = { set0Layout, set1Layout, set2Layout };
+    m_PipelineLayout = m_RHI->CreatePipelineLayout(setLayouts, 3);
+
+    // Triple-buffered per-frame descriptor sets (set 0 rotates each frame).
+    const uint32_t frameCount = 3;
     m_DescriptorSets.resize(frameCount, nullptr);
 
-    // In production, this would create actual descriptor sets
-    /*
-    for (uint32_t i = 0; i < frameCount; ++i) {
-        m_DescriptorSets[i] = m_RHI->CreateDescriptorSet(descriptorSetLayout);
-        // Update descriptor set with resources
-    }
-    */
+    // Transient layout handles — the pipeline layout keeps its own reference.
+    m_RHI->DestroyDescriptorSetLayout(set0Layout);
+    m_RHI->DestroyDescriptorSetLayout(set1Layout);
+    m_RHI->DestroyDescriptorSetLayout(set2Layout);
 }
 
 void ForwardPass::SortTransparentObjects() {
