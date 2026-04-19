@@ -8,6 +8,15 @@
 #include <mutex>
 #include <thread>
 #include <cstdint>
+#include <vulkan/vulkan.h>
+
+// The Profiler is the engine-wide singleton for both CPU and GPU timing. GPU
+// timing is driven by a single Vulkan VkQueryPool allocated at engine
+// startup; the pool holds N timestamp slots and is recycled every frame via
+// vkCmdResetQueryPool. CPU and GPU timing are independent — the CPU path
+// works without any Vulkan setup, the GPU path becomes available once
+// InitializeGPU() has been called with a valid VkDevice and the
+// timestampPeriod queried from VkPhysicalDeviceLimits.
 
 namespace CatEngine {
 
@@ -45,7 +54,13 @@ struct FrameTiming {
 };
 
 /**
- * @brief GPU timestamp query placeholder for Vulkan integration
+ * @brief GPU timestamp query result
+ *
+ * One entry per named query resolved during the most recent
+ * ResolveGPUQueries() call. Timestamps are in Vulkan tick units when raw;
+ * `duration` is converted to milliseconds using the device-reported
+ * timestampPeriod (nanoseconds per tick) so callers don't need to know the
+ * hardware-specific scale factor.
  */
 struct GPUTimestamp {
     std::string name;
@@ -85,7 +100,7 @@ public:
  * - Per-scope statistics: min, max, average, total time
  * - Thread-safe (each thread has own stack)
  * - Formatted report output
- * - GPU timestamp query interface (placeholder)
+ * - GPU timestamp queries via Vulkan VkQueryPool (see InitializeGPU)
  */
 class Profiler {
 public:
@@ -163,18 +178,89 @@ public:
      */
     bool IsEnabled() const { return m_Enabled; }
 
-    // GPU Profiling Interface (placeholder for Vulkan integration)
+    // ========================================================================
+    // GPU Profiling Interface (Vulkan VkQueryPool-backed)
+    // ========================================================================
+    //
+    // Lifecycle:
+    //   1. InitializeGPU(device, timestampPeriod) — call once after device
+    //      creation. Allocates a VkQueryPool sized to 2 * maxQueries slots
+    //      (start + end per named query).
+    //   2. BeginFrameGPU(cmd) — call once per frame at the top of the
+    //      command buffer. Resets the pool so the new frame's queries start
+    //      from a clean slate.
+    //   3. BeginGPUQuery(name, cmd) / EndGPUQuery(name, cmd) — emit timestamp
+    //      queries into the recorded command buffer. The string-only
+    //      overloads (no cmd argument) fall back to CPU-side timing, which
+    //      is useful when no command buffer is available (engine startup,
+    //      tool code) and for callers that just want approximate durations
+    //      without plumbing a Vulkan handle everywhere.
+    //   4. ResolveGPUQueries() — call once per frame after the command
+    //      buffer has been submitted and the fence signaled. Reads query
+    //      results back from the pool, converts tick deltas to milliseconds
+    //      using the stored timestampPeriod, and populates m_GPUTimestamps.
+    //   5. ShutdownGPU() — destroys the pool. Must happen before vkDestroyDevice.
 
     /**
-     * @brief Begin GPU timestamp query
-     * @param name Query name
+     * @brief Initialize the GPU profiling subsystem against a Vulkan device.
+     * @param device The Vulkan device that owns all command buffers passed to
+     *               Begin/End GPUQuery. Must outlive the Profiler's GPU state.
+     * @param timestampPeriodNanoseconds Pulled from
+     *        VkPhysicalDeviceLimits::timestampPeriod; each timestamp tick
+     *        corresponds to this many nanoseconds on the device.
+     * @param maxQueries Maximum number of named GPU queries per frame
+     *                   (allocates 2 * maxQueries timestamp slots). Default
+     *                   covers the ~100 scopes a typical frame touches.
+     * @return true on success, false if the pool could not be created.
      */
+    bool InitializeGPU(VkDevice device,
+                       float timestampPeriodNanoseconds,
+                       uint32_t maxQueries = 256);
+
+    /**
+     * @brief Destroy the GPU query pool. Safe to call even if InitializeGPU
+     *        was never called or already failed — it no-ops in both cases.
+     */
+    void ShutdownGPU();
+
+    /**
+     * @brief Reset the query pool for a new frame. Must be recorded into the
+     *        same command buffer that will issue the frame's queries, before
+     *        any BeginGPUQuery call. Internally clears the per-frame
+     *        slot-allocation map so names emitted in the previous frame can
+     *        be reused.
+     */
+    void BeginFrameGPU(VkCommandBuffer cmd);
+
+    /**
+     * @brief Emit a start-timestamp query at the top of the pipeline.
+     *        Pairs with EndGPUQuery(name, cmd); the pair's duration becomes
+     *        available after ResolveGPUQueries runs.
+     */
+    void BeginGPUQuery(const std::string& name, VkCommandBuffer cmd);
+
+    /**
+     * @brief Emit an end-timestamp query at the bottom of the pipeline.
+     */
+    void EndGPUQuery(const std::string& name, VkCommandBuffer cmd);
+
+    /**
+     * @brief Resolve all queries issued since the last BeginFrameGPU call.
+     *        Reads results synchronously — caller must guarantee the
+     *        submitting command buffer has completed (fence signaled) before
+     *        calling, otherwise vkGetQueryPoolResults either blocks or
+     *        returns VK_NOT_READY depending on the flags passed below.
+     *        Uses WAIT flag so this always produces valid data at the cost
+     *        of a potential stall; acceptable because the Profiler is a
+     *        debug-only subsystem.
+     */
+    void ResolveGPUQueries();
+
+    // CPU-side fallback timing: identical interface, usable when no Vulkan
+    // command buffer is in scope. Durations are CPU clock deltas, not GPU
+    // ticks, so the two paths should not be mixed within the same named
+    // query or callers will get inconsistent results.
     void BeginGPUQuery(const std::string& name);
-
-    /**
-     * @brief End GPU timestamp query
-     * @param name Query name
-     */
     void EndGPUQuery(const std::string& name);
 
     /**
@@ -214,9 +300,38 @@ private:
     mutable std::mutex m_StatsMutex;
     std::unordered_map<std::string, ProfileStats> m_MergedStats;
 
-    // GPU profiling (placeholder)
+    // ========================================================================
+    // GPU profiling state
+    // ========================================================================
+
+    // Resolved query results from the most recent ResolveGPUQueries call.
+    // Each ResolveGPUQueries reset this vector so it never grows unbounded.
     std::vector<GPUTimestamp> m_GPUTimestamps;
+
+    // Active CPU-fallback queries keyed by name. For GPU-backed queries the
+    // slot-pair map below is the source of truth; this map only stores the
+    // CPU-timing path's start timestamps so BeginGPUQuery/EndGPUQuery (no
+    // cmd buffer) can compute their durations without a Vulkan pool.
     std::unordered_map<std::string, uint64_t> m_ActiveGPUQueries;
+
+    // Vulkan query pool state. m_GPUQueryDevice is non-null iff
+    // InitializeGPU succeeded; all GPU-backed BeginGPUQuery/EndGPUQuery calls
+    // early-return when it's null, downgrading silently to the CPU path so
+    // non-profiling engine builds don't crash from a forgotten init.
+    VkDevice    m_GPUQueryDevice      = VK_NULL_HANDLE;
+    VkQueryPool m_GPUQueryPool        = VK_NULL_HANDLE;
+    uint32_t    m_GPUQueryPoolSize    = 0;     // Total timestamp slots in the pool.
+    uint32_t    m_GPUQueryNextSlot    = 0;     // Next free slot for this frame.
+    float       m_GPUTimestampPeriod  = 1.0f;  // nanoseconds per tick.
+
+    // Maps each named query to the (start, end) slot pair issued in the
+    // current frame. Cleared by BeginFrameGPU so a name can be reused each
+    // frame without colliding with the previous frame's slot allocation.
+    struct GPUQuerySlotPair {
+        uint32_t startSlot;
+        uint32_t endSlot;
+    };
+    std::unordered_map<std::string, GPUQuerySlotPair> m_GPUQuerySlots;
 };
 
 /**

@@ -247,19 +247,211 @@ void Profiler::Reset() {
     m_ActiveGPUQueries.clear();
 }
 
-// GPU Profiling (Placeholder Implementation)
+// ============================================================================
+// GPU Profiling — Vulkan VkQueryPool-backed timestamps + CPU-side fallback
+// ============================================================================
+//
+// The GPU path works by recording vkCmdWriteTimestamp commands into the
+// application's normal command buffer. Each named query reserves two slots
+// in a shared VkQueryPool — one TOP_OF_PIPE slot at Begin and one
+// BOTTOM_OF_PIPE slot at End — and the pair's delta becomes the query's GPU
+// duration. ResolveGPUQueries then reads all slots back synchronously using
+// VK_QUERY_RESULT_WAIT, multiplies by the device's timestampPeriod, and
+// stores the results as milliseconds for uniform reporting alongside CPU
+// timings.
+
+bool Profiler::InitializeGPU(VkDevice device,
+                             float timestampPeriodNanoseconds,
+                             uint32_t maxQueries) {
+    if (device == VK_NULL_HANDLE || maxQueries == 0) {
+        return false;
+    }
+
+    // Each named query consumes two timestamp slots (start + end), so the
+    // pool must be sized to 2x the logical query count.
+    const uint32_t poolSize = maxQueries * 2u;
+
+    VkQueryPoolCreateInfo poolInfo{};
+    poolInfo.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    poolInfo.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = poolSize;
+
+    VkQueryPool pool = VK_NULL_HANDLE;
+    if (vkCreateQueryPool(device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
+        std::cerr << "[Profiler] vkCreateQueryPool failed; GPU timing disabled" << std::endl;
+        return false;
+    }
+
+    m_GPUQueryDevice     = device;
+    m_GPUQueryPool       = pool;
+    m_GPUQueryPoolSize   = poolSize;
+    m_GPUQueryNextSlot   = 0;
+    m_GPUTimestampPeriod = timestampPeriodNanoseconds;
+
+    m_GPUQuerySlots.clear();
+    return true;
+}
+
+void Profiler::ShutdownGPU() {
+    if (m_GPUQueryPool != VK_NULL_HANDLE && m_GPUQueryDevice != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(m_GPUQueryDevice, m_GPUQueryPool, nullptr);
+    }
+    m_GPUQueryPool       = VK_NULL_HANDLE;
+    m_GPUQueryDevice     = VK_NULL_HANDLE;
+    m_GPUQueryPoolSize   = 0;
+    m_GPUQueryNextSlot   = 0;
+    m_GPUTimestampPeriod = 1.0f;
+    m_GPUQuerySlots.clear();
+    m_ActiveGPUQueries.clear();
+}
+
+void Profiler::BeginFrameGPU(VkCommandBuffer cmd) {
+    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+        return;
+    }
+
+    // Resetting the entire pool in one call is cheap and guarantees every
+    // slot returns a defined result after ResolveGPUQueries regardless of
+    // how many queries the frame ends up emitting.
+    vkCmdResetQueryPool(cmd, m_GPUQueryPool, 0, m_GPUQueryPoolSize);
+
+    m_GPUQueryNextSlot = 0;
+    m_GPUQuerySlots.clear();
+}
+
+void Profiler::BeginGPUQuery(const std::string& name, VkCommandBuffer cmd) {
+    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+        // No initialized pool or no command buffer — downgrade to the CPU
+        // path so callers don't silently lose the query.
+        BeginGPUQuery(name);
+        return;
+    }
+
+    // A query needs two free slots (start + end). If the pool is exhausted,
+    // drop the query rather than scribbling past the pool end, which would
+    // corrupt previously-recorded queries.
+    if (m_GPUQueryNextSlot + 2u > m_GPUQueryPoolSize) {
+        std::cerr << "[Profiler] GPU query pool exhausted, dropping '"
+                  << name << "'" << std::endl;
+        return;
+    }
+
+    GPUQuerySlotPair slots;
+    slots.startSlot = m_GPUQueryNextSlot++;
+    slots.endSlot   = m_GPUQueryNextSlot++;
+    m_GPUQuerySlots[name] = slots;
+
+    // TOP_OF_PIPE lands the timestamp at the earliest point the device can
+    // measure the command boundary, giving a tight lower bound on the
+    // pass's actual GPU start time.
+    vkCmdWriteTimestamp(cmd,
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        m_GPUQueryPool,
+                        slots.startSlot);
+}
+
+void Profiler::EndGPUQuery(const std::string& name, VkCommandBuffer cmd) {
+    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+        EndGPUQuery(name);
+        return;
+    }
+
+    auto it = m_GPUQuerySlots.find(name);
+    if (it == m_GPUQuerySlots.end()) {
+        // No matching BeginGPUQuery — most likely a mismatched or
+        // double-ended query. Ignoring is safer than asserting; the
+        // profiler is a debug tool and should never take the engine down.
+        return;
+    }
+
+    // BOTTOM_OF_PIPE pairs with the TOP_OF_PIPE at Begin: the delta between
+    // the two gives the total time the pass spent occupying the device.
+    vkCmdWriteTimestamp(cmd,
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        m_GPUQueryPool,
+                        it->second.endSlot);
+}
+
+void Profiler::ResolveGPUQueries() {
+    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || m_GPUQuerySlots.empty()) {
+        return;
+    }
+
+    // Read every slot that has been written this frame in one round-trip.
+    // VK_QUERY_RESULT_WAIT_BIT makes the call block until the results are
+    // ready, trading a potential stall for guaranteed-valid data. The
+    // profiler should only be enabled when the user explicitly asked for
+    // profiling, so the stall is acceptable.
+    const uint32_t usedSlots = m_GPUQueryNextSlot;
+    if (usedSlots == 0) return;
+
+    std::vector<uint64_t> timestamps(usedSlots);
+    VkResult result = vkGetQueryPoolResults(
+        m_GPUQueryDevice,
+        m_GPUQueryPool,
+        0,                                               // firstQuery
+        usedSlots,                                       // queryCount
+        sizeof(uint64_t) * timestamps.size(),            // dataSize
+        timestamps.data(),
+        sizeof(uint64_t),                                // stride
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT
+    );
+
+    if (result != VK_SUCCESS) {
+        std::cerr << "[Profiler] vkGetQueryPoolResults failed (" << result
+                  << "); dropping this frame's GPU timings" << std::endl;
+        return;
+    }
+
+    // Replace rather than append: the current frame's results fully
+    // supersede anything resolved previously, and keeping old entries
+    // around would grow the report output unboundedly over time.
+    m_GPUTimestamps.clear();
+    m_GPUTimestamps.reserve(m_GPUQuerySlots.size());
+
+    for (const auto& [name, slots] : m_GPUQuerySlots) {
+        const uint64_t startTicks = timestamps[slots.startSlot];
+        const uint64_t endTicks   = timestamps[slots.endSlot];
+        const uint64_t deltaTicks = (endTicks > startTicks)
+                                        ? (endTicks - startTicks)
+                                        : 0ull;
+
+        // timestampPeriod is nanoseconds-per-tick, so deltaTicks *
+        // timestampPeriod / 1e6 converts to milliseconds — the unit every
+        // other report path in the Profiler uses.
+        const double durationMs =
+            (static_cast<double>(deltaTicks) *
+             static_cast<double>(m_GPUTimestampPeriod)) / 1'000'000.0;
+
+        GPUTimestamp ts;
+        ts.name            = name;
+        ts.startTimestamp  = startTicks;
+        ts.endTimestamp    = endTicks;
+        ts.duration        = durationMs;
+        m_GPUTimestamps.push_back(std::move(ts));
+    }
+}
+
+// ----------------------------------------------------------------------------
+// CPU-side fallback path
+//
+// These overloads are used when no Vulkan command buffer is in scope — most
+// notably during engine startup before the Renderer is wired up, and from
+// tool or editor code that doesn't live inside the main render loop. They
+// measure CPU wall-clock only, which is not what a caller asking for "GPU
+// timings" strictly wants; they exist so the Begin/End pair can never silently
+// drop measurements just because Vulkan state isn't ready yet.
+// ----------------------------------------------------------------------------
 
 void Profiler::BeginGPUQuery(const std::string& name) {
     if (!m_Enabled) return;
 
-    // Placeholder: In a real implementation, this would submit a Vulkan timestamp query
-    // For now, we'll use CPU timing as a placeholder
     auto now = Clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now.time_since_epoch()
     ).count();
 
-    m_ActiveGPUQueries[name] = timestamp;
+    m_ActiveGPUQueries[name] = static_cast<uint64_t>(timestamp);
 }
 
 void Profiler::EndGPUQuery(const std::string& name) {
@@ -270,7 +462,6 @@ void Profiler::EndGPUQuery(const std::string& name) {
         return;
     }
 
-    // Placeholder: In a real implementation, this would read back Vulkan timestamp query results
     auto now = Clock::now();
     auto endTimestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now.time_since_epoch()
@@ -279,8 +470,11 @@ void Profiler::EndGPUQuery(const std::string& name) {
     GPUTimestamp timestamp;
     timestamp.name = name;
     timestamp.startTimestamp = it->second;
-    timestamp.endTimestamp = endTimestamp;
-    timestamp.duration = static_cast<double>(endTimestamp - it->second) / 1000000.0; // Convert to ms
+    timestamp.endTimestamp = static_cast<uint64_t>(endTimestamp);
+    // CPU path reports durations already in nanoseconds, so the /1e6 here
+    // matches the GPU path's output scale (milliseconds).
+    timestamp.duration =
+        static_cast<double>(endTimestamp - static_cast<int64_t>(it->second)) / 1'000'000.0;
 
     m_GPUTimestamps.push_back(timestamp);
     m_ActiveGPUQueries.erase(it);
