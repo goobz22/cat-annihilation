@@ -20,26 +20,38 @@ namespace {
 // function so the mapping lives next to the entity factory rather than being
 // threaded through configuration.
 //
-// The `assets/models/enemies/` directory does not exist yet and the per-
-// variant dog models (dog_big / dog_fast / dog_boss / dog_normal) have not
-// been authored. Previously each variant pointed at a different non-existent
-// path, which caused ModelLoader::Load to throw std::runtime_error and
-// abort the game on the first enemy spawn.
+// Meshy-AI produced four rigged variant meshes in `assets/models/meshy_raw_dogs/`:
+//   dog_regular.glb — baseline silhouette, ~250k polys, standard proportions
+//   dog_fast.glb    — leaner build, meant for the FastDog speedster
+//   dog_big.glb     — stockier, larger chest — pairs with the +50% scale
+//                      on BigDog for a readable "heavy" enemy
+//   dog_boss.glb    — the boss variant, visually distinct colouring +
+//                      accessories, used at 2.0x scale
+// These are the production art assets that the game ships with; the
+// earlier `assets/models/dog.gltf` hand-authored cube was a placeholder
+// kept in-repo so builds wouldn't break while the rigger baked the real
+// Meshy output. With Meshy assets landed, each variant gets its own mesh
+// so silhouettes read correctly at a glance in combat. Scale adjustments
+// (getStatsForType) remain layered on top — the big dog is BOTH a heftier
+// rig AND scaled 1.5x, which keeps the size delta visible without letting
+// enemies look like identical clones with size-only differentiation.
 //
-// Until the variant meshes ship, every dog type reuses the single
-// `assets/models/dog.gltf` asset. Scale and tint are still varied per type
-// elsewhere (getStatsForType + proxy draw tinting), so big/fast/boss dogs
-// remain visually distinguishable even while sharing geometry. When proper
-// variant models land, restore the variant-specific paths here and delete
-// this comment.
+// If any variant file is missing, attachMeshAndAnimator catches the
+// "Failed to open file" throw from ModelLoader::Load and leaves the dog
+// without a mesh — AI and combat still work, the dog just renders as an
+// invisible collider. That's strictly better than aborting the entire
+// game on the first wave.
 const char* modelPathForType(EnemyType type) {
     switch (type) {
         case EnemyType::BigDog:
+            return "assets/models/meshy_raw_dogs/dog_big.glb";
         case EnemyType::FastDog:
+            return "assets/models/meshy_raw_dogs/dog_fast.glb";
         case EnemyType::BossDog:
+            return "assets/models/meshy_raw_dogs/dog_boss.glb";
         case EnemyType::Dog:
         default:
-            return "assets/models/dog.gltf";
+            return "assets/models/meshy_raw_dogs/dog_regular.glb";
     }
 }
 
@@ -157,6 +169,18 @@ void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyT
     }
 
     mesh.animator = animator;
+
+    // Mirror the CatEntity info log so per-variant dog loads show up in
+    // playtest logs. The nightly openclaw iteration uses this line to
+    // confirm each variant GLB (dog_regular / dog_fast / dog_big /
+    // dog_boss) is actually hitting the loader — without it, a silent
+    // revert to placeholder geometry is indistinguishable from a clean
+    // Meshy load in the log.
+    Engine::Logger::info(std::string("DogEntity: loaded model '") + modelPath +
+                         "' (meshes=" + std::to_string(model->meshes.size()) +
+                         ", nodes=" + std::to_string(model->nodes.size()) +
+                         ", clips=" + std::to_string(model->animations.size()) + ")");
+
     ecs->addComponent(entity, std::move(mesh));
 }
 

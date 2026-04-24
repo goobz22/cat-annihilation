@@ -12,6 +12,21 @@
 
 namespace CatGame {
 
+namespace {
+
+// Default player cat model. The `cats/*.glb` directory holds Meshy-AI
+// generated, auto-rigged variants (ember/frost/mist/storm leaders, elders,
+// mentors). `ember_leader.glb` is the designated hero model — same
+// proportions as the other leaders, strong silhouette, T-pose at import,
+// ~250k polys (within Meshy's auto-rigger limit). Kept as a file-scope
+// constant rather than inlined in createCustom() so iteration can swap
+// variants for testing without recompiling the factory. Downstream code
+// (loadModel, configureAnimations) is path-agnostic — all it needs is a
+// readable .glb or .gltf.
+constexpr const char* kDefaultCatModelPath = "assets/models/cats/ember_leader.glb";
+
+} // namespace
+
 CatEngine::Entity CatEntity::create(CatEngine::ECS& ecs, const Engine::vec3& position) {
     return createCustom(
         ecs,
@@ -93,12 +108,14 @@ CatEngine::Entity CatEntity::createCustom(
     // entity still has Transform/Health/Movement/Combat and will render as
     // invisible until a model is supplied via loadModel() directly.
     //
-    // Path resolution: the on-disk asset is `assets/models/cat.gltf`. The
-    // earlier `cat_player.gltf` name did not exist on disk, which caused
-    // ModelLoader::LoadGLTF to throw `std::runtime_error("Failed to open
-    // file")` and abort the process on the very first cat spawn. Keep this
-    // path synchronized with the real asset filename.
-    if (loadModel(ecs, entity, "assets/models/cat.gltf")) {
+    // Path resolution: the default hero mesh is a Meshy-generated,
+    // auto-rigged .glb (see kDefaultCatModelPath at the top of this file).
+    // The older `assets/models/cat.gltf` placeholder was a hand-authored
+    // stand-in with a 7-node skeleton; the Meshy mesh is the production art
+    // the game ships with. If the Meshy file is missing, loadModel()
+    // catches the "Failed to open file" throw and falls back to a model-
+    // less entity, so the factory never aborts the whole game.
+    if (loadModel(ecs, entity, kDefaultCatModelPath)) {
         configureAnimations(ecs, entity);
     }
 

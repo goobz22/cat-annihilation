@@ -1,4 +1,5 @@
 #include "ModelLoader.hpp"
+#include "Base64DataUri.hpp"
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -47,24 +48,85 @@ std::shared_ptr<Model> ModelLoader::LoadGLTF(const std::string& path) {
     size_t lastSlash = path.find_last_of("/\\");
     data.baseDir = (lastSlash != std::string::npos) ? path.substr(0, lastSlash + 1) : "";
 
-    // Load buffers
+    // Load buffers.
+    //
+    // glTF 2.0 §3.6.1.1 allows two buffer URI flavours:
+    //   (1) A relative path to an external .bin sidecar (classic two-file gltf).
+    //   (2) An inline base64 `data:` URI embedding the buffer directly in the
+    //       JSON. Every .gltf shipped in assets/models/ uses flavour (2) — our
+    //       generator produces self-contained single-file assets.
+    //
+    // WHY both branches are required: the cat + dog + props the game ships with
+    // are all flavour (2), so without the data-URI decoder the player is a
+    // placeholder cube on every playtest. But the engine also needs to load
+    // third-party models authored in Blender/Maya, which emit flavour (1) by
+    // default. A real glTF loader handles both; dropping either path would
+    // quietly break one of the two asset pipelines.
+    //
+    // WHY the `byteLength` sanity check below (when the field is present):
+    // the RFC-4648 decoder in Base64DataUri is intentionally tolerant of
+    // whitespace and strips `=` padding, so a malformed URI could decode to
+    // fewer bytes than the glTF JSON claims. ExtractMeshes would then index
+    // past the end of `data.buffers[…]` — deterministic out-of-bounds UB.
+    // Catching the size mismatch here gives a clear "buffer 0: expected N
+    // bytes, decoded M" error instead of a segfault deep in vertex extract.
     if (data.root.contains("buffers")) {
-        for (const auto& bufferInfo : data.root["buffers"]) {
-            std::string uri = bufferInfo["uri"];
-            std::string bufferPath = data.baseDir + uri;
+        for (size_t bufferIndex = 0; bufferIndex < data.root["buffers"].size(); ++bufferIndex) {
+            const auto& bufferInfo = data.root["buffers"][bufferIndex];
+            std::string uri = bufferInfo.value("uri", std::string());
 
-            std::ifstream bufferFile(bufferPath, std::ios::binary);
-            if (!bufferFile.is_open()) {
-                throw std::runtime_error("Failed to open buffer: " + bufferPath);
+            std::vector<uint8_t> bufferData;
+
+            if (Base64DataUri::IsDataUri(uri)) {
+                // Flavour (2): inline base64 `data:` URI. Decode directly —
+                // the decoder is header-only and dependency-free, so this
+                // path is testable in the no-GPU Catch2 build.
+                bufferData = Base64DataUri::DecodeBase64(uri);
+            } else {
+                // Flavour (1): external sidecar file relative to the .gltf's
+                // directory. The empty-uri case (GLB embeds the bin chunk
+                // directly and LoadGLB handles it separately) should never
+                // reach this branch, but guard anyway: an empty uri would
+                // try to open the asset directory itself and the ifstream
+                // would fail with the same "Failed to open buffer" message.
+                std::string bufferPath = data.baseDir + uri;
+
+                std::ifstream bufferFile(bufferPath, std::ios::binary);
+                if (!bufferFile.is_open()) {
+                    throw std::runtime_error("Failed to open buffer: " + bufferPath);
+                }
+
+                bufferFile.seekg(0, std::ios::end);
+                size_t fileSize = bufferFile.tellg();
+                bufferFile.seekg(0, std::ios::beg);
+
+                bufferData.resize(fileSize);
+                bufferFile.read(reinterpret_cast<char*>(bufferData.data()), fileSize);
+                bufferFile.close();
             }
 
-            bufferFile.seekg(0, std::ios::end);
-            size_t size = bufferFile.tellg();
-            bufferFile.seekg(0, std::ios::beg);
-
-            std::vector<uint8_t> bufferData(size);
-            bufferFile.read(reinterpret_cast<char*>(bufferData.data()), size);
-            bufferFile.close();
+            // glTF 2.0 §3.6.1.1: `byteLength` is REQUIRED on every buffer.
+            // If it's present, treat it as the authoritative size — a
+            // decoded-vs-declared mismatch is a broken asset and we'd rather
+            // surface it here than corrupt mesh indexing downstream.
+            if (bufferInfo.contains("byteLength")) {
+                size_t declaredLength = bufferInfo["byteLength"].get<size_t>();
+                if (bufferData.size() < declaredLength) {
+                    throw std::runtime_error(
+                        "glTF buffer " + std::to_string(bufferIndex) +
+                        ": decoded " + std::to_string(bufferData.size()) +
+                        " bytes but header declared " +
+                        std::to_string(declaredLength) + " bytes");
+                }
+                // If decoded > declared we trim to the declared length —
+                // some base64 encoders (notably older Python tooling) emit
+                // an extra null byte of alignment padding. Trimming matches
+                // the spec-compliant interpretation and keeps ExtractMeshes'
+                // bounds-checked indexing sound.
+                if (bufferData.size() > declaredLength) {
+                    bufferData.resize(declaredLength);
+                }
+            }
 
             data.buffers.push_back(std::move(bufferData));
         }
@@ -73,10 +135,30 @@ std::shared_ptr<Model> ModelLoader::LoadGLTF(const std::string& path) {
     auto model = std::make_shared<Model>();
     model->path = path;
 
-    ExtractMaterials(data, *model);
-    ExtractMeshes(data, *model);
-    ExtractNodes(data, *model);
-    ExtractAnimations(data, *model);
+    // WHY the per-stage try/catch blocks: each Extract* call has its own JSON
+    // traversal pattern (materials → textures vs meshes → accessor/bufferView
+    // vs nodes → transform/children vs animations → sampler/channel). When
+    // any one of them throws (e.g. a schema-drift issue like an array where
+    // an object was expected), the raw nlohmann::json exception mentions
+    // only "cannot use operator[] with a string argument with array" —
+    // which doesn't tell the caller whether to look at the materials block
+    // or the animations block. Rethrowing with the stage name pinned to the
+    // message collapses diagnosis from "unreadable stack dive" to a single
+    // log line. Robust-WHY policy in cat-annihilation/CLAUDE.md §engine
+    // demands comments on non-trivial logic — this is the diagnostic
+    // scaffolding that makes "why doesn't my model load" debuggable.
+    auto rethrowStage = [&path](const char* stage, const std::exception& ex) {
+        throw std::runtime_error(
+            std::string(stage) + " failed for '" + path + "': " + ex.what());
+    };
+    try { ExtractMaterials(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMaterials", ex); }
+    try { ExtractMeshes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
+    try { ExtractNodes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractNodes", ex); }
+    try { ExtractAnimations(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractAnimations", ex); }
 
     model->isLoaded = true;
     return model;
@@ -88,7 +170,13 @@ std::shared_ptr<Model> ModelLoader::LoadGLB(const std::string& path) {
         throw std::runtime_error("Failed to open file: " + path);
     }
 
-    // Read GLB header
+    // glTF 2.0 §3.2 Binary container header: 12 bytes total.
+    //   uint32 magic    = 0x46546C67  ("glTF" little-endian)
+    //   uint32 version  = 2
+    //   uint32 length   = total byte length of the GLB container
+    // The magic is checked first; anything else means we're looking at a
+    // random binary and should surface a useful error rather than fall
+    // through into garbage chunk reads.
     uint32_t magic, version, length;
     file.read(reinterpret_cast<char*>(&magic), 4);
     file.read(reinterpret_cast<char*>(&version), 4);
@@ -97,43 +185,155 @@ std::shared_ptr<Model> ModelLoader::LoadGLB(const std::string& path) {
     if (magic != 0x46546C67) { // "glTF"
         throw std::runtime_error("Invalid GLB file: " + path);
     }
+    if (version != 2) {
+        // GLB v1 had a fundamentally different chunk layout; refuse rather
+        // than silently decode wrong offsets. Meshy always emits v2.
+        throw std::runtime_error(
+            "Unsupported GLB version " + std::to_string(version) + " in: " + path);
+    }
 
     GLTFData data;
     size_t lastSlash = path.find_last_of("/\\");
     data.baseDir = (lastSlash != std::string::npos) ? path.substr(0, lastSlash + 1) : "";
 
-    // Read chunks
+    // glTF 2.0 §3.2: the body is a sequence of chunks laid out as
+    //   uint32 chunkLength (bytes of chunk data, not including this header)
+    //   uint32 chunkType   (FourCC: 0x4E4F534A="JSON", 0x004E4942="BIN\0")
+    //   byte[chunkLength]  chunk data (padded to 4-byte alignment with 0x20
+    //                      for JSON / 0x00 for BIN)
+    // The JSON chunk MUST appear first and is REQUIRED. The BIN chunk is
+    // optional but the only way Meshy ships geometry — so in practice we
+    // always see exactly one JSON + one BIN for real assets.
+    bool sawJsonChunk = false;
     while (file.tellg() < static_cast<std::streampos>(length)) {
         uint32_t chunkLength, chunkType;
         file.read(reinterpret_cast<char*>(&chunkLength), 4);
         file.read(reinterpret_cast<char*>(&chunkType), 4);
+        if (!file) {
+            throw std::runtime_error(
+                "GLB truncated while reading chunk header in: " + path);
+        }
 
         if (chunkType == 0x4E4F534A) { // "JSON"
+            // WHY we tolerate trailing padding bytes: the spec requires JSON
+            // chunks be padded to 4-byte alignment with 0x20 (space), which
+            // is ASCII whitespace and therefore safe for json::parse to
+            // ignore. But some older Meshy exports pad with 0x00 which
+            // json::parse rejects as "unexpected null". Strip any trailing
+            // 0x00/0x20 bytes before parsing so both flavours work.
             std::vector<char> jsonData(chunkLength);
             file.read(jsonData.data(), chunkLength);
-            data.root = json::parse(std::string(jsonData.begin(), jsonData.end()));
+            size_t effectiveLength = chunkLength;
+            while (effectiveLength > 0 &&
+                   (jsonData[effectiveLength - 1] == 0x00 ||
+                    jsonData[effectiveLength - 1] == 0x20)) {
+                --effectiveLength;
+            }
+            try {
+                data.root = json::parse(std::string(jsonData.begin(),
+                                                    jsonData.begin() + effectiveLength));
+            } catch (const std::exception& ex) {
+                throw std::runtime_error(
+                    "GLB JSON chunk parse failed for '" + path + "': " + ex.what());
+            }
+            sawJsonChunk = true;
         } else if (chunkType == 0x004E4942) { // "BIN"
+            // Binary chunks are raw buffer bytes — trailing 0x00 padding is
+            // inside the allocation and won't cause downstream indexing to
+            // misread, because every accessor's bufferView bounds are set
+            // from the JSON header rather than the chunk size.
             std::vector<uint8_t> binData(chunkLength);
             file.read(reinterpret_cast<char*>(binData.data()), chunkLength);
             data.buffers.push_back(std::move(binData));
         } else {
-            // Skip unknown chunk
+            // Skip unknown chunk (spec permits forward-compat chunks).
             file.seekg(chunkLength, std::ios::cur);
         }
     }
 
     file.close();
 
+    if (!sawJsonChunk) {
+        throw std::runtime_error("GLB file missing JSON chunk: " + path);
+    }
+
     auto model = std::make_shared<Model>();
     model->path = path;
 
-    ExtractMaterials(data, *model);
-    ExtractMeshes(data, *model);
-    ExtractNodes(data, *model);
-    ExtractAnimations(data, *model);
+    // WHY staged try/catch: see LoadGLTF for the long rationale. In one
+    // sentence: each Extract* call has its own JSON traversal shape, so the
+    // raw nlohmann::json exception doesn't tell the caller which stage
+    // failed. Pin the stage name to the rethrown message so CatEntity /
+    // DogEntity's catch blocks log something actionable instead of a stack
+    // dive into json internals. Without this the first Meshy GLB that had
+    // any schema quirk was effectively undebuggable.
+    auto rethrowStage = [&path](const char* stage, const std::exception& ex) {
+        throw std::runtime_error(
+            std::string(stage) + " failed for '" + path + "': " + ex.what());
+    };
+    try { ExtractMaterials(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMaterials", ex); }
+    try { ExtractMeshes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
+    try { ExtractNodes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractNodes", ex); }
+    try { ExtractAnimations(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractAnimations", ex); }
 
     model->isLoaded = true;
     return model;
+}
+
+// Resolve the on-disk texture path for a glTF image reference. Returns
+// empty string when the image uses a non-uri source (e.g. embedded in a
+// GLB bufferView, or absent/null — which is how Meshy ships texture data).
+//
+// WHY this helper exists: before it, six ExtractMaterials sites
+// unconditionally dereferenced `images[i]["uri"]` as a string. That works
+// for the hand-authored .gltf placeholders where every image has a real
+// file URI sibling, but it blows up on every Meshy .glb because Meshy
+// embeds textures in the BIN chunk (`bufferView` + `mimeType`, no `uri`).
+// nlohmann::json's operator[] on a missing key yields a null value, and
+// casting that null to std::string throws json.exception.type_error.302 —
+// the exact failure that kept ember_leader.glb from loading on the first
+// playtest after it was wired. Funneling all six sites through this
+// helper means GLB materials decode cleanly (textures remain unresolved
+// strings and the downstream material layer falls back to
+// baseColorFactor), and the .gltf path continues to work unchanged.
+//
+// Future work: load the embedded image bytes from bufferView and hand
+// them to the texture uploader, so Meshy materials actually render with
+// their diffuse maps rather than a flat base-colour tint.
+static std::string ResolveImageTexturePath(
+    const nlohmann::json& root,
+    const std::string& baseDir,
+    int texIndex
+) {
+    if (texIndex < 0 ||
+        !root.contains("textures") ||
+        static_cast<size_t>(texIndex) >= root["textures"].size()) {
+        return {};
+    }
+    const auto& tex = root["textures"][texIndex];
+    if (!tex.contains("source")) {
+        return {};
+    }
+    int imageIndex = tex["source"].get<int>();
+    if (imageIndex < 0 ||
+        !root.contains("images") ||
+        static_cast<size_t>(imageIndex) >= root["images"].size()) {
+        return {};
+    }
+    const auto& image = root["images"][imageIndex];
+    if (!image.contains("uri") || !image["uri"].is_string()) {
+        // GLB-embedded image: bufferView + mimeType. Texture bytes live
+        // in the .glb buffer — the material layer currently can't load
+        // those yet, so return empty and let the mesh render with the
+        // solid baseColorFactor. The mesh is still visible; the textures
+        // are just missing.
+        return {};
+    }
+    return baseDir + image["uri"].get<std::string>();
 }
 
 void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
@@ -144,8 +344,14 @@ void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
     for (const auto& matJson : data.root["materials"]) {
         Material material;
 
-        if (matJson.contains("name")) {
-            material.name = matJson["name"];
+        // WHY the is_string check instead of an unguarded assignment: Meshy
+        // sometimes emits `"name": null` for unnamed PBR materials. The raw
+        // `material.name = matJson["name"]` path then throws 302 "type must
+        // be string, but is null", which aborted the entire material
+        // extraction for the whole model. An unnamed material is not a
+        // load-fatal error — just leave the name empty.
+        if (matJson.contains("name") && matJson["name"].is_string()) {
+            material.name = matJson["name"].get<std::string>();
         }
 
         // PBR metallic roughness
@@ -165,37 +371,24 @@ void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
                 material.roughnessFactor = pbr["roughnessFactor"];
             }
 
-            // Textures
-            if (pbr.contains("baseColorTexture")) {
-                int texIndex = pbr["baseColorTexture"]["index"];
-                if (data.root.contains("textures") && texIndex < data.root["textures"].size()) {
-                    int imageIndex = data.root["textures"][texIndex]["source"];
-                    if (data.root.contains("images") && imageIndex < data.root["images"].size()) {
-                        material.baseColorTexture = data.baseDir + std::string(data.root["images"][imageIndex]["uri"]);
-                    }
-                }
+            // Textures — resolved through ResolveImageTexturePath so GLB
+            // bufferView-backed images don't throw; see the helper's WHY
+            // comment at the top of this file.
+            if (pbr.contains("baseColorTexture") && pbr["baseColorTexture"].contains("index")) {
+                material.baseColorTexture = ResolveImageTexturePath(
+                    data.root, data.baseDir, pbr["baseColorTexture"]["index"].get<int>());
             }
 
-            if (pbr.contains("metallicRoughnessTexture")) {
-                int texIndex = pbr["metallicRoughnessTexture"]["index"];
-                if (data.root.contains("textures") && texIndex < data.root["textures"].size()) {
-                    int imageIndex = data.root["textures"][texIndex]["source"];
-                    if (data.root.contains("images") && imageIndex < data.root["images"].size()) {
-                        material.metallicRoughnessTexture = data.baseDir + std::string(data.root["images"][imageIndex]["uri"]);
-                    }
-                }
+            if (pbr.contains("metallicRoughnessTexture") && pbr["metallicRoughnessTexture"].contains("index")) {
+                material.metallicRoughnessTexture = ResolveImageTexturePath(
+                    data.root, data.baseDir, pbr["metallicRoughnessTexture"]["index"].get<int>());
             }
         }
 
         // Normal map
-        if (matJson.contains("normalTexture")) {
-            int texIndex = matJson["normalTexture"]["index"];
-            if (data.root.contains("textures") && texIndex < data.root["textures"].size()) {
-                int imageIndex = data.root["textures"][texIndex]["source"];
-                if (data.root.contains("images") && imageIndex < data.root["images"].size()) {
-                    material.normalTexture = data.baseDir + std::string(data.root["images"][imageIndex]["uri"]);
-                }
-            }
+        if (matJson.contains("normalTexture") && matJson["normalTexture"].contains("index")) {
+            material.normalTexture = ResolveImageTexturePath(
+                data.root, data.baseDir, matJson["normalTexture"]["index"].get<int>());
         }
 
         // Emissive
@@ -204,26 +397,21 @@ void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
             material.emissiveFactor = glm::vec3(emissive[0], emissive[1], emissive[2]);
         }
 
-        if (matJson.contains("emissiveTexture")) {
-            int texIndex = matJson["emissiveTexture"]["index"];
-            if (data.root.contains("textures") && texIndex < data.root["textures"].size()) {
-                int imageIndex = data.root["textures"][texIndex]["source"];
-                if (data.root.contains("images") && imageIndex < data.root["images"].size()) {
-                    material.emissiveTexture = data.baseDir + std::string(data.root["images"][imageIndex]["uri"]);
-                }
-            }
+        if (matJson.contains("emissiveTexture") && matJson["emissiveTexture"].contains("index")) {
+            material.emissiveTexture = ResolveImageTexturePath(
+                data.root, data.baseDir, matJson["emissiveTexture"]["index"].get<int>());
         }
 
-        if (matJson.contains("doubleSided")) {
-            material.doubleSided = matJson["doubleSided"];
+        if (matJson.contains("doubleSided") && matJson["doubleSided"].is_boolean()) {
+            material.doubleSided = matJson["doubleSided"].get<bool>();
         }
 
-        if (matJson.contains("alphaMode")) {
-            material.alphaMode = matJson["alphaMode"];
+        if (matJson.contains("alphaMode") && matJson["alphaMode"].is_string()) {
+            material.alphaMode = matJson["alphaMode"].get<std::string>();
         }
 
-        if (matJson.contains("alphaCutoff")) {
-            material.alphaCutoff = matJson["alphaCutoff"];
+        if (matJson.contains("alphaCutoff") && matJson["alphaCutoff"].is_number()) {
+            material.alphaCutoff = matJson["alphaCutoff"].get<float>();
         }
 
         model.materials.push_back(material);
@@ -259,6 +447,20 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
         return;
     }
 
+    // WHY the `.get<int>()` idiom on every bufferView/accessor index below:
+    //
+    // nlohmann::json's operator[] is a template, not a pair of fixed
+    // overloads, and the template SFINAE-dispatches based on how the key
+    // type converts. When you pass a `nlohmann::json` value directly
+    // (e.g. `bufferViews[accessor["bufferView"]]`), the compiler sees the
+    // argument has `operator std::string()` and can route to the string-key
+    // path — which at runtime throws
+    //   "[json.exception.type_error.305] cannot use operator[] with a
+    //    string argument with array"
+    // because the array doesn't have string keys. This was the second bug
+    // (after the base64 data URI one) that kept every cat.gltf from loading.
+    // Extracting the int explicitly with `.get<int>()` forces the
+    // integer-index overload and makes the intent unambiguous.
     const auto& accessors = data.root["accessors"];
     const auto& bufferViews = data.root["bufferViews"];
 
@@ -281,7 +483,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("POSITION")) {
                 int accessorIdx = attributes["POSITION"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -302,7 +504,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("NORMAL")) {
                 int accessorIdx = attributes["NORMAL"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -323,7 +525,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TANGENT")) {
                 int accessorIdx = attributes["TANGENT"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -344,7 +546,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TEXCOORD_0")) {
                 int accessorIdx = attributes["TEXCOORD_0"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -364,7 +566,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TEXCOORD_1")) {
                 int accessorIdx = attributes["TEXCOORD_1"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -384,7 +586,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("JOINTS_0")) {
                 int accessorIdx = attributes["JOINTS_0"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -404,7 +606,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("WEIGHTS_0")) {
                 int accessorIdx = attributes["WEIGHTS_0"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -424,7 +626,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (primitive.contains("indices")) {
                 int accessorIdx = primitive["indices"];
                 const auto& accessor = accessors[accessorIdx];
-                const auto& bufferView = bufferViews[accessor["bufferView"]];
+                const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
@@ -456,6 +658,30 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 }
             }
 
+            // Validate index buffer against vertex count BEFORE any downstream
+            // pass touches it. ExtractBufferData is an unchecked memcpy — if
+            // the glTF authors the bufferView offsets incorrectly (which happens
+            // with hand-built or legacy-tool-produced assets; see the
+            // shipping cat.gltf's bufferView 2 for a concrete regression case),
+            // the "indices" are just random bytes that happen to lie at that
+            // offset. Feeding those into GenerateTangents causes
+            // `vertices[i0]` with i0 in the 5-digit range — undefined access
+            // into std::vector storage, which is an instant SIGSEGV with zero
+            // stack context in Release builds. Fail loud here with the name +
+            // index that violated the invariant so CatEntity::loadModel's
+            // catch block surfaces a usable diagnostic.
+            const size_t vertexCount = mesh.vertices.size();
+            for (size_t triIndex = 0; triIndex < mesh.indices.size(); ++triIndex) {
+                if (mesh.indices[triIndex] >= vertexCount) {
+                    throw std::runtime_error(
+                        "mesh '" + mesh.name + "': index " +
+                        std::to_string(mesh.indices[triIndex]) + " at position " +
+                        std::to_string(triIndex) + " exceeds vertex count " +
+                        std::to_string(vertexCount) +
+                        " (asset has misaligned bufferView byteOffset or corrupt buffer)");
+                }
+            }
+
             // Generate tangents if not present
             if (!hasTangents && !mesh.vertices.empty() && !mesh.indices.empty()) {
                 GenerateTangents(mesh);
@@ -468,8 +694,13 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
 }
 
 void ModelLoader::GenerateTangents(Mesh& mesh) {
-    // Simple tangent generation (not MikkTSpace, but functional)
-    for (size_t i = 0; i < mesh.indices.size(); i += 3) {
+    // Precondition: ExtractMeshes validates indices-in-range BEFORE calling
+    // us, so direct vector operator[] is safe here. If a caller ever invokes
+    // this on an unvalidated mesh, the corruption surface is OOB reads in the
+    // vertex array, not a SIGSEGV on indices.size() % 3 != 0 — so also guard
+    // against a truncated triangle by rounding down to whole triangles.
+    const size_t wholeTriangleIndexCount = (mesh.indices.size() / 3) * 3;
+    for (size_t i = 0; i < wholeTriangleIndexCount; i += 3) {
         uint32_t i0 = mesh.indices[i];
         uint32_t i1 = mesh.indices[i + 1];
         uint32_t i2 = mesh.indices[i + 2];
@@ -609,10 +840,14 @@ void ModelLoader::ExtractAnimations(const GLTFData& data, Model& model) {
             int samplerIdx = channelJson["sampler"];
             const auto& sampler = animJson["samplers"][samplerIdx];
 
-            // Read input (times)
+            // Read input (times). Same `.get<int>()` rationale as in
+            // ExtractMeshes (see the long comment there): passing a raw
+            // nlohmann::json to another json array's operator[] can
+            // SFINAE-dispatch to the string-key overload and throw at
+            // runtime. Explicit int conversion makes the intent safe.
             int inputAccessor = sampler["input"];
             const auto& inputAcc = accessors[inputAccessor];
-            const auto& inputBV = bufferViews[inputAcc["bufferView"]];
+            const auto& inputBV = bufferViews[inputAcc["bufferView"].get<int>()];
 
             size_t inputCount = inputAcc["count"];
             size_t inputOffset = inputAcc.value("byteOffset", 0) + inputBV.value("byteOffset", 0);
@@ -625,7 +860,7 @@ void ModelLoader::ExtractAnimations(const GLTFData& data, Model& model) {
             // Read output (values)
             int outputAccessor = sampler["output"];
             const auto& outputAcc = accessors[outputAccessor];
-            const auto& outputBV = bufferViews[outputAcc["bufferView"]];
+            const auto& outputBV = bufferViews[outputAcc["bufferView"].get<int>()];
 
             size_t outputCount = outputAcc["count"];
             size_t outputOffset = outputAcc.value("byteOffset", 0) + outputBV.value("byteOffset", 0);

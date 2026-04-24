@@ -2,12 +2,42 @@
 #include "../components/EnemyComponent.hpp"
 #include "../components/HealthComponent.hpp"
 #include "../components/MovementComponent.hpp"
+#include "../entities/DogEntity.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Math.hpp"
+#include "../../engine/core/Logger.hpp"
 #include <cmath>
 #include <random>
 
 namespace CatGame {
+
+// Human-readable name for a wave state. Used only in log lines — lets the
+// playtest / portfolio log tell a story ("Spawning → InProgress → Completed
+// → Transition") instead of surfacing raw enum ordinals. Kept in-TU because
+// no other file needs to stringify WaveState today and we want the mapping
+// to stay adjacent to the enum in WaveSystem.hpp.
+static const char* waveStateName(WaveState s) {
+    switch (s) {
+        case WaveState::Spawning:   return "Spawning";
+        case WaveState::InProgress: return "InProgress";
+        case WaveState::Completed:  return "Completed";
+        case WaveState::Transition: return "Transition";
+    }
+    return "Unknown";
+}
+
+// Human-readable name for an enemy archetype. Same rationale as above:
+// the log is the only consumer, so we keep the mapping here rather than
+// bolting an extra method onto EnemyComponent.
+static const char* enemyTypeName(EnemyType t) {
+    switch (t) {
+        case EnemyType::Dog:      return "Dog";
+        case EnemyType::BigDog:   return "BigDog";
+        case EnemyType::FastDog:  return "FastDog";
+        case EnemyType::BossDog:  return "BossDog";
+    }
+    return "Unknown";
+}
 
 WaveSystem::WaveSystem(int priority)
     : System(priority)
@@ -112,6 +142,17 @@ void WaveSystem::startWave(int waveNumber) {
 
     transitionToState(WaveState::Spawning);
 
+    // Log the wave's difficulty budget BEFORE the callback fires so a
+    // portfolio / nightly viewer can see "wave 3 is going to push 8
+    // enemies with 1.2× health" instead of just "wave 3 started" followed
+    // by twenty silent seconds. boss/regular is a user-visible distinction
+    // too, so we surface it in the same line.
+    Engine::Logger::info(
+        std::string("[wave] prepared wave ") + std::to_string(currentWave_) +
+        " enemies=" + std::to_string(enemiesToSpawn_) +
+        " hp_scale=" + std::to_string(calculateHealthScaling(currentWave_)) +
+        " boss=" + (isBossWave(currentWave_) ? "yes" : "no"));
+
     // Trigger callback
     if (onWaveStart_) {
         onWaveStart_(currentWave_);
@@ -160,46 +201,58 @@ void WaveSystem::spawnEnemy() {
         }
     }
 
-    // Create enemy entity
-    auto enemy = ecs_->createEntity();
-
-    // Add transform
-    ecs_->emplaceComponent<Engine::Transform>(enemy, spawnPos);
-
-    // Add enemy component
-    ecs_->emplaceComponent<EnemyComponent>(enemy, enemyType, playerEntity_);
-
-    // Calculate health with scaling
+    // Delegate the full entity build (Transform + Enemy + Health + Movement
+    // + MeshComponent + Animator) to DogEntity::create. Previously this
+    // method hand-rolled only the first four components and skipped the
+    // mesh/animator entirely — which is why every dog rendered as an
+    // invisible collider before the Meshy asset work. Funnelling spawn
+    // through the DogEntity factory means:
+    //   1. Every variant automatically gets its correct Meshy GLB
+    //      (dog_regular / dog_fast / dog_big / dog_boss) via
+    //      modelPathForType().
+    //   2. Per-variant stats (health / moveSpeed / attackDamage / scale)
+    //      come from DogEntity::getStatsForType rather than being
+    //      duplicated here — no more drift between two copies.
+    //   3. Wave-progression health scaling stays in WaveSystem (the
+    //      scaling formula belongs to the wave game mode, not the entity
+    //      factory) and is threaded through as the healthMultiplier arg.
     float healthScaling = calculateHealthScaling(currentWave_);
+    CatEngine::Entity enemy =
+        DogEntity::create(ecs_, enemyType, spawnPos, playerEntity_, healthScaling);
+    if (enemy == CatEngine::NULL_ENTITY) {
+        return;
+    }
+
+    // Compute finalHealth for the log line below. DogEntity::getStatsForType
+    // is private, so re-derive the per-variant baseline here — this mirror
+    // is narrow (4 cases, no drift risk) and confined to a log string.
     float baseHealth = 50.0f;
-
     switch (enemyType) {
-        case EnemyType::Dog:
-            baseHealth = 50.0f;
-            break;
-        case EnemyType::BigDog:
-            baseHealth = 100.0f; // 2x health
-            break;
-        case EnemyType::FastDog:
-            baseHealth = 25.0f; // 0.5x health
-            break;
-        case EnemyType::BossDog:
-            baseHealth = 300.0f; // Boss health
-            break;
+        case EnemyType::Dog:      baseHealth = 50.0f;  break;
+        case EnemyType::BigDog:   baseHealth = 100.0f; break;
+        case EnemyType::FastDog:  baseHealth = 25.0f;  break;
+        case EnemyType::BossDog:  baseHealth = 300.0f; break;
     }
-
     float finalHealth = baseHealth * healthScaling;
-    ecs_->emplaceComponent<HealthComponent>(enemy, finalHealth);
-
-    // Add movement component
-    auto* enemyComp = ecs_->getComponent<EnemyComponent>(enemy);
-    if (enemyComp) {
-        ecs_->emplaceComponent<MovementComponent>(enemy, enemyComp->moveSpeed);
-    }
 
     // Track spawned enemy
     spawnedEnemies_.push_back(enemy);
     enemiesSpawned_++;
+
+    // Per-spawn log. This is the lowest-level event-triggered signal that
+    // the wave system is actually doing something between "wave started"
+    // and "enemy died / player died". Without it a silent 20s stretch
+    // looked identical whether spawns were failing, spawns were invisible,
+    // or enemies just weren't reaching the player yet. Fires at
+    // config_.spawnDelay intervals (default 0.5s × N enemies), so a single
+    // wave produces a handful of log lines — not a hot-path concern.
+    Engine::Logger::info(
+        std::string("[wave] spawn type=") + enemyTypeName(enemyType) +
+        " hp=" + std::to_string(static_cast<int>(finalHealth)) +
+        " pos=(" + std::to_string(spawnPos.x) +
+        "," + std::to_string(spawnPos.z) + ")" +
+        " wave=" + std::to_string(currentWave_) +
+        " remaining=" + std::to_string(enemiesToSpawn_));
 }
 
 Engine::vec3 WaveSystem::getSpawnPosition() const {
@@ -253,8 +306,20 @@ void WaveSystem::transitionToState(WaveState newState) {
         return;
     }
 
+    // Log BEFORE we mutate state_ so the line captures the real old→new
+    // pair. The Completed state in particular only lives for exactly one
+    // frame (updateInProgress detects empty spawnedEnemies_, flips to
+    // Completed, and updateTransition immediately bumps to Transition on
+    // the next frame), so without this log the state would be invisible
+    // to any observer polling at a coarser cadence than per-frame.
+    const WaveState oldState = state_;
     state_ = newState;
     stateTimer_ = 0.0f;
+
+    Engine::Logger::info(
+        std::string("[wave] state ") + waveStateName(oldState) +
+        " -> " + waveStateName(newState) +
+        " wave=" + std::to_string(currentWave_));
 }
 
 } // namespace CatGame
