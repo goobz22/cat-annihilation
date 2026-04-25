@@ -197,8 +197,27 @@ void* VulkanBuffer::Map(uint64_t offset, uint64_t size) {
         throw std::runtime_error("VulkanBuffer: Cannot map non-host-visible buffer");
     }
 
-    if (m_MappedData && !m_IsPersistentlyMapped) {
-        return m_MappedData; // Already mapped
+    // If the memory is already mapped (persistent or transient), return the
+    // cached pointer instead of re-issuing vkMapMemory. The Vulkan spec
+    // (VUID-vkMapMemory-memory-00678) forbids mapping memory that is already
+    // mapped — the second call returns VK_ERROR_MEMORY_MAP_FAILED on
+    // conformant drivers and triggers loud validation errors on layers. The
+    // pre-fix condition `m_MappedData && !m_IsPersistentlyMapped` was the
+    // exact inverse of what it should have been: it would hand back the
+    // cache pointer ONLY for non-persistent buffers, but persistent buffers
+    // (which are most host-visible buffers — the constructor auto-maps them)
+    // would fall through and call vkMapMemory again. The validation layer
+    // pinned this as a 7-frame race-on-shutdown without validation and a
+    // silent termination from the throw on the second Map() call below,
+    // because UIPass / SkyboxPass / PostProcessPass / ShadowPass all do
+    // direct `->Map()` on persistently-mapped uniform buffers every frame.
+    //
+    // The cached pointer always references the buffer's offset 0 (the
+    // constructor maps offset=0,size=VK_WHOLE_SIZE), so callers asking for
+    // a sub-range still see the right base. UpdateData() applies its own
+    // `+offset` to the byte pointer for the memcpy.
+    if (m_MappedData) {
+        return m_MappedData;
     }
 
     VkDevice device = m_Device->GetVkDevice();
@@ -210,9 +229,10 @@ void* VulkanBuffer::Map(uint64_t offset, uint64_t size) {
         throw std::runtime_error("VulkanBuffer: Failed to map buffer memory");
     }
 
-    if (!m_IsPersistentlyMapped) {
-        m_MappedData = data;
-    }
+    // Cache the pointer regardless of persistence. For non-persistent
+    // buffers Unmap() will clear it back to nullptr; for persistent ones
+    // it stays cached for the lifetime of the buffer (Unmap is a no-op).
+    m_MappedData = data;
 
     return data;
 }

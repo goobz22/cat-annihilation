@@ -196,7 +196,28 @@ bool VulkanSwapchain::CreateSwapchain(uint32_t width, uint32_t height) {
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // Swapchain image usage flags. We need three bits, not just COLOR_ATTACHMENT:
+    //   - COLOR_ATTACHMENT: every render pass that targets the swapchain
+    //   - TRANSFER_DST: Renderer::BeginFrame() does a vkCmdClearColorImage
+    //     to a per-frame fallback dark-blue colour BEFORE the first render
+    //     pass binds the image. Without TRANSFER_DST in the create info,
+    //     vkCmdClearColorImage is undefined behaviour — most drivers
+    //     produce a silent SIGSEGV in the post-first-frame window because
+    //     the layer-tracker accepts the layout transition (UNDEFINED →
+    //     TRANSFER_DST_OPTIMAL) but the image's actual memory binding
+    //     wasn't allocated for transfer-write. Validation layers loudly
+    //     report this as VUID-vkCmdClearColorImage-image-00002.
+    //   - TRANSFER_SRC: --frame-dump's CaptureSwapchainToPPM does a
+    //     vkCmdCopyImageToBuffer with the swapchain image as source. Same
+    //     UB story without the bit set; this was the regression that
+    //     gated the prior iteration's frame-dump readback.
+    //
+    // We don't gate TRANSFER_DST on a CLI flag because BeginFrame's clear
+    // path runs every frame for every swapchain image — toggling the bit
+    // off for non-dump runs would re-introduce the silent crash.
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                          | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                          | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     // Queue family indices - use graphics queue for presentation
     // For simplicity, assume graphics queue supports presentation (most GPUs do)
