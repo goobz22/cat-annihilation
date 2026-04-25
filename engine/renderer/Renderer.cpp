@@ -1,13 +1,17 @@
 #include "Renderer.hpp"
+#include "ImageCompare.hpp"
 #include "passes/UIPass.hpp"
 #include "passes/ScenePass.hpp"
 #include "../rhi/vulkan/VulkanRHI.hpp"
 #include "../rhi/vulkan/VulkanSwapchain.hpp"
 #include "../rhi/vulkan/VulkanCommandBuffer.hpp"
+#include "../rhi/vulkan/VulkanDevice.hpp"
+#include "../core/Logger.hpp"
 #include <vulkan/vulkan.h>
 #include <chrono>
 #include <iostream>
 #include <cstring>
+#include <vector>
 
 namespace CatEngine::Renderer {
 
@@ -659,11 +663,424 @@ bool Renderer::CreateSwapchain() {
 }
 
 bool Renderer::RecreateSwapchain() {
+    // SYNC NOTE — WHY this WaitIdle is mandatory at this layer:
+    //
+    // VulkanSwapchain's destructor (CleanupSyncObjects + CleanupSwapchain)
+    // unconditionally tears down the per-frame VkSemaphores, VkFences,
+    // VkFramebuffers, the UI VkRenderPass, and every VkImageView. Vulkan
+    // forbids destroying any of these while a queue submission still
+    // references them (VUID-vkDestroySemaphore-semaphore-05149,
+    // VUID-vkDestroyFramebuffer-framebuffer-00892,
+    // VUID-vkDestroyImageView-imageView-01026, etc.). On conformant
+    // drivers the destroy-then-reuse pattern manifests as a silent
+    // SIGSEGV from a subsequent vkCmdBeginRenderPass binding a freed
+    // VkImageView — exactly the post-paint crash the prior iterations
+    // chased and the validation-layer baseline this iteration captured
+    // (~9 frames in, then VK_VALIDATION ERROR salvo, then game dies).
+    //
+    // We have three callers: (1) Renderer::OnResize, (2) the out-of-date
+    // fallback inside BeginFrame, (3) Renderer::SetVSync. (1) does its
+    // own WaitIdle before calling us; (2) and (3) historically did not.
+    // Putting the WaitIdle here makes the function correct-by-construction
+    // — no caller can forget, no future caller will re-introduce the bug.
+    // The double-wait in the (1) path is a no-op (the second call returns
+    // immediately because the queue is already idle).
+    //
+    // Cost: a full vkDeviceWaitIdle on the swapchain-recreate path. This
+    // is acceptable because (a) recreates are infrequent (window resize,
+    // monitor switch, vsync toggle, OS DPI change), and (b) we're about
+    // to throw away every per-frame resource anyway — there is no useful
+    // GPU work to overlap with.
+    if (device) {
+        device->WaitIdle();
+    }
+
     if (swapchain) {
         device->DestroySwapchain(swapchain);
     }
 
-    return CreateSwapchain();
+    if (!CreateSwapchain()) {
+        return false;
+    }
+
+    // PASS-NOTIFY: Downstream passes (currently ScenePass) cache framebuffers
+    // built from the swapchain's VkImageViews. The destroy-then-create above
+    // produces FRESH image view handles even if the size hasn't changed, so
+    // the cached framebuffers are now dangling. ScenePass::OnResize fully
+    // rebuilds those framebuffers. UIPass intentionally re-fetches the
+    // current swapchain framebuffer/render-pass each Execute, so it doesn't
+    // need this notification — but if a future pass adds its own
+    // swapchain-derived attachments, it must hook in here.
+    //
+    // Renderer::OnResize already does this in addition to its own WaitIdle,
+    // so callers from the GLFW resize path get the notification twice
+    // (idempotent). The reason to also do it here is to cover the
+    // BeginFrame() VK_ERROR_OUT_OF_DATE_KHR fallback, which historically
+    // skipped the notification — reproducible failure mode prior to this
+    // fix: VUID-VkRenderPassBeginInfo-framebuffer-parameter from a stale
+    // attachment view, then silent SIGSEGV from
+    // vkCmdBeginRenderPass + freed VkImageView.
+    if (scenePass) {
+        scenePass->OnResize(renderWidth, renderHeight);
+    }
+    if (uiPass) {
+        uiPass->OnResize(renderWidth, renderHeight);
+    }
+
+    return true;
+}
+
+// ============================================================================
+// Offline capture (headless render golden-image CI)
+// ============================================================================
+
+namespace {
+
+// Narrow helper: the swapchain is almost always created with BGRA8_SRGB on
+// Windows/NVIDIA + the engine's default config (see CreateSwapchain above),
+// but a different present surface (Intel iGPU, a future RenderDoc overlay,
+// or a --linear-swapchain flag) could give us RGBA8. We support both, and
+// reject anything else with a warning so the caller doesn't get a PPM whose
+// channel ordering silently diverges from the golden reference.
+struct ReadbackFormat {
+    bool       supported;      // false → unknown format, skip capture
+    bool       swapRB;         // true  → BGRA pixels, swap bytes [0] and [2]
+};
+
+ReadbackFormat ClassifyReadbackFormat(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            return { true,  true  };
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            return { true,  false };
+        default:
+            return { false, false };
+    }
+}
+
+// Memory-type selection helper. The staging buffer for the readback needs
+// HOST_VISIBLE (so we can map it from the CPU) and, to avoid an explicit
+// vkInvalidateMappedMemoryRanges after the transfer completes, we also
+// request HOST_COHERENT so the GPU writes become visible to the CPU as soon
+// as the queue-wait-idle returns. On every integrated + discrete GPU the
+// engine has been profiled on (NVIDIA, Intel, AMD) a
+// HOST_VISIBLE|HOST_COHERENT memory type exists; on the one or two exotic
+// embedded setups where it doesn't, this function returns UINT32_MAX and
+// the caller falls back with a warning.
+uint32_t FindHostVisibleMemoryType(const VkPhysicalDeviceMemoryProperties& memProps,
+                                   uint32_t typeFilter) {
+    const VkMemoryPropertyFlags required =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+        if ((typeFilter & (1u << i)) != 0 &&
+            (memProps.memoryTypes[i].propertyFlags & required) == required) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
+} // namespace
+
+bool Renderer::CaptureSwapchainToPPM(const std::string& path) const {
+    // Golden-image regression capture. This runs OUTSIDE the Begin/End frame
+    // pair — the main loop has already exited and Present'd the final image
+    // — so we operate on the swapchain image handle directly and use a
+    // one-shot command buffer from the device's utility pool.
+    //
+    // Flow:
+    //   1. vkDeviceWaitIdle — guarantees the last Present's in-flight fence
+    //      has signalled and the image's contents are final.
+    //   2. Allocate a host-visible+coherent staging VkBuffer sized for
+    //      width*height*4 bytes (BGRA/RGBA 8-bit).
+    //   3. Allocate a one-shot command buffer from VulkanDevice's shared
+    //      command pool (GetCommandPool), record:
+    //         layout: PRESENT_SRC_KHR → TRANSFER_SRC_OPTIMAL
+    //         vkCmdCopyImageToBuffer
+    //         layout: TRANSFER_SRC_OPTIMAL → PRESENT_SRC_KHR (restore
+    //                 the canonical swapchain state in case a future
+    //                 resize code path re-reads the layout)
+    //   4. Submit + vkQueueWaitIdle on the graphics queue.
+    //   5. Map the staging buffer, de-swizzle BGRA→RGB (or RGBA→RGB),
+    //      pass the result to CatEngine::Renderer::ImageCompare::WritePPM.
+    //   6. Free temporaries.
+    //
+    // If any step fails we clean up partial resources and return false; the
+    // caller (currently game/main.cpp's --frame-dump path) logs the failure
+    // and exits with the same code the game would have used without the
+    // flag — the frame-dump feature is strictly additive.
+
+    if (!initialized || !device || !swapchain) {
+        Engine::Logger::warn("[framedump] renderer not initialized; skipping capture");
+        return false;
+    }
+
+    auto* vulkanRHI       = static_cast<RHI::VulkanRHI*>(device);
+    auto* vulkanDevice    = vulkanRHI ? vulkanRHI->GetDevice() : nullptr;
+    auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
+    if (!vulkanDevice || !vulkanSwapchain) {
+        Engine::Logger::warn("[framedump] Vulkan RHI downcast failed; skipping capture");
+        return false;
+    }
+
+    const VkDevice         vkDev    = vulkanDevice->GetVkDevice();
+    const VkPhysicalDevice vkPhys   = vulkanDevice->GetVkPhysicalDevice();
+    const VkCommandPool    cmdPool  = vulkanDevice->GetCommandPool();
+    const VkQueue          gfxQueue = vulkanDevice->GetGraphicsQueue();
+    if (vkDev == VK_NULL_HANDLE || cmdPool == VK_NULL_HANDLE ||
+        gfxQueue == VK_NULL_HANDLE) {
+        Engine::Logger::warn("[framedump] Vulkan handles missing; skipping capture");
+        return false;
+    }
+
+    const VkImage  srcImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
+    const VkFormat srcFmt   = vulkanSwapchain->GetVkFormat();
+    const uint32_t width    = vulkanSwapchain->GetWidth();
+    const uint32_t height   = vulkanSwapchain->GetHeight();
+    if (srcImage == VK_NULL_HANDLE || width == 0 || height == 0) {
+        Engine::Logger::warn("[framedump] swapchain image not capturable; skipping");
+        return false;
+    }
+
+    const ReadbackFormat fmtInfo = ClassifyReadbackFormat(srcFmt);
+    if (!fmtInfo.supported) {
+        // Logging the VkFormat integer so an operator can grep it against
+        // the Vulkan spec when triaging an unfamiliar surface — 152
+        // (B8G8R8A8_UNORM) and 50 (B8G8R8A8_SRGB) are by far the most
+        // common, everything else is a red flag for this code path.
+        Engine::Logger::warn(
+            "[framedump] unsupported swapchain VkFormat " +
+            std::to_string(static_cast<int>(srcFmt)) +
+            "; only 8-bit BGRA/RGBA formats are accepted");
+        return false;
+    }
+
+    // Before touching the swapchain image, make sure no queue still owns it.
+    // vkDeviceWaitIdle is a sledgehammer (it blocks on every queue), which
+    // is exactly right for an after-the-loop capture path — we're shutting
+    // down anyway, correctness beats micro-optimization.
+    vkDeviceWaitIdle(vkDev);
+
+    const VkDeviceSize bufferBytes =
+        static_cast<VkDeviceSize>(width) *
+        static_cast<VkDeviceSize>(height) *
+        4u;
+
+    VkBuffer       stagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+
+    // --- Create staging buffer ------------------------------------------
+    VkBufferCreateInfo bufCI = {};
+    bufCI.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufCI.size        = bufferBytes;
+    bufCI.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(vkDev, &bufCI, nullptr, &stagingBuffer) != VK_SUCCESS) {
+        Engine::Logger::error("[framedump] vkCreateBuffer failed");
+        return false;
+    }
+
+    VkMemoryRequirements memReq = {};
+    vkGetBufferMemoryRequirements(vkDev, stagingBuffer, &memReq);
+
+    VkPhysicalDeviceMemoryProperties memProps = {};
+    vkGetPhysicalDeviceMemoryProperties(vkPhys, &memProps);
+    const uint32_t memTypeIndex =
+        FindHostVisibleMemoryType(memProps, memReq.memoryTypeBits);
+    if (memTypeIndex == UINT32_MAX) {
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] no HOST_VISIBLE|HOST_COHERENT memory type found");
+        return false;
+    }
+
+    VkMemoryAllocateInfo allocMem = {};
+    allocMem.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocMem.allocationSize  = memReq.size;
+    allocMem.memoryTypeIndex = memTypeIndex;
+    if (vkAllocateMemory(vkDev, &allocMem, nullptr, &stagingMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkAllocateMemory failed");
+        return false;
+    }
+    if (vkBindBufferMemory(vkDev, stagingBuffer, stagingMemory, 0) != VK_SUCCESS) {
+        vkFreeMemory(vkDev, stagingMemory, nullptr);
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkBindBufferMemory failed");
+        return false;
+    }
+
+    // --- One-shot command buffer ----------------------------------------
+    VkCommandBufferAllocateInfo cbAlloc = {};
+    cbAlloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandPool        = cmdPool;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(vkDev, &cbAlloc, &cmd) != VK_SUCCESS) {
+        vkFreeMemory(vkDev, stagingMemory, nullptr);
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkAllocateCommandBuffers failed");
+        return false;
+    }
+
+    VkCommandBufferBeginInfo begin = {};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Barrier #1: PRESENT_SRC_KHR → TRANSFER_SRC_OPTIMAL so the driver
+    // allows us to name the image as the source of a copy. The src access
+    // mask is 0 because PRESENT_SRC_KHR is a "nothing wrote this" state
+    // from the layout-tracker's POV after the device-wait-idle above.
+    VkImageMemoryBarrier toSrc = {};
+    toSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.srcAccessMask       = 0;
+    toSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+    toSrc.oldLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toSrc.image               = srcImage;
+    toSrc.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region = {};
+    region.bufferOffset                    = 0;
+    region.bufferRowLength                 = 0;   // tight-packed
+    region.bufferImageHeight               = 0;   // tight-packed
+    region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel       = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount     = 1;
+    region.imageOffset                     = {0, 0, 0};
+    region.imageExtent                     = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuffer, 1, &region);
+
+    // Barrier #2: restore PRESENT_SRC_KHR so the swapchain's internal
+    // layout tracker (and any future code that depends on the post-loop
+    // image being "presentable") stays consistent. Strictly speaking the
+    // swapchain gets destroyed on Shutdown and the image is never
+    // re-presented, but restoring-on-the-way-out is a cheap correctness
+    // guarantee in case a future code path chains another capture / resize
+    // before teardown.
+    VkImageMemoryBarrier toPresent = toSrc;
+    toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toPresent.dstAccessMask = 0;
+    toPresent.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toPresent.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &toPresent);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit = {};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+
+    VkFence           inlineFence = VK_NULL_HANDLE;
+    VkFenceCreateInfo fci         = {};
+    fci.sType                     = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(vkDev, &fci, nullptr, &inlineFence);
+
+    const VkResult submitResult = vkQueueSubmit(gfxQueue, 1, &submit, inlineFence);
+    if (submitResult != VK_SUCCESS) {
+        vkDestroyFence(vkDev, inlineFence, nullptr);
+        vkFreeCommandBuffers(vkDev, cmdPool, 1, &cmd);
+        vkFreeMemory(vkDev, stagingMemory, nullptr);
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkQueueSubmit failed: " +
+                              std::to_string(static_cast<int>(submitResult)));
+        return false;
+    }
+
+    // 5 seconds is wildly generous for a 1920x1080 BGRA copy on every GPU
+    // we target. Timing out rather than blocking forever is a safety net
+    // against driver bugs that leave the fence unsignalled (observed on
+    // one Vulkan 1.2 driver with a stuck transfer queue).
+    const uint64_t timeoutNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
+    if (vkWaitForFences(vkDev, 1, &inlineFence, VK_TRUE, timeoutNs) != VK_SUCCESS) {
+        vkDestroyFence(vkDev, inlineFence, nullptr);
+        vkFreeCommandBuffers(vkDev, cmdPool, 1, &cmd);
+        vkFreeMemory(vkDev, stagingMemory, nullptr);
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkWaitForFences timeout (5s)");
+        return false;
+    }
+    vkDestroyFence(vkDev, inlineFence, nullptr);
+    vkFreeCommandBuffers(vkDev, cmdPool, 1, &cmd);
+
+    // --- Map + de-swizzle ------------------------------------------------
+    void* mapped = nullptr;
+    if (vkMapMemory(vkDev, stagingMemory, 0, bufferBytes, 0, &mapped) != VK_SUCCESS ||
+        mapped == nullptr) {
+        vkFreeMemory(vkDev, stagingMemory, nullptr);
+        vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+        Engine::Logger::error("[framedump] vkMapMemory failed");
+        return false;
+    }
+
+    // PPM is tight-packed 3-byte RGB; the swapchain is 4-byte RGBA/BGRA.
+    // We drop the alpha channel unconditionally — swapchain alpha is
+    // undefined for opaque presentation surfaces (GLFW's default) and
+    // would otherwise inject noise into the SSIM metric. The R/B swap
+    // handles BGRA formats.
+    CatEngine::Renderer::ImageCompare::Image outImage;
+    outImage.width  = width;
+    outImage.height = height;
+    outImage.rgb.resize(static_cast<size_t>(width) *
+                        static_cast<size_t>(height) * 3u);
+
+    const uint8_t* src = static_cast<const uint8_t*>(mapped);
+    uint8_t*       dst = outImage.rgb.data();
+    const size_t   pixelCount = static_cast<size_t>(width) *
+                                static_cast<size_t>(height);
+    if (fmtInfo.swapRB) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            dst[i * 3 + 0] = src[i * 4 + 2];   // R <- B
+            dst[i * 3 + 1] = src[i * 4 + 1];   // G <- G
+            dst[i * 3 + 2] = src[i * 4 + 0];   // B <- R
+        }
+    } else {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            dst[i * 3 + 0] = src[i * 4 + 0];   // R <- R
+            dst[i * 3 + 1] = src[i * 4 + 1];   // G <- G
+            dst[i * 3 + 2] = src[i * 4 + 2];   // B <- B
+        }
+    }
+
+    vkUnmapMemory(vkDev, stagingMemory);
+    vkFreeMemory(vkDev, stagingMemory, nullptr);
+    vkDestroyBuffer(vkDev, stagingBuffer, nullptr);
+
+    // --- Hand off to the PPM writer --------------------------------------
+    // WritePPM is already covered by 14 Catch2 cases + 2399 assertions,
+    // including dimension-mismatch rejection and byte-exact round-trip
+    // with ReadPPM — so anything that reaches here produces a file that
+    // ImageCompare::SSIMFromFiles(path, golden) will grade cleanly.
+    const bool ok =
+        CatEngine::Renderer::ImageCompare::WritePPM(path, outImage);
+    if (!ok) {
+        Engine::Logger::error("[framedump] WritePPM failed for path '" + path + "'");
+        return false;
+    }
+
+    Engine::Logger::info("[framedump] wrote " +
+                         std::to_string(width) + "x" + std::to_string(height) +
+                         " PPM to '" + path + "' (" +
+                         std::to_string(bufferBytes / 1024u) + " KB mapped, " +
+                         std::to_string(outImage.rgb.size() / 1024u) + " KB on disk before header)");
+    return true;
 }
 
 } // namespace CatEngine::Renderer
