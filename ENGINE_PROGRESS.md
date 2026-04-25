@@ -5397,3 +5397,146 @@ frame clear legal.
 Once the resize path is clean, the longer-than-15 s playtests should
 reach wave 2 / kills / first level-up — visible gameplay progression
 the user-directive scoreboard can grade.
+
+## 2026-04-25 ~05:50 UTC — Fix swapchain-recreate destroy-while-in-use + ScenePass framebuffer-rebuild
+
+**What**: Acted on the prior iteration's explicit handoff — diagnose the
+swapchain-rebuild destroy-while-in-use synchronization. Two bugs in one
+iteration:
+
+1. Renderer::RecreateSwapchain destroyed the VulkanSwapchain (and via
+   its destructor, every per-frame VkSemaphore / VkFence /
+   VkFramebuffer / VkRenderPass / VkImageView) without
+   vkDeviceWaitIdle first. Three callers — OnResize, the
+   out-of-date fallback inside BeginFrame (line 136), and SetVSync —
+   only OnResize had its own WaitIdle. The other two paths
+   triggered VUID-vkDestroySemaphore-semaphore-05149 and friends.
+   Conformant drivers (validation layer was the smoking gun)
+   reported the exact VUIDs; without validation the failure mode was
+   silent SIGSEGV from a subsequent vkCmdBeginRenderPass binding a
+   freed VkImageView.
+2. ScenePass::OnResize early-out at "if (width == m_width && height
+   == m_height) return;" — this skipped the framebuffer rebuild on
+   any swapchain recreate that didn't change dimensions. But a
+   recreate produces brand-new VkImageView handles even at the same
+   size, leaving m_framebuffers referencing destroyed views. Next
+   vkCmdBeginRenderPass then fired
+   VUID-VkRenderPassBeginInfo-framebuffer-parameter. And
+   RecreateSwapchain never notified ScenePass from the
+   BeginFrame-fallback path anyway, only from OnResize.
+
+**Why**: Step-zero handoff from prior iter (~05:30 UTC). Without longer
+playtests the user-directive scoreboard ("does the game look visibly
+different and better") can't be evaluated at all — game was dying
+within 9 frames of the first paint.
+
+**Files touched**:
+- engine/renderer/Renderer.cpp (RecreateSwapchain): WaitIdle
+  before destroy; on success, notify scenePass->OnResize +
+  uiPass->OnResize so downstream caches get fresh swapchain image
+  view handles. WHY-comment cites every relevant VUID + the rationale
+  for putting WaitIdle here vs. at the call sites + the cost analysis
+  (recreate is rare, full WaitIdle is fine).
+- engine/renderer/passes/ScenePass.cpp (OnResize): drop the
+  dimension early-out; always rebuild framebuffers + depth resources.
+  WHY-comment names the validation signature this targets so a future
+  reader doesn't re-introduce the optimization without re-fetching
+  current image views first.
+
+**Verification** (this iteration, in chronological order):
+1. cat.ts build (incremental, after fix-1): 10/10 green, ~115 s.
+2. Playtest, 60 s autoplay, with validation, with frame-dump (path
+   C:/.../AppData/Local/Temp/state/iter-after-passnotify.ppm):
+   - Reached **wave 3 / 15 kills / level 2 / hp=295/400 / xp=115/150**
+     after 3538 frames, exit=0, "Shutdown Complete".
+   - Frame-dump captured: **5,672,032 bytes / PPM, 1920x1080**.
+   - Validation noise reduced from the prior iter's swapchain-recreate
+     destroy errors to 5x vkQueueSubmit semaphore-may-still-be-in-use
+     (residual swapchain semaphore-ownership bug, separate fix) + 5x
+     vkDestroyDevice shutdown leak warnings (BitmapFontAtlas image+
+     view+memory + 2 PipelineLayouts, pre-existing). The
+     destroy-while-in-use semaphore/fence/framebuffer/renderpass/
+     imageview salvo from before the fix is GONE.
+3. cat.ts build (incremental, after fix-2): 11/11 green, ~86 s.
+4. cat.ts validate: 1 issue, severity 2, the long-standing
+   path-with-spaces clang frontend bug on
+   tests/integration/test_golden_image.cpp's
+   CAT_GOLDEN_IMAGE_DIR / CAT_FRAMEDUMP_CANDIDATE_PATH macros.
+   NOT a regression from this iteration.
+
+**Visible delta (before -> after)** — the user-directive scoreboard moved.
+Before this iteration: game dies silently within ~9 frames of first
+paint, no heartbeat past frame 0, no waves spawned, no kills, no
+visual gameplay to grade. After this iteration: game runs 60 s at
+60 fps, three different dog variants visibly load+render in the same
+session (dog_regular.glb, dog_fast.glb, dog_big.glb — all three
+spawning across waves 1-3, satisfying one of the user-directive's
+explicit examples), 15 enemies killed, level-up to lvl 2, wave-2 ->
+wave-3 transitions complete, frame-dump PPM captured for the visual
+diff log. Commit 067b5e0.
+
+**Cost note**: Both fixes are surgical and well-localized. The
+WaitIdle in RecreateSwapchain costs one full device-stall per
+swapchain recreate — recreates are infrequent (window resize, monitor
+switch, vsync toggle, OS DPI change), so the per-frame steady-state
+cost is zero. Always-rebuild in ScenePass::OnResize is also rare-path
+work; per-frame cost zero.
+
+**What is NOT yet done (next iteration's targets, in order)**:
+
+- **Diagnose the no-validation --frame-dump timing crash**. With
+  --validation ON the playtest reaches wave 3 + captures a PPM
+  cleanly. With --validation OFF and --frame-dump enabled, the
+  game silently dies right after the first-frame survey log line —
+  no stderr, no shutdown traces, exit code masked by the launcher.
+  The flag --frame-dump is a parse-only string that doesn't
+  affect runtime until POST-loop, so this can only be a timing /
+  race condition that the validation layer's mutex latency
+  papers over. Concrete next steps: (a) reproduce with
+  --frame-dump=PATH --max-frames 30 and a Logger::info trail
+  at every major sub-system tick to triangulate WHICH frame /
+  WHICH subsystem dies. (b) If still silent, run under WinDbg
+  with cdb -G so the access violation is captured with a real
+  stack. (c) Hypothesis: Renderer::CaptureSwapchainToPPM (lines
+  728+) requires VK_BUFFER_USAGE_TRANSFER_DST_BIT on the staging
+  buffer + TRANSFER_SRC_BIT on the swapchain image (we now have
+  the latter). If a creation-time check on --frame-dump is
+  missing for the staging path, the readback prep work might race
+  the first frame's command buffer.
+
+- **Fix the residual swapchain semaphore in-use validation
+  errors**. Validation now reports
+  vkQueueSubmit pSignalSemaphores[0] (VkSemaphore X) is being
+  signaled by VkQueue Y, but it may still be in use by
+  VkSwapchainKHR Z[MainSwapchain]. This is the swapchain owning
+  the per-frame semaphores while a present is still in flight on
+  the OLD swapchain at the moment of recreate. Fix is to either
+  (a) drain the present queue before destroying the swapchain, or
+  (b) move semaphore ownership out of the swapchain into a
+  separate FrameResources struct that survives recreate.
+
+- **Fix the shutdown leaks** (BitmapFontAtlas image+memory+view +
+  2 PipelineLayouts). Cosmetic — they don't affect runtime — but
+  they're pollution in the validation stream when triaging future
+  bugs.
+
+- **Then root-cause the cycler timing crash** (still gated off via
+  kIdleVariantCyclingEnabled = false in game/CatAnnihilation.cpp).
+  With the build-state regression resolved AND the swapchain
+  recreate fixed, the diagnostic recipe documented in the older
+  iteration's note becomes runnable again.
+
+- **GPU skinning replaces CPU skinning**. With sustained 60 fps
+  reached, the next visible-progress step is multiplying the entity
+  count beyond the current 17 skinned cats + dogs.
+
+- **Textured PBR pass**. Meshy GLBs have textures; right now the
+  shading path likely tints flat (per-cat color override). Binding
+  the GLB-supplied basecolor / normal / metallic-roughness textures
+  through the descriptor set is the multiplier on per-entity tints.
+
+**Next**: Diagnose the no-validation --frame-dump timing crash with
+the Logger::info-trail technique above. With validation ON the
+playtest is robust enough to grade the user-directive scoreboard from
+PPM diffs; without validation the path is fragile and blocks
+unattended CI.
