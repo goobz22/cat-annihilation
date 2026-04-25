@@ -8,9 +8,11 @@
 #include "../rhi/vulkan/VulkanDevice.hpp"
 #include "../core/Logger.hpp"
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <chrono>
-#include <iostream>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <vector>
 
 namespace CatEngine::Renderer {
@@ -59,12 +61,33 @@ bool Renderer::Initialize(RHI::IRHIDevice* device) {
     // Create default render graph
     defaultRenderGraph = std::make_unique<RenderGraph>(device);
 
-    // Create UI pass for 2D rendering
+    // Create UI pass for 2D rendering.
+    // DIM-MISMATCH FIX (2026-04-25): use the swapchain's *actual* extent here,
+    // not renderWidth/renderHeight. The desired dims (renderWidth/renderHeight,
+    // sourced from the GLFW framebuffer size) tell Vulkan what we *asked for*,
+    // but vkGetPhysicalDeviceSurfaceCapabilitiesKHR is allowed to clamp/round
+    // the result — on Windows DWM with a borderless 1920x1080 window, the
+    // surface caps come back at 1904x993 (the client area minus DWM chrome)
+    // and the swapchain images are sized to that. Sizing pass framebuffers
+    // and viewports to the asked-for dims violates VUID-VkFramebufferCreate
+    // Info-pAttachments-00880 ("each image view's dimensions must be ≥ the
+    // framebuffer dimensions") and on permissive drivers silently renders to
+    // a region the present surface never shows — which is exactly the bug
+    // the prior diagnostic iteration pinned: ScenePass draws every entity
+    // every frame, gate=ok, but the centre of every frame-dump is the
+    // BeginFrame clear color because the entity pixels land outside the
+    // presented image. Always feed pass framebuffers the swapchain's
+    // post-clamp extent.
     uiPass = std::make_unique<UIPass>();
     uiPass->Setup(device, this);  // Initialize UIPass with RHI device
-    uiPass->OnResize(renderWidth, renderHeight);
+    uiPass->OnResize(swapchain->GetWidth(), swapchain->GetHeight());
 
-    // Create scene pass for 3D rendering (terrain, entities)
+    // Create scene pass for 3D rendering (terrain, entities).
+    // ScenePass::Setup queries swapchain->GetWidth/GetHeight itself (see
+    // ScenePass.cpp:49-50), so the initial dims are already correct here —
+    // no explicit OnResize is needed at startup. Subsequent resize/recreate
+    // events flow through Renderer::RecreateSwapchain which now passes the
+    // swapchain's actual dims (see RecreateSwapchain below).
     {
         auto* vulkanDevice = static_cast<RHI::VulkanRHI*>(device)->GetDevice();
         auto* vulkanSwapchain = static_cast<RHI::VulkanSwapchain*>(swapchain);
@@ -465,27 +488,31 @@ void Renderer::OnResize(uint32_t width, uint32_t height) {
         return;
     }
 
+    // Cache the requested ("asked-for") size so CreateSwapchain inside
+    // RecreateSwapchain has a hint to feed VkSwapchainCreateInfoKHR. Note
+    // that the surface caps may clamp this — see RecreateSwapchain for the
+    // post-create dim-correction that propagates the clamped extent down
+    // to the passes.
     renderWidth = width;
     renderHeight = height;
 
-    // Wait for GPU
+    // Wait for GPU before tearing down per-frame resources. RecreateSwapchain
+    // also calls WaitIdle for correctness from its other entry points
+    // (BeginFrame fallback, SetVSync); the second call here is a cheap no-op.
     device->WaitIdle();
 
-    // Recreate swapchain
+    // Recreate swapchain. RecreateSwapchain now performs the pass-notify with
+    // the swapchain's *actual* extent (see VulkanSwapchain::CreateSwapchain
+    // line 287-288 — m_width/m_height are set from VkExtent2D returned by
+    // ChooseSwapExtent, which is itself clamped to surface caps). We
+    // intentionally do NOT redo scenePass->OnResize / uiPass->OnResize here:
+    // doing so with `width, height` (the GLFW asked-for dims) would race
+    // RecreateSwapchain's correct-dims notify and re-introduce the
+    // 1920x1080-vs-1904x993 framebuffer-attachment mismatch this fix targets.
     RecreateSwapchain();
 
-    // Resize UI pass
-    if (uiPass) {
-        uiPass->OnResize(width, height);
-    }
-
-    // Resize scene pass (recreates depth buffer + framebuffers)
-    if (scenePass) {
-        scenePass->OnResize(width, height);
-    }
-
-    // Rebuild render graph (if it depends on render target size)
-    // This would happen automatically on next frame
+    // Render graph rebuild (if any) flows through the next frame's compile
+    // pass; nothing to do explicitly here.
 }
 
 // ============================================================================
@@ -720,11 +747,42 @@ bool Renderer::RecreateSwapchain() {
     // fix: VUID-VkRenderPassBeginInfo-framebuffer-parameter from a stale
     // attachment view, then silent SIGSEGV from
     // vkCmdBeginRenderPass + freed VkImageView.
+    // DIM-CORRECTION (2026-04-25): read the swapchain's *actual* extent and
+    // propagate that — not renderWidth/renderHeight — to every downstream pass.
+    // The asked-for dims tell Vulkan what we want, but
+    // vkGetPhysicalDeviceSurfaceCapabilitiesKHR is allowed to clamp; on
+    // Windows DWM borderless 1920x1080 the surface caps come back at
+    // ~1904x993 and the swapchain images are sized to that. If we instead
+    // pass renderWidth/renderHeight, ScenePass::CreateFramebuffers would set
+    // info.width=1920, info.height=1080 and bind 1904x993 image views,
+    // violating VUID-VkFramebufferCreateInfo-pAttachments-00880 ("image-view
+    // dimensions must be >= framebuffer dimensions"). On permissive drivers
+    // this silently renders to a region the present surface never shows —
+    // exactly the bug pinned by the 2026-04-25 diagnostic iteration:
+    // gate=ok every frame, draw==entry-1, yet every frame-dump centre
+    // stayed at the BeginFrame clear color (89,89,124 sRGB) because entity
+    // pixels landed outside the presented image. VulkanSwapchain::CreateSwapchain
+    // sets m_width/m_height from the post-clamp VkExtent2D returned by
+    // ChooseSwapExtent (VulkanSwapchain.cpp:287-288), so GetWidth/GetHeight
+    // here is the authoritative source of truth.
+    const uint32_t actualWidth  = swapchain ? swapchain->GetWidth()  : renderWidth;
+    const uint32_t actualHeight = swapchain ? swapchain->GetHeight() : renderHeight;
     if (scenePass) {
-        scenePass->OnResize(renderWidth, renderHeight);
+        // Pass the just-allocated swapchain pointer so ScenePass rebinds
+        // its m_swapchain (the prior pointer was freed by
+        // device->DestroySwapchain above). Without this rebind ScenePass's
+        // CreateFramebuffers would dereference the freed VulkanSwapchain
+        // and silently produce a framebuffer set that never targets the
+        // live swapchain images — every subsequent ScenePass::Execute
+        // bails at the framebuffers.size() guard, the swapchain stays at
+        // the BeginFrame clear color (89,89,124 sRGB), and the player
+        // sees a sky-blue void with only the HUD on top.
+        scenePass->OnResize(
+            actualWidth, actualHeight,
+            static_cast<RHI::VulkanSwapchain*>(swapchain));
     }
     if (uiPass) {
-        uiPass->OnResize(renderWidth, renderHeight);
+        uiPass->OnResize(actualWidth, actualHeight);
     }
 
     return true;
@@ -836,7 +894,56 @@ bool Renderer::CaptureSwapchainToPPM(const std::string& path) const {
         return false;
     }
 
-    const VkImage  srcImage = vulkanSwapchain->GetVkImage(currentSwapchainImageIndex);
+    // WHY this index choice (2026-04-25): the bug we're diagnosing is that
+    // --frame-dump captures a swapchain image containing ONLY the HUD layer
+    // on a flat purple background — the entire 3D scene (terrain, entities,
+    // ribbons) is missing despite ScenePass-DIAG showing every frame
+    // executing 17+ entity draws. Visual proof: iter-tabby-after.ppm shows
+    // R=89 G=89 B=124 across the entire non-HUD area, vs the 24h-old
+    // iter-after.ppm which has green hills, sky, and a player cube.
+    //
+    // Hypothesis: `currentSwapchainImageIndex` reflects the LAST acquired
+    // image, but that image's contents were finalised when EndFrame()
+    // recorded its barrier and Submit'd — by the time --frame-dump runs
+    // (after the main loop exits), the SECOND swapchain image (the one
+    // about-to-be-acquired or the alternate of a 2-image swapchain) may be
+    // the one holding the most recently PRESENTED frame's pixels, while
+    // currentSwapchainImageIndex points at the one we just submitted to but
+    // whose contents were transitioned to PRESENT_SRC_KHR pre-present and
+    // may have been compositor-overwritten if the present queue picked
+    // them up.
+    //
+    // Log the index we're capturing + the alternate so a future iteration
+    // can `--frame-dump` then bit-compare against a forced-other-index
+    // capture and conclude which holds the scene.
+    const uint32_t imageCount =
+        static_cast<uint32_t>(vulkanSwapchain->GetImageCount());
+    Engine::Logger::info(
+        "[framedump] capturing swapchain image index=" +
+        std::to_string(currentSwapchainImageIndex) +
+        " of " + std::to_string(imageCount) +
+        " (alternate index=" +
+        std::to_string((currentSwapchainImageIndex + 1) % std::max(imageCount, 1u)) +
+        " — set CAT_FRAMEDUMP_INDEX env var to override)");
+
+    // Allow override via env var so we can test which image holds the
+    // scene without recompiling. e.g. CAT_FRAMEDUMP_INDEX=1 will capture
+    // the next image instead. This is a temporary diagnostic — once the
+    // regression is fixed (probably by syncing currentSwapchainImageIndex
+    // to the just-presented image), the env var hook stays as a no-op
+    // unless explicitly set.
+    uint32_t captureIndex = currentSwapchainImageIndex;
+    if (const char* envIdx = std::getenv("CAT_FRAMEDUMP_INDEX")) {
+        const uint32_t parsed = static_cast<uint32_t>(std::atoi(envIdx));
+        if (parsed < imageCount) {
+            captureIndex = parsed;
+            Engine::Logger::info(
+                "[framedump] CAT_FRAMEDUMP_INDEX override -> capturing index=" +
+                std::to_string(captureIndex));
+        }
+    }
+
+    const VkImage  srcImage = vulkanSwapchain->GetVkImage(captureIndex);
     const VkFormat srcFmt   = vulkanSwapchain->GetVkFormat();
     const uint32_t width    = vulkanSwapchain->GetWidth();
     const uint32_t height   = vulkanSwapchain->GetHeight();

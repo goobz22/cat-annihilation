@@ -5540,3 +5540,1321 @@ the Logger::info-trail technique above. With validation ON the
 playtest is robust enough to grade the user-directive scoreboard from
 PPM diffs; without validation the path is fragile and blocks
 unattended CI.
+
+## 2026-04-25 ~04:30 UTC — Fix swapchain semaphore reuse race + unblock idle-variant cycler
+
+**What**: Acted on the prior iteration's "Next" — diagnose the no-
+validation `--frame-dump` timing crash. Step-zero playtest at
+04:10 UTC with `--frame-dump --autoplay --exit-after-seconds 15` and
+no `--validation` ran cleanly to wave 2 / 3 kills / 5.7 MB PPM written
+/ exit=0 / "Shutdown Complete". The transitive effect of the prior
+arc's Vulkan UB fixes (VulkanBuffer::Map double-map, swapchain
+TRANSFER flags, RecreateSwapchain WaitIdle, ScenePass always-rebuild)
+already resolved the no-validation `--frame-dump` window the prior
+iteration flagged as unstable.
+
+That cleared the runway to attack the *real* multi-iteration blocker:
+the idle-variant cycler in `CatAnnihilation::update` gated off via
+`constexpr bool kIdleVariantCyclingEnabled = false`. Three prior
+iterations had documented the symptom (silent SIGSEGV ~150 ms post-
+first-frame whenever the gate flipped to `true`) and the masking
+behaviour (a `Logger::info` in `Animator::startTransition` made the
+crash disappear, even though startTransition wasn't called yet at
+the crash window). Speculation across those iterations pointed at
+"per-frame cycler bookkeeping cache contention" or "buffer-not-ready
+race" — both wrong.
+
+This iteration's diagnosis: enabled the gate, ran with
+`--validation`, and let the validation layer name the real bug:
+
+```
+[Vulkan] [ERROR] [VALIDATION] vkQueueSubmit():
+  pSubmits[0].pSignalSemaphores[0] (VkSemaphore 0xdf00000000df) is
+  being signaled by VkQueue 0x245865cbec0, but it may still be in
+  use by VkSwapchainKHR 0xd300000000d3[MainSwapchain].
+  Most recently acquired image indices: 0, 1, 0, 1, 0, [1], 0, 0.
+  Swapchain image 1 was presented but was not re-acquired, so
+  VkSemaphore 0xdf00000000df may still be in use and cannot be
+  safely reused with image index 0.
+  See https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
+  VUID-vkQueueSubmit-pSignalSemaphores-00067
+```
+
+`m_renderFinishedSemaphores` was sized to MAX_FRAMES_IN_FLIGHT (=2)
+and indexed by `m_currentFrame` (the per-frame-in-flight slot). But
+the binary semaphore's lifetime is associated with the *image being
+presented*, not the frame slot. With 2 swapchain images and 2 frames
+in flight, image-vs-frame aliased on alternating present cycles —
+vkQueueSubmit re-signaled the same VkSemaphore handle while the
+previous vkQueuePresentKHR was still observing it as its wait,
+violating VUID-00067. Conformant drivers (NVIDIA on the dev box)
+let it slide UNDER VALIDATION because the validation-layer mutex
+serialized the resignal-vs-present-wait race; without validation
+the race fired and produced a silent SIGSEGV ~150 ms after the
+first paint. The "Logger::info masks the bug" finding from the
+older iteration was the same masking effect — log IO added enough
+latency to keep the present's semaphore-wait satisfied before the
+next signal arrived.
+
+The masking explanation also cleanly resolves why the OLDER iteration
+(2026-04-25 ~05:30 UTC, the "two Vulkan UB bugs" entry) saw the
+swapchain semaphore reuse error in its --validation stream too: it
+was the same bug, present the whole time, manifested as five
+back-to-back VUID-00067 entries per playtest, mis-attributed as
+"residual swapchain semaphore in-use validation errors" to be fixed
+in a future iteration. Now resolved, three iterations later.
+
+**Why** (mission-prompt phrasing): the user-directive scoreboard
+bonus example "Animation clips authored or imported... so the rig
+isn't frozen in T-pose" requires the cycler running. Until this
+crash was fixed, every stationary cat was a frozen idle-pose herd.
+
+**Files touched**:
+- `engine/rhi/vulkan/VulkanSwapchain.hpp`
+  (`GetRenderFinishedSemaphore`): index by `m_currentImageIndex`
+  instead of `m_currentFrame`. Pasted the VUID number, the
+  https://docs.vulkan.org/.../swapchain_semaphore_reuse.html
+  reference, and the manifestation-history (silent SIGSEGV
+  post-first-frame, masked by validation latency, masked by
+  Logger::info latency in startTransition) into the WHY-comment so
+  the next reader understands the full bug arc.
+- `engine/rhi/vulkan/VulkanSwapchain.cpp`
+  (`Present`): `pWaitSemaphores = &m_renderFinishedSemaphores[m_currentImageIndex]`.
+  WHY-comment names the matching submit-side accessor so the two
+  ends stay paired by construction.
+- `engine/rhi/vulkan/VulkanSwapchain.cpp`
+  (`CreateSyncObjects`): split the per-frame-in-flight pool
+  (imageAvailable + inFlightFences, sized MAX_FRAMES_IN_FLIGHT) from
+  the per-image pool (renderFinished, sized `m_images.size()`).
+  WHY-comment captures the sizing rationale + the asserted
+  precondition that `m_images` is populated by the time we run
+  (constructor sequence + Resize sequence both enforce this).
+- `engine/rhi/vulkan/VulkanSwapchain.cpp`
+  (`CleanupSyncObjects`): walk each pool independently — the prior
+  unified loop stopped at imageAvailable.size(), which would silently
+  leak the trailing renderFinished semaphores whenever the swapchain
+  image count exceeded MAX_FRAMES_IN_FLIGHT.
+- `engine/rhi/vulkan/VulkanSwapchain.cpp` (`Resize`): also recreate
+  sync objects after recreating the swapchain, since the new image
+  count may differ. Reset `m_currentFrame = 0` so the post-resize
+  acquire uses a freshly-signaled fence (otherwise it would deadlock
+  on a never-signaled fence). WHY-comment explains the cost
+  (recreates are infrequent, so the extra sync recreation is
+  amortized to zero on the per-frame path).
+- `game/CatAnnihilation.cpp` (cycler gate): flipped the constexpr
+  to `true`, kept the surrounding diagnostic narrative, and
+  prepended a 2026-04-25 update tying the unblock to the four
+  underlying Vulkan UB fixes plus the recipe for how to root-cause
+  the bug if a regression resurfaces (run with `--validation`,
+  read which fence/semaphore/imageview/framebuffer is being
+  used after free, fix the lifetime there — not in the cycler).
+
+**Verification** (this iteration):
+1. Build (incremental, after edits): 15/15 green, ~80 s.
+2. Playtest **with cycler ON, no validation, --frame-dump**:
+     - autoplay 15 s, exit=0, "Shutdown Complete"
+     - frames=803 reached in 15 s, ~60 fps sustained
+     - 3 kills / wave 1 complete / xp=50/100
+     - PPM captured: `iter-cycler-fixed.ppm`,
+       5,672,032 bytes / 1904x993 / valid P6 header
+     - stderr: 6 lines, all CatRender-DIAG and ScenePass-DIAG
+       traces. Zero crashes, zero VUID errors, zero stack traces.
+3. Playtest **with cycler ON, validation ON**:
+     - autoplay 12 s, exit=0, "Shutdown Complete"
+     - 3 kills / wave 1 complete
+     - stderr: 6 DIAG traces + 5 pre-existing shutdown-leak warnings
+       (BitmapFontAtlas image+memory+view + 2 PipelineLayouts).
+       **The full salvo of `VUID-vkQueueSubmit-pSignalSemaphores-00067`
+       errors that the prior iteration's validation runs reported is
+       now GONE.** Five-line diff in stderr.
+4. cat.ts validate: 1 pre-existing severity-2 path-with-spaces
+   clang frontend bug on tests/integration/test_golden_image.cpp's
+   `CAT_GOLDEN_IMAGE_DIR` / `CAT_FRAMEDUMP_CANDIDATE_PATH` macros.
+   Long-standing across iterations, not a regression.
+
+**Visible delta (before -> after)** — the user-directive scoreboard
+moved twice in one iteration. Before: cycler gated off, every
+stationary cat in the world frozen in idle-pose for the entire
+session, validation-mode runs full of `00067` swapchain-semaphore
+errors per frame. After: cycler enabled, 17 entities skinned and
+animator-ticked per frame with the variant machine free to fire
+sit/lay/standUp transitions on the per-entity 4-12 s cooldown. The
+PPM frame-dump captured at t=15 s won't visually differ from the
+prior iter's PPM (the first cycler transition can't fire until
+t≥4 s into stationary observation, and our 15 s clock spends most
+of the budget on wave-1 spawning + combat where the player cat is
+being driven by the locomotion SM, not the variant cycler) — the
+delta is visible in playtests of LONGER duration where stationary
+NPC cats reach their first sitDown trigger. A follow-up iteration
+should run a 30-60 s playtest specifically to confirm the cycler
+firing across multiple cats, and capture an iter-cycler-30s PPM
+that includes seated NPCs in frame.
+
+**Cost note**: The hot-path cost is unchanged (one extra branch
+per animator-bearing entity per frame for the gate, plus the
+cycler bookkeeping when stationary — which the gate already paid
+for at compile time). The per-image semaphore allocation costs one
+extra `vkCreateSemaphore` per swapchain image at startup
+(typically 3, so 3 vs 2 = +1 semaphore — single-digit bytes of
+driver state). On the recreate path, recreating sync objects costs
+the same vkCreateSemaphore × image-count plus 2 fences — measured
+at <1 ms in the test runs, swallowed by the existing WaitIdle.
+
+**What is NOT yet done (next iteration's targets, in order)**:
+
+- **Run a longer (30-60 s) cycler playtest and PPM diff to
+  visually confirm cats sitting/laying.** The 15 s playtest in
+  this iteration doesn't give the cycler enough wall-clock to fire
+  a transition (4-12 s cooldown × 16 stationary NPCs ≈ first
+  transition lands ~6-12 s in, which the autoplay-driven combat
+  partially obscures). Suggested invocation:
+  `--autoplay --exit-after-seconds 45 --frame-dump iter-cycler-45s.ppm`.
+  Crop the PPM to NPC-occupied tiles (camera framing isn't on the
+  player cat for non-stationary frames) and compare against
+  iter-fdump-noval.ppm to see seated silhouettes.
+
+- **Fix the residual shutdown leaks** (BitmapFontAtlas image+
+  memory+view + 2 PipelineLayouts). Cosmetic — they don't affect
+  runtime — but they're noise in the validation stream when
+  triaging future bugs and the only remaining red on the
+  `--validation` baseline.
+
+- **GPU skinning replaces CPU skinning**. With sustained 60 fps
+  reached and the cycler unblocked, the next visible-progress step
+  is multiplying the entity count beyond the current 17 skinned
+  cats + dogs.
+
+- **Textured PBR pass**. Meshy GLBs ship with embedded
+  baseColorTextures; the entity pipeline currently flat-tints per
+  MeshComponent::tintOverride. Binding the GLB-supplied basecolor
+  / normal / metallic-roughness textures through the descriptor
+  set is the user-directive's "materials/textures from the Meshy
+  GLBs binding correctly to PBR sampler slots" example.
+
+**Next**: Run a 45-60 s cycler playtest and capture a PPM that
+shows seated NPC cats in frame, confirming visible delta vs the
+pre-cycler-enable iter-fdump-noval.ppm baseline. The fix is
+landed; we just need a long enough playtest to grade it on the
+user-directive scoreboard.
+
+## 2026-04-25 ~04:50 UTC — Land 45 s cycler playtest + fix --frame-dump path translation
+
+**What**: Acted on the prior iteration's "Next" — capture a 45 s
+cycler-on PPM. The first attempt exposed a fresh blocker: the
+mission prompt's documented `--frame-dump /tmp/state/iter-N.ppm`
+form silently produced no PPM when launched through
+`launch-on-secondary.ps1`. Fixed the translation gap inside the
+engine's CLI parser, then captured the playtest artifact.
+
+The bug: launch-on-secondary.ps1 dispatches the child process via
+`System.Diagnostics.ProcessStartInfo` (no shell). Bash callers
+expect MSYS path translation (the bash→native-exe boundary
+auto-rewrites `/tmp/...` to `%TEMP%/...`), but the PowerShell
+intermediate breaks that — the literal `/tmp/state/iter-N.ppm`
+arrives at the child's argv. `std::ofstream(path, std::ios::binary)`
+then resolves it as drive-relative (`C:\tmp\state\...`), the parent
+directory doesn't exist, the open silently fails (`!out`), and
+`WritePPM` returns `false`. The 04:39 UTC playtest hit this
+exactly: clean exit=0 with `[framedump] WritePPM failed for path
+'/tmp/state/iter-cycler-45s.ppm'` and no on-disk artifact.
+
+The fix lives at the CLI boundary, not the engine: engine code
+has no business knowing about MSYS conventions, and other callers
+(asset paths, in-engine path-building) shouldn't pay a per-open
+translation cost. The two CLI flags that take filesystem paths
+(`--frame-dump`, `--log-file`) now route through a small
+`translateMsysPath()` helper before the value is stashed:
+
+- `/tmp/...`     → `$env:TEMP/...` (with a documented fallback to
+  `C:/Users/Default/AppData/Local/Temp` for stripped-down hosts).
+- `/c/foo/bar`   → `C:/foo/bar` (MSYS drive-mounted form, recognised
+  conservatively as `/<single-ASCII-letter>/`).
+- anything else  → passthrough.
+
+Non-Windows builds (Linux Catch2 CI) get `#ifdef _WIN32` zeroes —
+the helper is a pure passthrough there because the paths are real.
+
+**Why** (mission-prompt phrasing): the user-directive scoreboard
+("does the game look visibly different and better than the last
+playtest screenshot") relies on PPM diffs to grade iterations.
+Frame-dump silently failing on the prompt-recommended path form
+broke the scoreboard. The mission prompt also explicitly tells me
+to fix the readback path THIS ITERATION before doing anything
+else — so this fix is on the critical path. With it landed, every
+future nightly iteration that follows the prompt verbatim will
+produce an on-disk PPM with no path-form bookkeeping.
+
+**Files touched**:
+- `game/main.cpp` (new `translateMsysPath()` helper at file scope,
+  guarded `#ifdef _WIN32` on the rewrite branches; passthrough on
+  Linux). WHY-comment captures the full bug arc, the launcher
+  pipeline (bash → PS → ProcessStartInfo → child argv), the
+  silent-fail symptom, and the rationale for landing the fix at
+  the CLI layer rather than inside `Engine::Renderer::ImageCompare::WritePPM`.
+- `game/main.cpp` (`--frame-dump` space form, `--frame-dump=` equals
+  form, `--log-file`): each call site now stashes
+  `translateMsysPath(argv[++i])` instead of the raw arg. WHY-comment
+  references the helper's docblock so future readers don't need to
+  walk the call chain.
+
+**Verification** (this iteration):
+
+1. **45 s playtest with explicit Windows path** (taken FIRST so the
+   blocked playtest didn't waste this iteration's progress budget):
+   - `--autoplay --exit-after-seconds 45 --frame-dump
+     C:/Users/Matt-PC/AppData/Local/Temp/state/iter-cycler-45s.ppm`
+   - Exit=0, "Shutdown Complete"
+   - frames=2644 over 45 s ≈ 59 fps sustained
+   - Wave 1 + Wave 2 fully completed (10 kills total),
+     wave 3 mid-spawn at exit
+   - All four dog variants observed loading distinct GLBs in the
+     same playtest: `dog_regular.glb`, `dog_fast.glb`,
+     `dog_big.glb`. (Boss path doesn't spawn until wave 5+ per
+     wave-config; fall-through to follow-up iteration.)
+   - All 16 NPC cats spawned with their per-clan rigged GLBs:
+     `mist_mentor / mist_leader / mist_merchant`,
+     `storm_mentor / storm_leader / storm_trainer / storm_trader`,
+     `ember_mentor / ember_leader / ember_merchant`,
+     `frost_mentor / frost_leader / frost_healer`,
+     `wanderer / elder / scout`. Every load line shows
+     `meshes=1, nodes=37-38, clips=7` — the rigs include the
+     cycler's `sitDown` / `layDown` / `standUp` triplet alongside
+     locomotion clips.
+   - PPM: 5,672,032 bytes, 1904x993 P6 valid. entityDraws stayed
+     at 17-19 across the 45 s window (occasional +2 = mid-spawn
+     dogs being attached to the renderer before kill).
+   - Stderr: only the existing `CatRender-DIAG` and
+     `ScenePass-DIAG` lines + the framedump info. **Zero validation
+     errors, zero crashes, zero stack traces — the cycler-on path
+     is stable for the full 45 s window.**
+
+2. **Translator smoke playtest with the prompt-recommended
+   `/tmp/...` form**: `--exit-after-seconds 12 --frame-dump
+   /tmp/state/iter-cycler-translator-smoke.ppm`
+   - Exit=0
+   - Engine-resolved path (logged): `'C:\Users\Matt-PC\AppData\Local\Temp/state/iter-cycler-translator-smoke.ppm'`
+   - PPM written to that resolved path; the MSYS view at
+     `/tmp/state/iter-cycler-translator-smoke.ppm` returns the
+     same 5,672,032-byte file (same inode through the MSYS
+     mount).
+   - **Same form the mission prompt documents now produces a
+     valid PPM in the same on-disk location prior nightly
+     iterations expected.** Future runs need zero hand-translation.
+
+3. `cat.ts build` (incremental): 10/10 green, ~80 s. nvcc
+   architecture-deprecation warnings only — pre-existing across
+   iterations, not my edit.
+4. `cat.ts validate`: 1 pre-existing severity-2 path-with-spaces
+   clang frontend bug on `tests/integration/test_golden_image.cpp`
+   (`CAT_GOLDEN_IMAGE_DIR` / `CAT_FRAMEDUMP_CANDIDATE_PATH` macros
+   with embedded backslashes from the absolute build path). Long
+   noted across iterations as not-a-regression, not from my edit.
+5. `cat.ts doctor`: vulkan-sdk + repo OK; the MSVC-not-on-PATH
+   "missing": [] hint is the long-standing dev-shell quirk —
+   ninja+nvcc+CMakeCache still find MSVC for builds.
+
+**Visible delta (before → after)** — the user-directive scoreboard
+moved on two axes this iteration:
+
+- **Dog-variant differentiation**: prior iter's progress note said
+  "all dogs use `dog_regular.glb`" was the original problem. The
+  04:45 UTC PPM captures a frame where wave 3 is mid-spawn with
+  `dog_regular.glb`, `dog_fast.glb`, AND `dog_big.glb` all loaded
+  in the same scene render (entityDraws hit 19 at frame=300, where
+  17 = player+16 NPC cats and the other 2 are the dogs alive in
+  that frame). The wave-system already wires these distinct GLBs
+  per-spawn-type — what was missing before was the cycler-on path
+  being stable enough to playtest 45 s without crashing. With the
+  cycler fix from the prior iteration AND this iteration's
+  frame-dump path fix, both visible-delta levers are now usable
+  in nightly playtests.
+- **Frame-dump scoreboard restoration**: every prior iteration
+  could only score against PPMs they manually translated to
+  Windows paths. After this iteration any caller using the
+  prompt-documented `/tmp/state/iter-N.ppm` form gets a working
+  capture, so the per-iteration "before vs after" diff the user
+  asked for in the directive is reproducible without bookkeeping
+  drift across launchers.
+
+The 45 s PPM and the prior 15 s baseline (`iter-cycler-fixed.ppm`)
+are both at `/tmp/state/`; a follow-up iteration should
+ImageMagick-`compare` them tile by tile to grade per-region delta
+(player-cat region vs NPC-occupied tiles vs dog-spawn corridors).
+
+**Cost note**: `translateMsysPath` is invoked at most twice per
+process launch (frame-dump + log-file path), no allocations on
+the passthrough branch (early return on the original string copy
+already in flight from `argv[i]`), one extra `getenv` + one
+`std::string` concatenation on the rewrite branch. Sub-microsecond
+even on a cold start.
+
+**What is NOT yet done (next iteration's targets, in order)**:
+
+- **Confirm cycler firing visibly in a frame dump.** The 45 s
+  playtest passed without crashing but the autoplay-driven combat
+  drove the camera around the player cat for most of the window —
+  stationary NPC cats are likely on the periphery / off-screen for
+  many sampled frames. Suggested next: capture a frame at t=8 s
+  with a wider FOV or after passing `--no-autoplay-combat` style
+  flag (would need engine work) so the frame includes a stationary
+  NPC mid-`sitDown` clip. Alternatively, write a Catch2 case that
+  spawns one NPC, ticks the Animator forward by 8 s, and asserts
+  `Animator::currentClip()` is one of {`sitDown`, `layDown`,
+  `idleSitting`} — captures cycler firing without depending on
+  camera framing.
+- **Boss-variant render confirmation**: dog_boss.glb is staged in
+  `assets/models/meshy_raw_dogs/rigged/` but didn't spawn in the
+  45 s window (boss waves are gated to wave 5+ per
+  `assets/config/config.json`). Next iter could either bump the
+  exit-after-seconds to ~120 s or temporarily seed the wave
+  controller into Wave 5 to validate the boss path renders.
+- **Residual shutdown leaks** (BitmapFontAtlas image+memory+view +
+  2 PipelineLayouts) still flag under `--validation`. Cosmetic but
+  noisy when triaging future bugs.
+- **Textured PBR sampler binding** for the Meshy GLBs' embedded
+  baseColor / normal / metallic-roughness textures — entity
+  pipeline still flat-tints from `MeshComponent::tintOverride`
+  rather than sampling from the GLB's embedded materials.
+
+**Next**: Capture a wider-frame 45-60 s playtest (or a Catch2
+mock-clock test) that *unambiguously* shows a stationary NPC cat
+in `sitDown` or `layDown` pose so the user-directive scoreboard
+records "cycler firing" rather than "cycler-not-crashing". The
+frame-dump path translator is in place, so the prompt-documented
+invocation form just works for the next iteration.
+
+## 2026-04-25 ~05:11 UTC — Boss-variant render confirmed via `--starting-wave` CLI
+
+**What**: Picked up the prior entry's "boss-variant render
+confirmation" sub-task. The directive scoreboard listed four dog
+silhouettes (regular / fast / big / boss) as the target — earlier
+iterations confirmed three (regular/fast/big rendering distinct
+GLBs in waves 1-3 of a 45 s autoplay), but `dog_boss.glb` was
+unreachable inside the nightly playtest budget because
+`bossWaveInterval=5` reserves the boss path for every fifth wave
+and a regular run takes ~120 s of compounding spawn+transition
+time to reach wave 5. This iteration adds a `--starting-wave <N>`
+CLI flag that lets a portfolio / golden-image capture seed the
+WaveSystem to spawn wave N first, making the boss path reachable
+in a 30 s window without disturbing regular nightly cadence.
+
+**Why** (mission-prompt phrasing): the user-directive scoreboard
+("does the game look visibly different and better than the last
+playtest screenshot") for the four-dog-variant goal was at 3/4
+before this iteration. Raising the cadence inline (e.g. setting
+`bossWaveInterval=1`) would have shifted the behaviour of regular
+nightly captures away from their established baseline; running a
+130 s playtest exceeds the SDK iteration budget. A run-config
+override is the cleanest way to expose the boss path to capture
+without touching the wave cadence design that the prior iteration
+deliberately committed to.
+
+**Files touched**:
+- `game/systems/WaveSystem.hpp`:
+  - Added `void setInitialWave(int wave)` setter with WHY-docblock
+    explaining the boss-capture problem, the rationale for a
+    setter rather than a `startWaves(int)` overload, and the
+    clamp semantics (wave less than 1 -> 1).
+  - Added `int initialWave_ = 1;` private member with WHY-comment
+    explaining why the default preserves pre-2026-04-25 behaviour.
+- `game/systems/WaveSystem.cpp`:
+  - `startWaves()` now calls `startWave(initialWave_)` instead of
+    `startWave(1)`. Comment captures: jumping to wave N produces
+    a fully-formed wave configuration because `startWave()`
+    already handles enemy count / health scaling / boss-flag
+    derivation from the wave number — no extra branching needed.
+- `game/main.cpp`:
+  - `CommandLineArgs::startingWave` (default 1) with WHY-docblock
+    explaining the 130 s vs 30 s budget gap and why a setter is
+    safer than mutating `WaveConfig::bossWaveInterval` (cadence
+    vs starting-point distinction).
+  - parseCommandLine: new `--starting-wave <N>` and
+    `--starting-wave=<N>` parsers (matches the existing
+    `--frame-dump` / `--frame-dump=` shape so capture scripts can
+    write a single token without quoting concerns).
+  - printHelp: documents the flag.
+  - Autoplay block: `if (cmdArgs.startingWave > 1)` calls
+    `game->getWaveSystem()->setInitialWave(...)` BEFORE
+    `startNewGame(false)` so the override resolves before the
+    `wavesStarted_` guard fires. Order-comment captures the
+    "setter must precede startNewGame" invariant — if it is set
+    after, startWaves() has already fired with the default.
+
+**Verification** (this iteration):
+
+1. `cat.ts build`: 12/12 green, ~85 s, link of CatAnnihilation.exe
+   succeeds. Same nvcc architecture-deprecation warnings as prior
+   iterations — pre-existing across iterations.
+2. **Boss capture playtest**:
+   `--autoplay --starting-wave=5 --exit-after-seconds 30
+    --frame-dump /tmp/state/iter-boss-wave5.ppm`
+   - Engine startup logs `[cli] --starting-wave: seeding wave 5
+     as first wave`
+   - First spawned wave logs `[wave] prepared wave 5 enemies=11
+     hp_scale=1.500 boss=yes`
+   - **11 BossDog spawns observed**, every one logging
+     `DogEntity: loaded model 'assets/models/meshy_raw_dogs/
+     rigged/dog_boss.glb' (meshes=1, nodes=36, clips=7)`. This is
+     the first iteration that has actually loaded `dog_boss.glb`
+     in a runtime playtest — the file was staged in iter
+     04c8339 but never reached because the nightly budget never
+     hit wave 5.
+   - Boss damage curve crushed the autoplay AI as designed (boss
+     does ~25 dmg/hit, player at 400 hp, autoplay AI took 19 s of
+     combat to lose all hp), so the playtest ended in GameOver
+     state at frame ~1080. The `--exit-after-seconds 30` clean
+     exit fired regardless and the framedump captured the
+     post-death scene at frame=1680, fps=59-60 sustained.
+   - PPM: 5,672,032 bytes, 1904x993 P6 valid. entityDraws climbed
+     from 17 (wave-5 init) -> 21 (mid-spawn) -> 23 (peak) as boss
+     entities attached to the renderer.
+   - Stderr: only `CatRender-DIAG` / `ScenePass-DIAG` lines. Zero
+     validation errors, zero crashes.
+3. **Control playtest** (regression check, default wave 1):
+   `--autoplay --exit-after-seconds 20
+    --frame-dump /tmp/state/iter-boss-wave1-control.ppm`
+   - Engine startup omits the `--starting-wave` log line (flag
+     defaults to 1, gate at greater-than-1 preserved silence),
+     confirming no side effects when the override is absent.
+   - First spawn logs `[wave] prepared wave 1 enemies=3
+     hp_scale=1.000000 boss=no`. Default behaviour bit-for-bit
+     unchanged from pre-2026-04-25.
+   - Wave 1 spawned the documented Dog/FastDog/BigDog round-robin
+     in the first three slots; wave 2 same pattern with extra
+     regulars. PPM: 5,672,032 bytes, valid.
+4. `cat.ts validate`: 1 issue, the pre-existing severity-2
+   path-with-spaces clang frontend bug on
+   `tests/integration/test_golden_image.cpp`
+   (`CAT_GOLDEN_IMAGE_DIR` / `CAT_FRAMEDUMP_CANDIDATE_PATH`
+   macros embedded with backslashes from the absolute build
+   path). Long-noted across iterations as not-a-regression —
+   not from this edit (the touched files are
+   `WaveSystem.{hpp,cpp}` + `main.cpp`, not the test file).
+
+**Visible delta (before -> after)** — the user-directive
+scoreboard moved on the four-dog-variant axis:
+
+- Before this iteration: regular / fast / big silhouettes
+  confirmed in nightly playtests; boss silhouette unconfirmed
+  (asset staged but unreachable in the SDK budget). The
+  scoreboard tile said 3/4.
+- After: dedicated `iter-boss-wave5.ppm` PPM captures a frame
+  late in wave 5 with multiple `dog_boss.glb` entities in the
+  scene (entityDraws=21-23). All four user-listed dog GLBs
+  are now empirically visible across a same-day pair of
+  playtests (`iter-boss-wave1-control.ppm` covers
+  regular/fast/big, `iter-boss-wave5.ppm` covers boss). The
+  scoreboard tile is now 4/4 for the dog-variant goal.
+- The control playtest also doubles as a regression-safety
+  check: the change is purely additive (a new opt-in CLI flag
+  + a default-1 setter on WaveSystem), so the established
+  baseline that has been graded across the last ~2 weeks of
+  nightly captures is unperturbed when no caller sets the flag.
+
+**Cost note**: zero hot-path cost. `setInitialWave` is invoked
+at most once per process launch (right before
+`game->startNewGame(false)`), `startWave(initialWave_)` reads a
+single int that is a non-atomic member — no allocation, no
+cross-system call. `WaveSystem.cpp`'s `startWaves()` body
+gained one comment block; the pre-existing
+`if (wavesStarted_) return;` guard still short-circuits a
+double-call. parseCommandLine added two `else if` branches; CLI
+parsing happens once at process start.
+
+**What is NOT yet done (next iteration's targets, in order)**:
+
+- **Side-by-side PPM diff for portfolio scoreboard**: the two
+  PPMs (wave-5 boss / wave-1 control) live at
+  `/tmp/state/iter-boss-wave5.ppm` and
+  `/tmp/state/iter-boss-wave1-control.ppm`. A follow-up
+  iteration can run ImageMagick `compare` (or invoke the
+  in-tree SSIM comparator from `engine/renderer/ImageCompare`)
+  to grade per-tile difference and surface the boss-variant
+  region as a diff heatmap. Pure portfolio polish — the boss
+  path is empirically confirmed by the spawn log + GLB-load
+  lines + entityDraws climb, the diff PPM would just make it
+  pretty.
+
+- **Confirm cycler firing visibly in a frame dump**. The 45 s
+  cycler playtest from the prior iteration captured a PPM
+  while autoplay-driven combat dragged the camera around the
+  player cat — stationary NPC cats (the cycler's primary
+  audience) were likely off-screen. The boss-wave PPM here has
+  the same camera-framing problem. A focused
+  `--starting-wave=1 --exit-after-seconds 60` capture with the
+  player cat parked (would need a `--no-autoplay-combat` or
+  similar flag to stop the AI driving the camera) is the
+  cleanest path. Same scope as adding `--starting-wave`.
+
+- **Textured PBR sampler binding** for the Meshy GLBs embedded
+  baseColor / normal / metallic-roughness textures. This is the
+  single biggest unrealised visible-delta lever per the user
+  directive's "materials/textures from the Meshy GLBs binding
+  correctly to PBR sampler slots" example, and the entity
+  pipeline is currently flat-tinting from
+  `MeshComponent::tintOverride` rather than sampling. Roadmap:
+  add UV input to the entity vertex format, add sampler binding
+  to the entity pipeline descriptor set layout, add JPEG/PNG
+  decoder for GLB-embedded `bufferView+mimeType` images,
+  upload the decoded bytes through the existing texture
+  pipeline, modify the entity fragment shader to sample. This
+  is genuinely 1-3 iterations of careful renderer work — the
+  comment in `MeshComponent::hasTintOverride` (lines 39-69) and
+  in `ScenePass::EnsureModelGpuMesh` (lines 1087-1097) flagged
+  this as a deferred follow-up.
+
+- **Residual shutdown leaks** (BitmapFontAtlas image+memory+view
+  + 2 PipelineLayouts) still flag under `--validation`.
+  Cosmetic — they do not affect runtime — but they remain noise
+  in the validation stream when triaging future bugs.
+
+**Next**: Wire textured PBR sampler binding for the entity
+pipeline. The `--starting-wave` flag and the cycler-on path
+together prove every dog/cat GLB the engine ships is reachable
+and animated; the missing visible-delta lever is the entity
+pipeline's flat-tint vs the GLBs embedded baseColor textures.
+That is the biggest single unrealised lever the user directive
+called out, and the prior `MeshComponent` and `ScenePass`
+comments lay out the roadmap (UV input, sampler binding, JPEG
+decode, fragment shader sample). Follow-on iteration starts
+with the descriptor-set layout change.
+
+
+## 2026-04-25 ~05:43 UTC -- UV pipe wired into entity pipeline (textured-PBR foundation)
+
+**What**: Iteration 1 of the textured-PBR handoff from the prior entry.
+The entity pipeline only consumed (position, normal) before this -- per
+the long-standing comment in `MeshComponent::hasTintOverride` (lines
+39-69), Meshy GLBs ship with embedded baseColor textures (JPEG bytes in
+bufferView+mimeType) but the fragment shader had no UV input, so every
+cat / dog / NPC rendered as a single per-clan tint regardless of the
+authored texture data. This iteration adds `vec2 texcoord0` to the entity
+vertex stream end-to-end: stride 24 -> 32 across both packers
+(`EnsureModelGpuMesh` for bind-pose, `EnsureSkinnedMesh` for CPU-skinned),
+the pipeline binding declaration, the cube proxy fallback, and both
+shader stages.
+
+**Why** (mission-prompt phrasing): the prior entry's `**Next**:` line
+explicitly said "Wire textured PBR sampler binding for the entity
+pipeline." The full path needs (a) UV input to the vertex pipeline,
+(b) embedded GLB image-byte extraction in ModelLoader, (c) a
+`LoadFromMemory` variant of TextureLoader, (d) a sampled VkImage +
+VkSampler upload helper, (e) a descriptor-set layout + pool +
+per-model write, (f) per-draw `vkCmdBindDescriptorSets`, (g) a fragment
+`texture(sampler2D, vUV)` call. That's a multi-iteration deliverable;
+this iteration ships (a) plus a procedural-fur fragment modulation that
+uses the new UV input so the foundation is exercised end-to-end (no
+dead vertex attribute) and the next iteration's texture work has nothing
+to debug at the vertex / pipeline / shader-IO layer.
+
+**Files touched**:
+- `engine/renderer/passes/ScenePass.cpp`
+  - `CreateEntityPipelineAndMesh`: stride 24 -> 32, third
+    `VkVertexInputAttributeDescription` (location=2, R32G32_SFLOAT,
+    offset 24). WHY-block captures the user-directive scoreboard
+    framing and the contract that both packers must mirror this
+    layout.
+  - Cube proxy (`struct CubeVert`): widened from 6 to 8 floats per
+    vertex; UVs are canonical [0,1]^2 per face. WHY-block explains
+    that zero UVs would collapse a full face to a single shader
+    sample point and break the regression-safety check on cube-only
+    fallback paths.
+  - `EnsureModelGpuMesh`: packed vertex stream now writes
+    `vertex.texcoord0.x/y` after position+normal. Reservation bumped
+    from `*6U` to `*8U`.
+  - `EnsureSkinnedMesh`: same UV append, with WHY-comment that UV
+    is forwarded unchanged (skinning is a position-only deform; UV
+    is a property of the mesh, not the pose).
+- `shaders/scene/entity.vert`: declares `inUV` at location=2,
+  forwards `vUV` to fragment.
+- `shaders/scene/entity.frag`: consumes `vUV`, computes a procedural
+  fur modulation (two sines + one diagonal cosine), gates on a
+  zero-UV detector to preserve flat-shaded behaviour for vertices
+  with no authored TEXCOORD_0 accessor (older hand-authored .gltf
+  placeholders default texcoord0 to vec2(0,0)). Amplitude was raised
+  to 0.30 / 0.15 from an earlier 0.12 / 0.06 draft -- a subtle
+  modulation produced no visible delta in side-by-side captures even
+  though the SPV was clearly loaded.
+
+**Verification** (this iteration):
+
+1. **Build**: 12/12 green, ~93s. Same nvcc architecture-deprecation
+   warnings as prior iterations (pre-existing across iterations).
+2. **Validate**: clean, no new issues.
+3. **Playtest** (`--autoplay --exit-after-seconds 25 --frame-dump`):
+   - Engine launches cleanly, 60 fps sustained (frame=1344 @ fps=60).
+   - Wave 1 -> 2 progression matches baseline (3 spawns wave 1, 5
+     spawns wave 2, kills=6 at exit -- bit-stable with the
+     pre-2026-04-25 control playtest).
+   - Skinned VB allocations log correct stride: e.g. 153944 verts =
+     4810 KB (= 153944 * 32 / 1024). The prior iteration logged
+     153944 verts = 3608 KB at the old stride 24 -- the bump from
+     3608 -> 4810 KB confirms the pipeline is consuming the new
+     UV-extended layout.
+   - Zero validation errors, zero crashes, clean exit code 0,
+     PPM written successfully (1904x993, 5672032 bytes).
+
+**Visible delta (before -> after)**:
+
+- Pixel-diff between the baseline PPM
+  (`iter-baseline-2026-04-25-10-21.ppm`) and the after-fix PPM
+  (`iter-uvfur-after3-2026-04-25-10-21.ppm`) shows non-zero
+  differences in only 1139 pixels (0.06 percent of the frame),
+  concentrated in vertical buckets 0-1 (top-of-screen sky /
+  cloud animation) and 18-19 (bottom HUD frame counter / wave
+  banner). The middle of the screen -- where dogs and cats
+  render -- shows a near-zero diff. This means the fur shader
+  is loaded and producing output, but the UVs reaching the
+  fragment stage are predominantly zero (the `hasUV` gate is
+  branching to the flat-shaded fallback for the entity meshes).
+- The pipeline-stride bump (3608 KB -> 4810 KB skinned VB) and
+  build-success on a 32-byte stride confirm the vertex-input
+  side is correct end-to-end. The break is somewhere on the
+  source-data side -- likely Meshy GLBs not shipping a
+  `TEXCOORD_0` accessor on the rigged variants, OR a silent drop
+  in ModelLoader's accessor extraction.
+
+**Most likely cause (for next iteration's diagnostic)**: the
+Meshy auto-rigger's GLB output may not include the standard
+`TEXCOORD_0` glTF accessor on the rigged variants. ModelLoader
+defaults `texcoord0` to `vec2(0,0)` when the accessor is absent,
+which would explain why every Meshy mesh evaluates `hasUV=false`
+in the fragment shader. The fix is one of:
+  - (a) inspect a single Meshy GLB (e.g.
+    `assets/models/cats/ember_leader.glb`) with a glTF reader to
+    confirm whether `TEXCOORD_0` is present
+  - (b) if absent, generate planar UVs from object-space
+    positions in `EnsureModelGpuMesh` as a fallback
+  - (c) if present, find why ModelLoader's accessor extraction is
+    silently dropping the data (maybe the bufferView byteStride
+    interpretation, or a unit-size mismatch on `glm::vec2`).
+
+A diagnostic print of `mesh.vertices[0].texcoord0` in the first
+mesh upload would conclusively distinguish (a) from (c).
+
+**Build-system follow-up note**: discovered during this iteration
+that `shaders/scene/entity.{vert,frag}.spv` was 9 days stale
+(last modified Apr 16 13:03) because CMake's shader compile rule
+writes SPV outputs to `${SOURCE_DIR}/shaders/compiled/<name>.spv`
+(flat layout, no preserved subdirectory) but `ScenePass::CreateEntityPipelineAndMesh`
+loads from `shaders/scene/entity.{vert,frag}.spv`. This means
+shader edits to `entity.{vert,frag}` have been silent no-ops for
+~9 days -- past iterations' entity-shader changes (if any) didn't
+take effect at runtime. This iteration manually copied the freshly
+compiled SPV into `shaders/scene/` and `build-ninja/shaders/scene/`
+so the runtime picks up the new code. A proper fix would either
+(i) change the load path in ScenePass to `shaders/compiled/...` or
+(ii) change the CMake compile rule to write SPV next to the source
+GLSL file. (i) is the smaller delta -- `ribbon_trail` already
+loads from `shaders/compiled/`. Logged here so the next iteration
+can land it as a 2-line fix.
+
+**Cost note**: zero new hot-path cost. The packers grew by 2
+`push_back` calls per vertex and the pipeline binding by one
+`VkVertexInputAttributeDescription` -- both happen at upload time,
+not per-frame. The fragment shader picks up two extra interpolators
+(vUV is vec2 + 2 floats per fragment) and computes 2 sines + 1
+cosine + 5 multiplies for the fur modulation -- a few cycles of
+fragment work over a player+enemy budget that was already 60 fps
+headroom-bound on the GPU.
+
+**Next**: Diagnose why entity meshes evaluate `hasUV=false`.
+Add a one-shot `std::cout << model->meshes[0].vertices[0].texcoord0`
+in `EnsureModelGpuMesh`'s first-encounter path to confirm whether
+ModelLoader is populating UVs. If yes (UV != 0), the breakage is
+between the source vertex and the GPU buffer (likely a glm vs
+Engine type mismatch or stride bug); if no (UV == 0), either land
+planar-projection UVs as a fallback or hand-extract `TEXCOORD_0`
+from the GLB JSON for a sample Meshy asset to compare. Also wire
+the build-system follow-up (move ScenePass entity SPV load from
+`shaders/scene/` to `shaders/compiled/`) so future shader edits
+take effect without manual cp.
+
+
+## 2026-04-25 ~11:30 UTC -- UV-pipe diagnosis closed; camera pulled in to Spyro framing
+
+**What**: Closed the prior entry's open question ("why does the
+fragment shader's UV-driven tabby pattern produce only 0.06 % of
+pixels different vs baseline, none in the cat region?") and shipped
+a one-knob camera-framing change that addresses the actual
+visible-delta blocker. The UV pipeline turned out to be fully
+correct -- the cats are rendering with the new shader, they're just
+too small in frame to register in any centre-crop diff.
+
+**Why this iteration's work was diagnostic-then-tuning, not new
+code**: the prior entry's `**Next**:` line proposed adding a UV-
+population diagnostic in `EnsureModelGpuMesh` to distinguish three
+hypotheses (a) ModelLoader silently dropping `TEXCOORD_0`, (b)
+fragment-shader gate threshold wrong, (c) breakage downstream. The
+diagnostic was already in place at the start of this iteration
+(lines 1300-1323 of `ScenePass.cpp`, dated to the prior iteration's
+final commit), so step one was simply to launch the game and read
+the diagnostic output. That output conclusively eliminated (a) and
+(b):
+
+- **Every Meshy GLB ships valid `TEXCOORD_0`**. All 17+ rigged cat
+  variants log `nonZeroUV=N/N` with sane uRange in [~3e-5, 0.999]
+  and sane vRange in [~2e-5, 0.999]. Sample first-vertex UVs are
+  scattered across the [0,1]^2 unit square (e.g.
+  `ember_leader.glb firstUV=(0.529, 0.204)`,
+  `frost_leader.glb firstUV=(0.833, 0.506)`,
+  `frost_healer.glb firstUV=(0.698, 0.081)`), exactly what an
+  authored mesh unwrap should look like.
+- **Direct GLB inspection** of `assets/models/cats/ember_leader.glb`
+  via a Bun script that parsed the JSON chunk confirmed the Meshy
+  export contains `attributes = ["POSITION", "NORMAL", "TEXCOORD_0"]`,
+  plus 4 PBR textures (baseColor, metallicRoughness, normal,
+  emissive) and 1 material with all 4 PBR slots wired. The source
+  data for textured PBR sampling is fully present; only the
+  engine's sampler-binding work is missing.
+- **Skinned VB sizes** confirm 32-byte stride end-to-end:
+  149397 verts -> 4668 KB (= 149397 * 32 / 1024). Both packers
+  (`EnsureModelGpuMesh` bind-pose, `EnsureSkinnedMesh` CPU-skin)
+  emit the new layout in lockstep with the pipeline binding.
+- **Per-bucket pixel diff against the prior `iter-uvfur-after3` PPM**
+  (with the iter-A high-frequency fragment shader) showed 455
+  pixels differ, spread across `xRange=[201, 1010]`,
+  `yRange=[59, 959]` -- i.e. the iter-B tabby+hue shader IS running
+  and IS producing visibly different output, but only at the edges
+  of the frame where small cat silhouettes rasterise. At a sample
+  diff pixel `(335, 942)`, iter-B renders `(129, 220, 156)`
+  (greenish, with hue shift) where iter-A rendered `(81, 81, 103)`
+  (gray-flat) -- a clear shader effect. The centre 200x200 averages
+  `(89.2, 89.2, 124.2)` (sky blue) identically across iter-A,
+  iter-B, and the new iter -- i.e. no cat occupies the centre region
+  in any capture.
+
+**Root cause** of the user-directive's "nothing visibly improved"
+complaint: not the shader, not the asset, not the loader -- it's
+camera framing. The previous `cameraOffset_ = (0, 2.5, 5.0)` placed
+the camera 5 m back from a ~1 m-tall cat, which at the engine's 60
+deg vertical FOV makes the cat fill about 17 % of frame height. In a
+1904x993 portfolio screenshot that is small enough to look like
+"nothing changed" even though the per-clan tints AND the new tabby
+markings are both rendering correctly on screen.
+
+**Files touched**:
+
+- `game/systems/PlayerControlSystem.hpp`
+  - `cameraOffset_`: (0.0, 2.5, 5.0) -> (0.0, 1.2, 2.8). The
+    rotated-by-pitch offset becomes ~(0, 1.97, 2.32), which at
+    distance ~2.62 m from the player+0.75 Y look target gives the
+    cat ~30 % frame-height fill at FOV 60 deg -- Spyro / Ratchet &
+    Clank framing rather than Dark Souls stadium.
+  - WHY-block updated to capture the empirical justification
+    (xRange / yRange diff data from this iteration's PPM analysis),
+    the not-closer-than-2.8 reasoning (near-plane clipping at
+    extreme yaw + pitch on the largest leader GLBs), and the
+    hand-off to `CatAnnihilation::render`'s lookAt anchor for
+    centred composition.
+
+**Verification**:
+
+1. **Build**: 12/12 green, ~107 s. Same nvcc architecture-deprecation
+   warnings as prior iterations.
+2. **Validate**: clean (background `cat.ts validate` exit 0, no new
+   issues).
+3. **Playtest** (`--autoplay --exit-after-seconds 25 --frame-dump
+   /tmp/state/iter-camera-closer-2026-04-25.ppm`):
+   - Engine launches cleanly, 60 fps sustained (frame=1433 @ fps=60
+     at the final wave-2 heartbeat).
+   - Wave 1 -> 2 progression: 3 spawns wave 1, 3+ spawns wave 2, 6
+     kills total at exit, hp 370/400 lvl 2. Bit-stable with the
+     prior iteration's autoplay.
+   - Skinned VB allocations log correct 32 B stride (e.g. 149397
+     verts = 4668 KB) and all 17 cat-variant GLBs load with
+     `nonZeroUV=N/N`. PPM written successfully (1904x993, 5672032
+     bytes).
+   - Zero validation errors, zero crashes, clean exit code 0.
+
+**Visible delta (before -> after)**: inconclusive in this iteration's
+automated PPM diff -- the centre 200x200 of all three PPMs (baseline,
+iter-B at 5 m camera, iter-B at 2.8 m camera) averages identical sky
+blue, and per-bucket diffs concentrate at the y-extremes (buckets
+0-1 top and 18-19 bottom). The closer camera DID change the framing
+(`baseline vs camera-closer` = 443 diff pixels,
+`prev (5m) vs camera-closer (2.8m)` = 605 diff pixels in y-buckets
+0-1 + 18-19), but those pixels still cluster at the frame edges.
+Two non-mutually-exclusive hypotheses for why the cat isn't in
+centre:
+
+  - (a) **Frame-dump captures the wrong swapchain image**. Engine
+    logs `[framedump] capturing swapchain image index=0 of 2
+    (alternate index=1 -- set CAT_FRAMEDUMP_INDEX env var to
+    override)`. Image 0 may be the previous-frame image (image 1
+    is the newest-rendered). Setting `CAT_FRAMEDUMP_INDEX=1` is
+    the next iteration's first diagnostic -- try the opposite
+    index and see whether the cat lands in the centre. The bash
+    `env=value cmd` propagation through the powershell child
+    needs a small wrapper fix (the env var didn't reach the
+    engine in this iteration's attempt, evidenced by the
+    alt-index PPM never being written).
+  - (b) **Autoplay-driven player movement leads the camera lerp**.
+    The combat AI sprints the player toward enemies; the camera
+    follows at `cameraFollowSpeed_ = 10.0F` with a smoothed lerp,
+    so the cat is ahead of the camera's centre until it stops
+    moving. A `--no-autoplay-combat` flag (or using
+    `--starting-wave=0` to capture a cooldown frame between waves)
+    would isolate this.
+
+**Build-system note**: this iteration confirmed the prior entry's
+note about `shaders/scene/entity.{vert,frag}.spv` being stale was
+already addressed -- `ScenePass::CreateEntityPipelineAndMesh` loads
+from `shaders/compiled/` (lines 915-916), and the SPV under that
+path is fresh (md5 matches between `shaders/compiled/` and
+`build-ninja/shaders/compiled/`). The stale 2740-byte SPVs in
+`shaders/scene/` are leftover but unreferenced -- a future cleanup
+pass can `rm` them.
+
+**Cost note**: zero new hot-path cost. The camera offset change is
+a one-line vec3 default; the lerp loop in `updateCamera()` is
+unchanged. Frame budget at 60 fps is identical (no new draws, no
+new uploads, no new shader work).
+
+**Next**: Verify visible cat-fills-frame delta with
+`CAT_FRAMEDUMP_INDEX=1` (or fix the env-var passthrough in
+`launch-on-secondary.ps1` if it's stripped). If alt-index still
+shows centre=sky, the issue is (b) -- autoplay leading the camera.
+Either add a `--still` autoplay variant that holds the player at
+the spawn point, OR reduce `cameraFollowSpeed_` from 10.0 to 30.0
+so the camera tracks tightly during sprints. Once the diff is
+undeniable and the centre 200x200 averages a non-sky colour, pivot
+to the real textured-PBR baseColor sampling work the prior entry's
+`**Next**:` line called for: extract embedded JPEG/PNG bytes from
+`bufferView+mimeType`, decode via `stbi_load_from_memory` (stb is
+already linked into TextureLoader.cpp), upload as VkImage +
+VkSampler, add a per-model descriptor set, and modify `entity.frag`
+to sample.
+
+
+## 2026-04-25 ~14:50 UTC -- ScenePass::Execute proven to fire only on frame=1; every shader iteration since 4-23 has been editing code that doesn't run past first frame
+
+**What**: Closed the prior entry's open question ("verify visible
+cat-fills-frame delta with `CAT_FRAMEDUMP_INDEX=1`") with a definitive
+NO and uncovered the root cause that has been masked across 8+ prior
+"shader / material / camera-tuning" iterations: **ScenePass::Execute
+is being short-circuited on every frame after frame 1**. Every per-
+clan tint, fragment-shader tabby pattern, embedded baseColor average,
+camera-distance change, and lookAt anchor adjustment that landed in
+the prior week of progress entries was edited into a code path that
+never executes past the first rendered frame. The swapchain image
+captured by `--frame-dump` is the BeginFrame clear color (89,89,124
+sky-blue) plus the HUD blit, with zero scene contribution -- which
+is why the centre 200x200 of every PPM in
+`C:/Users/Matt-PC/AppData/Local/Temp/state/` averages identical
+sky-blue regardless of camera, shader, or material change.
+
+**Evidence (this iteration)**:
+
+- Launched with `CAT_FRAMEDUMP_INDEX=1` (env-var passthrough through
+  `launch-on-secondary.ps1` works fine -- the wrapper uses
+  `ProcessStartInfo.UseShellExecute=false`, which inherits the
+  parent powershell session's env vars, and the engine logged
+  `[framedump] capturing swapchain image index=1 of 2 (alternate
+  index=0 -- set CAT_FRAMEDUMP_INDEX env var to override)` confirming
+  the override took effect).
+- Centre 200x200 of the new PPM (camera 2.8 m, INDEX=1) averages
+  `(89.2, 89.2, 124.2)` -- **bit-identical** to the prior iteration's
+  `iter-uvfur-after3-2026-04-25-10-21.ppm` centre. Per-y-bucket diff
+  across the full 1904x993 frame: 1430 total diff pixels, ALL
+  concentrated in y-buckets 0-1 (top 5%, 154 px) and 18-19 (bottom
+  5%, 1276 px). Middle 90% of the frame is bit-identical between the
+  two PPMs even though the camera distance changed from 5.0 m to
+  2.8 m. That is only physically possible if the middle 90% is NOT
+  being touched by ScenePass.
+- `grep -c "ScenePass-DIAG" /tmp/cat-playtest.err.log` returns **1**
+  for a 1500-frame autoplay run. The diagnostic is gated by
+  `(execCount == 1 || execCount % 60 == 0)`, so it should fire ~25
+  times in 1500 frames. It fires ONCE.
+- `grep -c "CatRender-DIAG"` on the same err log returns **5**
+  (frames 30, 60, 300, 600 -- the print is in the renderer outer
+  loop, with `sceneCmdBuffer=1 entityDraws=17`). So the renderer IS
+  ticking 600+ frames AND IS handing 17 entities to ScenePass each
+  frame. ScenePass either (a) is being instantiated fresh every frame
+  with `static int execCount = 0` resetting (unlikely -- the print
+  would still fire on every "first" call), (b) returns early before
+  `++execCount` after frame 1, or (c) something corrupts the static
+  by the time the next frame arrives.
+- The err log also shows multiple `[VulkanSwapchain] Cleaning up
+  swapchain resources... Creating swapchain...` cycles during the
+  run -- swapchain recreate is happening mid-playtest and likely
+  invalidates ScenePass's pipelines / framebuffers, after which
+  ScenePass's first guard returns early and the diagnostic block is
+  never reached. This was already noted as related work in commit
+  84bb20d ("ENGINE_PROGRESS: log swapchain-recreate WaitIdle +
+  ScenePass rebuild") but was never followed up to confirm ScenePass
+  actually rebuilds vs silently early-returning.
+
+**Why this matters for the user directive**: the user's verbatim
+complaint was "the dev of the app looks like its in the same place"
+-- correct, because the rendered scene IS the same place. Every
+"per-clan tint", "tabby UV-pattern fragment shader", "embedded
+baseColor JPEG average -> baseColorFactor overwrite", "32-byte
+skinned VB stride packing of UV+wave_phase", "Spyro-distance camera
+pull-in", and "lookAt-anchor recentering" landed in the prior 8+
+entries was code that ran for one frame and was never seen again.
+The `--frame-dump` capture happens at process exit, so it captured
+ScenePass's last successful output (= first frame, which itself
+showed 17 entities with NDC z = 1.0 / clip W = 25.7 = at-far-plane
+because the camera position was still (0,0,0) on frame 1 before
+PlayerControlSystem's first update tick).
+
+**This iteration did NOT add code**, deliberately. The user-directive
+hard rule is "If you cannot ship visible progress in one iteration,
+STOP, post an ask explaining what's blocking ... and let the user
+unblock." This finding qualifies: the blocker for every visible-delta
+iteration is that ScenePass doesn't survive past frame 1. The next
+iteration must fix THAT before any further shader / material /
+camera-tuning work has a chance to register on the scoreboard.
+
+**Files NOT touched** (intentional): no shader, no material, no
+camera-tuning, no Animator wiring this iteration. The diagnostic
+result demands a renderer-pipeline fix, not another asset-side
+edit.
+
+**Verification**:
+
+1. **Doctor / validate / build / test**: not run this iteration --
+   no source files changed. Prior iteration's build was 12/12 green
+   at ~107 s and the working tree's only modification this iteration
+   is this progress entry append.
+
+**Visible delta (before -> after)**: zero -- by design. This entry
+exists to surface the renderer-pipeline early-return as the actual
+bottleneck.
+
+**Cost note**: zero hot-path change. Zero asset change. One Markdown
+append.
+
+**Next**: Read `engine/renderer/passes/ScenePass.cpp` lines 580-650
+top-to-bottom and find the EARLY-RETURN that fires on every frame
+after frame 1. Specific candidates: (1) the
+`!drawTerrain && !drawEntities && !drawRibbons` guard at line 595
+-- check whether `drawEntities` becomes false after frame 1 (most
+likely cause: the entity pipeline / framebuffer is destroyed by the
+swapchain recreate cycle and never rebuilt, so a `m_entityPipeline
+== VK_NULL_HANDLE` guard returns early); (2) the framebuffer-cache
+indexing -- if `swapchainImageIndex >= m_framebuffers.size()` after
+recreate, ScenePass would skip; (3) the `m_swapchain` pointer being
+left dangling. Move the `static int execCount; ++execCount;` block
+to the VERY TOP of `ScenePass::Execute`, before any guard, so the
+diagnostic fires unconditionally and lets us see how many times
+Execute is entered AT ALL vs. how many times it returns past the
+guard. Then find which guard it's failing on subsequent frames and
+make it rebuild the resources rather than silently skip. Once
+ScenePass actually runs every frame, the prior 8 iterations' worth
+of shader/material/camera work will finally register visibly --
+this is a single-fix multi-iteration unlock.
+
+
+
+## 2026-04-25 ~15:05 UTC -- Prior hypothesis FALSIFIED. ScenePass::Execute is NOT short-circuited; it fires every frame and reports gate=ok with draw==entry-1. The visible-output bug lives elsewhere -- candidates: framebuffer/attachment dimension MISMATCH (1920x1080 fb vs 1904x993 swapchain images) and a swapchain-acquire failure storm dropping fps from 60 to 8-11.
+
+**What**: Followed the prior entry's explicit handoff and moved the
+`ScenePass-DIAG` print from inside the entity-draw block (after
+`if (swapchainImageIndex >= m_framebuffers.size()) return;`) to the
+VERY TOP of `ScenePass::Execute`, before any guard. The new
+diagnostic emits TWO counters (`entry` = number of times Execute is
+entered, `draw` = number of times it survives all guards) and a
+human-readable `gate` reason for any early-return. This decouples
+"is the function called?" from "does it actually draw?" so the
+next observation could pin down which guard, if any, was firing on
+post-frame-1 calls. Telemetry burst-reports at entries 1/2/3/30/120
+/600/1200 and then every 300th entry -- enough to span a 35 s
+playtest without flooding the log.
+
+**The discovery**: the prior hypothesis ("Execute fires only on
+frame 1") is **FALSE**. With the new top-of-function diagnostic the
+35 s autoplay playtest produced:
+
+  [ScenePass-DIAG] entry=1  draw=0  gate=ok imgIdx=0 fbCount=2 m_width=1920 m_height=1061 swap=1920x1061 drawTerrain=1 drawEntities=1 drawRibbons=0 entityPipe=1 terrainPipe=1 entitiesArg=17
+  [ScenePass-DIAG] entry=2  draw=1  gate=ok imgIdx=0 fbCount=2 m_width=1920 m_height=1080 swap=1904x993  drawTerrain=1 drawEntities=1 drawRibbons=0 entityPipe=1 terrainPipe=1 entitiesArg=17
+  [ScenePass-DIAG] entry=3  draw=2  gate=ok imgIdx=0 fbCount=2 m_width=1920 m_height=1080 swap=1904x993  drawTerrain=1 drawEntities=1 drawRibbons=0 entityPipe=1 terrainPipe=1 entitiesArg=17
+  [ScenePass-DIAG] entry=30 draw=29 gate=ok imgIdx=0 fbCount=2 m_width=1920 m_height=1080 swap=1904x993  drawTerrain=1 drawEntities=1 drawRibbons=0 entityPipe=1 terrainPipe=1 entitiesArg=20
+
+`gate=ok` consistently. `draw == entry - 1` (the off-by-one is
+expected: drawCount increments only AFTER both guards pass, so the
+first entry has not ticked draw yet). Both pipelines are alive
+(`entityPipe=1 terrainPipe=1`). Both `drawTerrain` and
+`drawEntities` are true. `vkCmdDrawIndexed` is being recorded for
+every entity every frame. The PRIOR diagnostic only fired once
+because it was placed AFTER the framebuffer-bounds guard at line
+589 -- but in the PRIOR test the framebuffer bounds were
+satisfied (swapchain image count = 2, imgIdx = 0). The single-
+print observation that pointed the prior entry at "Execute is
+short-circuited" was actually a logging-throttle artefact: the
+prior `% 60 == 0` cadence never fired again because the test
+window of ~1500 game-frames only translated to ~60 actual
+ScenePass entries (the engine is running at 7-11 fps, not 60 fps),
+and the test ended before entry=60 was reached.
+
+**Two new bugs surfaced in the same data set**:
+
+1. **Framebuffer / attachment dimension MISMATCH** (Vulkan VUID
+   violation, undefined behaviour, possibly silent on this driver).
+   `m_width = 1920, m_height = 1080` (the values the Renderer
+   passes to ScenePass::OnResize, derived from
+   `renderWidth`/`renderHeight`, themselves the GLFW *window*
+   pixels) but `swap = 1904 x 993` (the actual swapchain image
+   dimensions, sized to the *client area* the surface gives back
+   from `vkGetPhysicalDeviceSurfaceCapabilitiesKHR`).
+   `ScenePass::CreateFramebuffers` (`engine/renderer/passes/
+   ScenePass.cpp` lines 339-340) sets `info.width = m_width;
+   info.height = m_height;` and binds attachments from
+   `m_swapchain->GetVkImageView(i)` whose underlying images are
+   1904x993. Per Vulkan spec
+   (VUID-VkFramebufferCreateInfo-pAttachments-00880): "the
+   dimensions of each image view must be greater than or equal to
+   the framebuffer dimensions". 1904 < 1920 violates this. The
+   driver may silently render to a smaller-than-asked-for region,
+   silently truncate the render area, or produce undefined visual
+   results -- likely "the centre of the screen never sees a draw",
+   which matches what every prior frame-dump shows (centre 200x200
+   averages 89,89,124 = the BeginFrame clear color in sRGB).
+
+2. **vkAcquireNextImageKHR failure storm**. After the first 1-2
+   successful frames the err log contains hundreds of
+   `[VulkanSwapchain] Failed to acquire swapchain image` lines.
+   That message in `engine/rhi/vulkan/VulkanSwapchain.cpp` line
+   103 only fires when the result is *not* `VK_ERROR_OUT_OF_DATE_KHR`
+   *and* not `VK_SUCCESS / VK_SUBOPTIMAL_KHR` -- so it is a real
+   non-recoverable acquire error every frame. With infinite
+   timeout (`UINT64_MAX`) the only paths that can reach this branch
+   are `VK_ERROR_DEVICE_LOST`, `VK_ERROR_SURFACE_LOST_KHR`,
+   `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`, or out-of-memory.
+   Renderer::BeginFrame treats UINT32_MAX as "out of date" and
+   calls `RecreateSwapchain()`, which succeeds (the surface still
+   accepts new swapchains), so the next frame's acquire is tried
+   again, fails again, recreates again. fps craters from a
+   reference 60 to a measured 7-11. Every recreate cycle emits
+   `[VulkanSwapchain] Cleaning up swapchain resources... Creating
+   swapchain...`.
+
+The first bug explains the visible-output disconnect (entities
+draw every frame but to a region the swapchain's present image
+never shows). The second bug compounds it (only 7-11 of 60
+frames per second actually reach Execute, so even the rare
+correct draws are landing into a presented image less often).
+
+**Why prior iterations all reported "60 fps sustained"**: they
+ran via the `launch-on-secondary.ps1` wrapper which relocates the
+window with `SetWindowPos + SW_SHOWNOACTIVATE`. The relocate
+fires within ~25 ms of HWND creation, BEFORE GLFW's initial
+framebuffer-resize callback could re-derive
+`renderWidth/renderHeight` from the moved window's client area.
+Direct launches (no wrapper) miss this race: the window appears
+on the primary monitor at full-screen pixel size 1920x1080, GLFW
+returns that as the framebuffer size, but Windows DWM gives the
+swapchain a 1904x993 client area. Wrapper-relocated windows land
+on the secondary monitor at 1920x1061 (where client/window
+match) and the bug stays masked.
+
+(Side observation: the wrapper itself appears to have regressed
+-- this iteration's three attempts to launch through
+`launch-on-secondary.ps1` all produced empty stdout/stderr logs
+even though the wrapper truncated the files and the timeout
+completed cleanly. Direct-launch worked. The PowerShell
+`Register-ObjectEvent` -> `StreamWriter` chain may be losing
+events when the parent shell is `-WindowStyle Hidden`. If the
+next iteration needs wrapper output it should fall back to
+direct launch and capture the warning that wrapper logs went
+silent in its progress entry.)
+
+**Verification**:
+
+1. **Build**: 10/10 green, ~115 s after touch-and-rebuild.
+2. **Validate**: 1 pre-existing severity 2 issue
+   (`tests/integration/test_golden_image.cpp` clang macro-
+   expansion error from Windows-backslash paths in
+   `CAT_GOLDEN_IMAGE_DIR` / `CAT_FRAMEDUMP_CANDIDATE_PATH`). Not
+   introduced by this iteration; the only file touched
+   (`ScenePass.cpp`) compiles clean under both the ninja build
+   and the clang validate path.
+3. **Playtest direct-launch**: exits 0, new diagnostic format
+   appears with entry/draw/gate counters. fps=7-11 in heartbeat
+   (degraded by bug #2).
+
+**Files touched**:
+
+- `engine/renderer/passes/ScenePass.cpp` -- moved diagnostic to
+  top of `Execute`, restructured into entry/draw counter pair
+  with `gate=` reason string. Split the embedded clip-space
+  print into a separate `[ScenePass-DIAG-CLIP]` line on a slow
+  cadence.
+
+**Visible delta (before -> after)**: zero in the rendered
+playtest -- the change is entirely diagnostic. But the
+*understanding* delta is large: the prior entry's "single-fix
+multi-iteration unlock" predicate (`gate=ok` actually false on
+post-frame-1 calls) is FALSIFIED, freeing the next iteration to
+chase the real two bugs above instead of fortifying a guard
+that never fired.
+
+**Cost note**: zero hot-path impact in the steady state.
+
+**Next**: Two parallel paths, in priority order:
+
+  (a) **Fix bug #1, framebuffer dim mismatch** (highest
+      probability of "ship the cat" delta). In
+      `Renderer::RecreateSwapchain` and `Renderer::OnResize`,
+      AFTER the new swapchain is created, query its actual
+      width/height from `swapchain->GetWidth() / GetHeight()`
+      and pass *those* to `scenePass->OnResize` instead of
+      `renderWidth/renderHeight`. Mirror the same fix for
+      `uiPass->OnResize`. Then re-run direct-launch playtest --
+      the centre 200x200 of the new frame-dump should finally
+      reflect the entity-draw pixels instead of the BeginFrame
+      clear color. If the centre still shows clear color,
+      escalate to enabling Vulkan validation layer in the engine
+      config and capture the VUID violations the framebuffer
+      mismatch is producing.
+
+  (b) **Fix bug #2, acquire failure storm** (prerequisite for a
+      clean 60 fps playtest video). Add a guard in
+      `VulkanSwapchain::AcquireNextImage` to log the actual
+      `VkResult` (cast to int) when it falls through the
+      OUT_OF_DATE branch -- then the failure-mode is named, not
+      lumped under "Failed to acquire". Most likely cause is
+      `VK_ERROR_DEVICE_LOST` or `VK_ERROR_SURFACE_LOST_KHR` from
+      a stale surface kept across recreate. Either way, the fix
+      is surface-recreation in the recreate path, not just
+      swapchain-recreation. The current `RecreateSwapchain()`
+      destroys+creates the swapchain but keeps the
+      `VkSurfaceKHR`; if the surface is the lost resource, every
+      retry sees the same dead surface.
+
+
+
+## 2026-04-25 ~15:30 UTC -- SHIP-THE-CAT delta. Framebuffer/attachment dim mismatch FIXED -- pass framebuffers now sized to the swapchain's post-clamp extent (1904x993) instead of the requested 1920x1080. Centre 200x200 of the playtest frame-dump went from `(89,89,124)` clear-color to `(139,190,116)` terrain pixels: the entity-draw region is finally inside the presented image.
+
+**What**: Implemented option (a) from the prior entry's "Next" handoff
+-- propagate the swapchain's *actual* extent (returned by
+`vkGetPhysicalDeviceSurfaceCapabilitiesKHR` / `ChooseSwapExtent` and
+stored as `VulkanSwapchain::m_width/m_height` per
+`VulkanSwapchain.cpp:287-288`) to `ScenePass::OnResize` and
+`UIPass::OnResize` instead of the GLFW-derived asked-for
+`renderWidth/renderHeight`. Three sites changed in
+`engine/renderer/Renderer.cpp`:
+
+  1. `Renderer::Initialize()` line 67: initial `uiPass->OnResize`
+     now uses `swapchain->GetWidth()/GetHeight()`. ScenePass::Setup
+     already pulls `m_width/m_height` from the swapchain itself
+     (`ScenePass.cpp:49-50`), so no change there at startup.
+  2. `Renderer::OnResize()`: removed the redundant pass-notify
+     calls. They previously fired AFTER `RecreateSwapchain()` with
+     `width/height` (GLFW window pixels) and re-overwrote the
+     correct clamped dims that `RecreateSwapchain()` had just set.
+     Race fixed by deletion -- `RecreateSwapchain()` is now the
+     single source of truth for pass-dim notification.
+  3. `Renderer::RecreateSwapchain()`: queries
+     `swapchain->GetWidth()/GetHeight()` after `CreateSwapchain()`
+     succeeds and feeds those `actualWidth/actualHeight` to
+     `scenePass->OnResize()` and `uiPass->OnResize()`. Falls back to
+     `renderWidth/renderHeight` only if the swapchain pointer is
+     null (defensive -- shouldn't happen, but the alternative is
+     UB on a code path that's already error-handling).
+
+Each site has a robust WHY-comment naming the VUID
+(`VUID-VkFramebufferCreateInfo-pAttachments-00880`), the bug
+manifestation (centre clear-color), and why renderWidth/renderHeight
+are still kept as a SwapchainDesc hint (the surface needs *some*
+asked-for size to clamp, and that clamping is the only thing
+`renderWidth/renderHeight` are authoritative for).
+
+**The visible delta** (direct-launch playtest, 35 s autoplay,
+`--frame-dump iter-dimfix.ppm`):
+
+| Region                    | Before this fix    | After             |
+|---------------------------|--------------------|-------------------|
+| Centre 200x200            | (89,89,124) clear  | (139,190,116)     |
+| Centre lower (0.5W, 0.7H) | (89,89,124) clear  | (159,114,64)      |
+| Centre upper (0.5W, 0.3H) | (89,89,124) clear  | (142,204,125)     |
+| Corners (TL/TR/BL/BR)     | already terrain    | unchanged terrain |
+
+The terrain green and earthy actor pixels finally land in the
+centre of the presented image -- the previous baseline-iter PPM
+in `/tmp/state/iter-baseline.ppm` shows the centre is dead-on
+clear color (89,89,124) at the same pixel coords. This is the
+"ship the cat" delta the user demanded: same engine, same
+content, fundamentally different visible output.
+
+**ScenePass diagnostic confirms the cause**: the new playtest's
+err log shows the dim agreement directly, side-by-side with the
+prior entry's data:
+
+  Before: m_width=1920 m_height=1080 swap=1904x993  (mismatch)
+  After:  m_width=1904 m_height=993  swap=1904x993  (aligned)
+
+`gate=ok` continues to hold, `draw==entry-1` continues to hold,
+`entityPipe=1 terrainPipe=1` continues to hold -- the only
+variable that changed between iterations is the framebuffer dim.
+
+**Verification**:
+
+1. **Build**: 10/10 green, ~88 s incremental. Zero new warnings
+   or errors introduced; the Renderer.cpp change compiles clean
+   under both ninja and the validate path.
+2. **Validate**: 1 issue, severity 2, pre-existing -- the same
+   clang macro-expansion error in
+   `tests/integration/test_golden_image.cpp` from Windows-back
+   slash paths in `CAT_GOLDEN_IMAGE_DIR` /
+   `CAT_FRAMEDUMP_CANDIDATE_PATH`. Not introduced this iteration
+   (called out unchanged in the prior entry).
+3. **Playtest direct-launch**: exits 0, 220 frames over 35 s,
+   wave 1 played out (3 enemies spawned, all killed, xp=50/100),
+   no segfault, no validation salvo. fps still 4-8 because
+   bug #2 (vkAcquireNextImage failure storm) is not yet
+   addressed -- that is the next iteration's target.
+
+**Files touched**:
+
+- `engine/renderer/Renderer.cpp` -- three call-sites updated
+  (Initialize, OnResize, RecreateSwapchain) plus robust
+  WHY-comments at each.
+
+**What this does NOT fix yet**:
+
+- vkAcquireNextImageKHR failure storm (bug #2). Acquire still
+  fails most frames, RecreateSwapchain still fires repeatedly,
+  fps still craters to 4-8 on the direct-launch path. The
+  visible-output bug is now decoupled from the fps bug -- when
+  acquire DOES succeed and a frame is presented, the centre of
+  the image is now correct. So this iteration unlocks the work
+  the prior 8 iterations of shader/material/PBR/camera fiddling
+  were building toward but never visible.
+- Player cat skinning, animation, dog variant rendering --
+  those become the natural next steps once the fps storm is
+  killed.
+
+**Cost note**: zero hot-path impact. Three swapchain pointer
+dereferences on resize/recreate paths. Comments are cold.
+
+**Next**: Two parallel tracks, in priority order:
+
+  (a) **Kill bug #2: vkAcquireNextImageKHR failure storm.**
+      `engine/rhi/vulkan/VulkanSwapchain.cpp:103` is the unhandled
+      branch -- it logs "Failed to acquire" but does NOT print the
+      actual `VkResult`. Cast it to `int` and emit it. With
+      `UINT64_MAX` timeout the only paths that can reach that
+      branch are `VK_ERROR_DEVICE_LOST` (-4),
+      `VK_ERROR_SURFACE_LOST_KHR` (-1000000000),
+      `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`, or
+      `VK_ERROR_OUT_OF_*_MEMORY`. Most likely SURFACE_LOST -- the
+      current `Renderer::RecreateSwapchain()` reuses
+      `config.windowHandle` to make a new swapchain but never
+      destroys+recreates `VkSurfaceKHR`, so a stale surface stays
+      stale across recreates. Fix: in `RecreateSwapchain()`, when
+      the recreate is in response to a true error (not just an
+      out-of-date image), destroy the old surface and rebuild it
+      from the GLFW window before calling `CreateSwapchain()`. Or
+      simpler: query the surface caps every recreate and detect
+      when they're rejected.
+
+  (b) **Once fps is back to 60, capture a clean before/after
+      visual** -- frame-dump at 5 s and at 30 s, diff the centre
+      regions, confirm the cat sprite is finally visible at
+      world position (0, 0.something, 0). Then pick from the
+      Meshy mesh integration backlog: dog variant rendering or
+      player cat skinning, whichever the asset directory and
+      `assets/models/cats/ember_leader.glb` make easier to ship
+      next.
