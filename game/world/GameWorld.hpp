@@ -39,7 +39,14 @@ public:
         // Spawn point
         Engine::vec3 spawnPoint = Engine::vec3(0.0f, 50.0f, 0.0f);
 
-        Config() = default;
+        // WHY no explicit `Config() = default;` and no `= Config()`
+        // default argument below: clang 21 refuses to synthesise a
+        // defaulted constructor for a nested struct with in-class
+        // initializers while the enclosing class is still being
+        // parsed. The no-arg overload in the .cpp delegates to the
+        // full overload with `Config{}`, which runs after the class
+        // definition completes and is therefore legal. See
+        // Terrain.hpp for the full analysis.
     };
 
     /**
@@ -51,8 +58,12 @@ public:
      */
     GameWorld(
         CatEngine::CUDA::CudaContext& cudaContext,
+        CatEngine::Physics::PhysicsWorld& physicsWorld
+    );
+    GameWorld(
+        CatEngine::CUDA::CudaContext& cudaContext,
         CatEngine::Physics::PhysicsWorld& physicsWorld,
-        const Config& config = Config()
+        const Config& config
     );
 
     /**

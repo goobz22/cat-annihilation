@@ -118,6 +118,20 @@ set(UNIT_TEST_SOURCES
     # determinism, isotropy, and detail::FastFloor / DotGrad / kGrad3
     # contracts that the in-game particle turbulence field depends on.
     unit/test_simplex_noise.cpp
+    # RibbonTrail is header-only (engine/cuda/particles/RibbonTrail.hpp) and
+    # depends only on engine math (Vector — vec2/vec3/vec4) + STL. Same
+    # CUDA-free, header-shared rationale as SimplexNoise: the math is the
+    # camera-facing billboard quad generator that the future projectile-VFX
+    # render path will call from a CPU strip-builder loop AND that a future
+    # CUDA strip-builder kernel will call from device code (one-line change
+    # to add __host__ __device__ qualifiers). Tests pin the orthonormal-frame
+    # contract for ComputeSegmentBasis, the strip-canonical UV layout +
+    # color split for BuildBillboardSegment, the lifetime-linear lerp +
+    # clamp invariants for TaperHalfWidth, the 4 + 6*(N-1) capacity formula
+    # for MaxStripVertexCount, and the bridge / skip / truncate behaviour
+    # for BuildRibbonStrip — everything the renderer's vertex-buffer-fill
+    # loop depends on.
+    unit/test_ribbon_trail.cpp
     # RootMotion is header-only (engine/animation/RootMotion.hpp) and depends
     # only on engine math (Vector / Quaternion / Transform / Math). Same
     # no-mock link rationale as TwoBoneIK and SimplexNoise: pure CPU math,
@@ -253,10 +267,21 @@ set(UNIT_TEST_SOURCES
 )
 
 # Collect integration test sources.
-# All three currently SKIPPED for the same class of drift as the unit tests
-# above — MockECS::ECS vs CatEngine::ECS mismatch plus phantom Clan/
-# DayNightCycle/ElementalMagicSystem references. Preserved on disk.
+#
+# Three legacy tests SKIPPED for drift (MockECS::ECS vs CatEngine::ECS
+# mismatch plus phantom Clan/DayNightCycle/ElementalMagicSystem references).
+# Files preserved on disk — cardinal rule 4: skip, don't delete.
+#
+# integration/test_golden_image.cpp is the ACTIVE entry. It closes the
+# P0 "Headless render mode + golden-image CI test" item by SSIM-diffing
+# tests/golden/smoke.ppm against build-ninja/smoke.ppm. Header-only
+# ImageCompare + STL only, so it links cleanly in the no-GPU test build
+# the same way tests/unit/test_image_compare.cpp does. The two
+# CAT_GOLDEN_IMAGE_DIR / CAT_FRAMEDUMP_CANDIDATE_PATH defines below pin
+# the two paths to absolute compile-time values so the test is
+# portable across worktrees and cwd-independent inside ctest runs.
 set(INTEGRATION_TEST_SOURCES
+    integration/test_golden_image.cpp
     # integration/test_game_flow.cpp         # SKIPPED — passes MockECS::ECS* to QuestSystem::init and
                                              #           CombatSystem::init (which want CatEngine::ECS*),
                                              #           and references Clan::Shadow (not a real enum
@@ -318,6 +343,16 @@ set(MOCK_SOURCES
     mocks/mock_renderer.cpp
     mocks/mock_ecs.cpp
     mocks/mock_particle_system.cpp
+    # mock_cat_entity.cpp provides link-time stubs for
+    # CatGame::CatEntity::{loadModel, configureAnimations} — the real
+    # implementations live in game/entities/CatEntity.cpp and pull in the
+    # full AssetManager + Skeleton + Animator + Animation chain, which the
+    # mock-GPU test build deliberately excludes (USE_MOCK_GPU=1). NPCSystem
+    # references these methods inside spawnNPC, so without the stub the test
+    # executables fail to link with LNK2019. See the file's header for the
+    # full rationale and the same link-time-mock pattern that
+    # mock_particle_system.cpp documents.
+    mocks/mock_cat_entity.cpp
 )
 
 # Create unit test executable
@@ -346,6 +381,37 @@ if(NOT WIN32)
     target_link_libraries(unit_tests PRIVATE pthread)
     target_link_libraries(integration_tests PRIVATE pthread)
 endif()
+
+# Compile-time path defines for test_golden_image.cpp.
+#
+# The golden image lives at a stable in-repo location (tests/golden/smoke.ppm)
+# but the test binary may be invoked from any working directory — ctest from
+# the build dir, an IDE test-runner from the source dir, or a CI runner from
+# an arbitrary shell path. Injecting absolute paths at configure time means
+# the test never has to guess or probe relative paths.
+#
+# CAT_FRAMEDUMP_CANDIDATE_PATH must resolve to the directory where the
+# engine's `--frame-dump` CLI writes by convention. That directory is the
+# top-level CMake build dir — e.g. build-ninja/ — because
+# CatAnnihilation.exe lives there and writes its swapchain readback
+# relative to its own working directory. Note: because `tests/` is pulled
+# in by `add_subdirectory(tests)` from the parent project, CMAKE_BINARY_DIR
+# here refers to the PARENT'S binary dir (the main build-ninja/ folder),
+# NOT the tests subdir. An earlier draft used `${CMAKE_BINARY_DIR}/../smoke.ppm`
+# on the incorrect assumption CMAKE_BINARY_DIR was tests/; that walked one
+# directory too high and the candidate was never found. CMAKE_CURRENT_BINARY_DIR
+# here would have been the tests subdir — we deliberately use the parent so
+# the path aligns with where the engine actually writes.
+#
+# The quoting discipline is deliberate: CMake substitutes ${PATH} as raw
+# text, so the surrounding \" are necessary to keep the path a valid C++
+# string literal after preprocessor expansion. Paths on Windows use forward
+# slashes uniformly (MSVC accepts them in file I/O); no escaping of
+# backslashes required.
+target_compile_definitions(integration_tests PRIVATE
+    CAT_GOLDEN_IMAGE_DIR="${PROJECT_ROOT}/tests/golden"
+    CAT_FRAMEDUMP_CANDIDATE_PATH="${CMAKE_BINARY_DIR}/smoke.ppm"
+)
 
 # Add test targets
 enable_testing()

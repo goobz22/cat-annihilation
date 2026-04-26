@@ -13,6 +13,18 @@ namespace CUDA {
 struct GpuParticles {
     float3* positions;      // Current positions
     float3* velocities;     // Current velocities
+    // Position at the START of the current simulation step (i.e. "where this
+    // particle was last frame"). Written by updateParticles BEFORE the
+    // position integration step, and by emitParticles = current position (so
+    // a fresh particle contributes a zero-length, no-op segment on its first
+    // frame). Consumed by RibbonTrail.hpp's camera-facing billboard kernel
+    // to derive the tangent direction for the trail strip. Must be included
+    // in every stream-compaction and depth-sort gather — forgetting it would
+    // silently break the (prev, current) correspondence for surviving
+    // particles, producing visible trail chords that chord across the
+    // particle's original emit position instead of its previous frame
+    // position. See ENGINE_PROGRESS.md 2026-04-24 ribbon-trail iteration 2.
+    float3* prevPositions;
     float4* colors;         // RGBA colors
     float* lifetimes;       // Current lifetime remaining
     float* maxLifetimes;    // Initial lifetime (for normalization)
@@ -68,6 +80,24 @@ struct GpuEmitterParams {
 };
 
 /**
+ * @brief Which underlying scalar noise function drives the curl field.
+ *
+ * Both modes evaluate a 3-channel vector field by sampling a scalar noise at
+ * (p, p+yShift, p+zShift) — the difference is the scalar noise used.
+ *
+ *   Perlin  — grid-aligned hash-lerp value noise (legacy, retained for A/B
+ *             comparison screenshots because its "streaks" make the grid
+ *             tessellation visible at any axis-aligned camera angle).
+ *   Simplex — Gustavson's 2012 simplex noise on a tetrahedral lattice
+ *             (no axis-aligned cell faces, so the turbulence looks
+ *             isotropic at any orientation).
+ */
+enum class TurbulenceNoiseMode : int {
+    Perlin  = 0,  // legacy, default for backward-compat
+    Simplex = 1
+};
+
+/**
  * @brief Force parameters for particle simulation
  */
 struct ForceParams {
@@ -84,6 +114,12 @@ struct ForceParams {
     float turbulenceFrequency;
     float turbulenceOctaves;
     float turbulenceTime;       // For animation
+
+    // WHY a separate enum field not a bool: future noise functions (worley,
+    // curl-of-curl, analytic divergence-free fields) can be added without
+    // breaking the two-mode ABI — callers that set `Perlin` or `Simplex`
+    // explicitly will still work unchanged.
+    TurbulenceNoiseMode turbulenceNoiseMode;
 
     // Point attractors/repulsors
     int attractorCount;
@@ -218,14 +254,28 @@ __device__ inline float4 randomRange4(curandState* state, float4 min, float4 max
 }
 
 /**
- * @brief Device function: Curl noise for turbulence
+ * @brief Device function: Curl noise for turbulence.
+ *
+ * Samples a divergence-free vector field via numerical curl of a scalar noise
+ * function. The underlying scalar is selected by `mode` — see
+ * `TurbulenceNoiseMode` above for the rationale.
  */
-__device__ float3 curlNoise(float3 p, float frequency, float time);
+__device__ float3 curlNoise(float3 p, float frequency, float time,
+                            TurbulenceNoiseMode mode);
 
 /**
- * @brief Device function: 3D Perlin noise
+ * @brief Device function: grid-aligned 3D value noise (historically called
+ *        "perlin" in this codebase, but the implementation is trilinearly-
+ *        lerped hash values — strictly speaking a variant of value noise).
  */
 __device__ float perlinNoise3D(float3 p);
+
+/**
+ * @brief Device function: 3D simplex noise (Gustavson 2012).
+ *        See engine/cuda/particles/SimplexNoise.hpp for the reference
+ *        implementation shared with the Catch2 tests.
+ */
+__device__ float simplexNoise3D(float3 p);
 
 } // namespace CUDA
 } // namespace CatEngine

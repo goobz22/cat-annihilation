@@ -1,6 +1,7 @@
 #include "VulkanSwapchain.hpp"
 #include "VulkanDebug.hpp"
 #include <array>
+#include <chrono>
 #include <iostream>
 #include <algorithm>
 #include <limits>
@@ -100,7 +101,23 @@ uint32_t VulkanSwapchain::AcquireNextImage(uint64_t timeout) {
         return UINT32_MAX;
     }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        std::cerr << "[VulkanSwapchain] Failed to acquire swapchain image\n";
+        // Diagnostic: emit the actual VkResult code so the recreate-loop
+        // failure mode is named instead of lumped under a generic message.
+        // With timeout=UINT64_MAX the only paths that can land here are
+        //   VK_ERROR_DEVICE_LOST (-4)
+        //   VK_ERROR_SURFACE_LOST_KHR (-1000000000)
+        //   VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT (-1000255000)
+        //   VK_ERROR_OUT_OF_HOST_MEMORY (-1) / VK_ERROR_OUT_OF_DEVICE_MEMORY (-2)
+        // Throttle to once per second to avoid 60-line/sec err-log spam
+        // when the failure is a steady storm (the case Renderer's
+        // recreate path retries every frame).
+        static auto s_lastLog = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - s_lastLog >= std::chrono::seconds(1)) {
+            s_lastLog = now;
+            std::cerr << "[VulkanSwapchain] Failed to acquire swapchain image, VkResult="
+                      << static_cast<int>(result) << "\n";
+        }
         return UINT32_MAX;
     }
 
@@ -114,7 +131,13 @@ bool VulkanSwapchain::Present() {
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &m_renderFinishedSemaphores[m_currentFrame];
+    // Per-image render-finished semaphore (see GetRenderFinishedSemaphore
+    // header WHY-comment). The image index the present is waiting on must
+    // match the index that vkQueueSubmit signaled — otherwise the present
+    // would block forever (or the wait would see an unrelated signal).
+    // Renderer::EndFrame uses the same accessor, so the two ends of the
+    // pair stay paired by construction.
+    presentInfo.pWaitSemaphores = &m_renderFinishedSemaphores[m_currentImageIndex];
 
     std::array<VkSwapchainKHR, 1> swapchains = {m_swapchain};
     presentInfo.swapchainCount = 1;
@@ -142,10 +165,19 @@ bool VulkanSwapchain::Resize(uint32_t width, uint32_t height) {
         return false;
     }
 
-    // Wait for device to be idle
+    // Wait for device to be idle so the per-frame sync objects we're about
+    // to destroy aren't still owned by an in-flight queue submission.
     m_device->WaitIdle();
 
-    // Cleanup old swapchain
+    // Cleanup old swapchain AND sync objects. The per-image
+    // renderFinishedSemaphores must match the new swapchain image count;
+    // the per-frame imageAvailable + inFlight pools could in principle be
+    // reused but it's cheaper-to-reason-about to nuke and re-create the
+    // whole sync set than to track which subset remains valid. Resizes
+    // are infrequent (window size change, monitor switch, vsync toggle)
+    // so the extra few vkCreateSemaphore/Fence calls are amortized to
+    // zero on the per-frame path.
+    CleanupSyncObjects();
     CleanupSwapchain();
 
     // Create new swapchain
@@ -153,6 +185,17 @@ bool VulkanSwapchain::Resize(uint32_t width, uint32_t height) {
         std::cerr << "[VulkanSwapchain] Failed to recreate swapchain\n";
         return false;
     }
+
+    if (!CreateSyncObjects()) {
+        std::cerr << "[VulkanSwapchain] Failed to recreate synchronization objects after resize\n";
+        return false;
+    }
+
+    // Reset frame-in-flight counter so the first post-resize acquire uses
+    // a freshly-signaled fence (CreateSyncObjects creates fences with
+    // VK_FENCE_CREATE_SIGNALED_BIT). Without this, acquire would immediately
+    // wait on a never-signaled fence and deadlock.
+    m_currentFrame = 0;
 
     m_width = width;
     m_height = height;
@@ -476,8 +519,41 @@ VkExtent2D VulkanSwapchain::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& cap
 }
 
 bool VulkanSwapchain::CreateSyncObjects() {
+    // Two distinct sizing rules apply here:
+    //
+    //   * imageAvailable + inFlight: per FRAME-IN-FLIGHT (MAX_FRAMES_IN_FLIGHT).
+    //     vkAcquireNextImageKHR is called BEFORE we know which image we'll
+    //     get, so we can't index by image. The frame-in-flight pool
+    //     bounds CPU-side overlap of submission preparation against GPU
+    //     execution, and is fixed at compile time.
+    //
+    //   * renderFinished: per SWAPCHAIN IMAGE (m_images.size()).
+    //     vkQueueSubmit signals it AFTER we've acquired an image, and
+    //     vkQueuePresentKHR waits on it; the present operation associates
+    //     the wait-semaphore lifetime with the image being presented.
+    //     Reusing the same semaphore for two different images that happen
+    //     to land in the same frame-in-flight slot triggers
+    //     VUID-vkQueueSubmit-pSignalSemaphores-00067 because the previous
+    //     present on image N may still observe the semaphore as its wait
+    //     when frame-slot N+1 tries to resignal it. See
+    //     GetRenderFinishedSemaphore() in the header for the full
+    //     manifestation history (silent SIGSEGV ~150 ms post-first-frame
+    //     when validation is OFF; clean with validation ON because the
+    //     validation-mutex latency serializes the resignal).
+    //
+    // We require CreateSwapchain() to have populated m_images before this
+    // runs — verified by the constructor sequence (CreateSwapchain on
+    // line 55, then CreateSyncObjects on line 61) and by Resize() below
+    // calling CreateSwapchain → CleanupSyncObjects → CreateSyncObjects in
+    // that order so the new image count is reflected.
+    const size_t imageCount = m_images.size();
+    if (imageCount == 0) {
+        std::cerr << "[VulkanSwapchain] CreateSyncObjects called before swapchain images were created\n";
+        return false;
+    }
+
     m_imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_renderFinishedSemaphores.resize(imageCount);
     m_inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo semaphoreInfo = {};
@@ -489,9 +565,15 @@ bool VulkanSwapchain::CreateSyncObjects() {
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(m_device->GetDevice(), &semaphoreInfo, nullptr, &m_imageAvailableSemaphores[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(m_device->GetDevice(), &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(m_device->GetDevice(), &fenceInfo, nullptr, &m_inFlightFences[i]) != VK_SUCCESS) {
-            std::cerr << "[VulkanSwapchain] Failed to create synchronization objects\n";
+            std::cerr << "[VulkanSwapchain] Failed to create per-frame synchronization objects\n";
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < imageCount; i++) {
+        if (vkCreateSemaphore(m_device->GetDevice(), &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS) {
+            std::cerr << "[VulkanSwapchain] Failed to create per-image render-finished semaphore\n";
             return false;
         }
     }
@@ -500,13 +582,25 @@ bool VulkanSwapchain::CreateSyncObjects() {
 }
 
 void VulkanSwapchain::CleanupSyncObjects() {
+    // Iterate each pool independently — they may differ in size now that
+    // imageAvailable + inFlightFences are per-frame-in-flight (size =
+    // MAX_FRAMES_IN_FLIGHT) but renderFinished is per-image
+    // (size = m_images.size()). The pre-2026-04-25 unified loop stopped
+    // at imageAvailable.size(), which would silently leak the trailing
+    // renderFinished semaphores whenever the swapchain's image count
+    // exceeded MAX_FRAMES_IN_FLIGHT (e.g., the engine's default of 3
+    // images on Windows/NVIDIA).
     for (size_t i = 0; i < m_imageAvailableSemaphores.size(); i++) {
         if (m_imageAvailableSemaphores[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(m_device->GetDevice(), m_imageAvailableSemaphores[i], nullptr);
         }
+    }
+    for (size_t i = 0; i < m_renderFinishedSemaphores.size(); i++) {
         if (m_renderFinishedSemaphores[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(m_device->GetDevice(), m_renderFinishedSemaphores[i], nullptr);
         }
+    }
+    for (size_t i = 0; i < m_inFlightFences.size(); i++) {
         if (m_inFlightFences[i] != VK_NULL_HANDLE) {
             vkDestroyFence(m_device->GetDevice(), m_inFlightFences[i], nullptr);
         }

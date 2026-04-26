@@ -234,6 +234,39 @@ public:
     CombatSystem* getCombatSystem() const { return combatSystem_; }
 
     /**
+     * Get wave system.
+     *
+     * Non-owning; the WaveSystem itself is registered with the ECS (which
+     * owns it). Exposed so the main-loop heartbeat (main.cpp) and any future
+     * headless / CI probe can read currentWave / enemiesRemaining without
+     * having to discover the system by type through the ECS registry.
+     *
+     * @return Pointer to wave system, or nullptr before initialize()
+     */
+    WaveSystem* getWaveSystem() const { return waveSystem_; }
+
+    /**
+     * Get leveling system.
+     *
+     * LevelingSystem is owned by this class as a unique_ptr because it holds
+     * the player's accumulated stats (level, xp, unlock state) across waves
+     * — if it lived in the ECS registry it would be re-constructed on every
+     * restart(). The raw pointer returned here is non-owning.
+     *
+     * @return Pointer to leveling system, or nullptr before initialize()
+     */
+    LevelingSystem* getLevelingSystem() const { return levelingSystem_.get(); }
+
+    /**
+     * Total enemies killed in the current session.
+     *
+     * Incremented by onEnemyKilled(); resets on restart() via startNewGame().
+     * Exposed so the heartbeat log and HUD can read it from outside without
+     * friending those call sites.
+     */
+    int getEnemiesKilled() const { return enemiesKilled_; }
+
+    /**
      * Get event bus
      * @return Reference to event bus
      */
@@ -301,14 +334,126 @@ private:
     void createPlayer();
 
     /**
+     * Re-populate world-persistent entities (NPCs today, merchants/props as
+     * the world grows) into the freshly-cleared ECS.
+     *
+     * Why this exists: every game-start path (`restart`, `loadGame`, autoplay
+     * via `startNewGame`) calls `ecs_.clearEntities()` to wipe stale state.
+     * That sweep also obliterates the 16 NPC entities spawned during
+     * `loadGameData()` at engine startup, leaving the world map empty for
+     * the rest of the session — the visible-progress disaster surfaced
+     * 2026-04-25 (4 entities skinning instead of the expected 20 because
+     * `loadNPCsFromFile` ran exactly once, before the first ECS wipe).
+     *
+     * Called immediately after `createPlayer()` on each start path. Safe
+     * to call repeatedly because `NPCSystem::clearAll()` resets its
+     * internal "already exists" guard before re-spawning. No-op when
+     * `npcSystem_` is null (the system is optional in test harnesses
+     * that don't link the JSON loader).
+     */
+    void repopulateWorldEntities();
+
+    /**
      * Create and configure the death particle emitter
      */
     void createDeathParticleEmitter();
 
     /**
-     * Spawn death effect particles at position
+     * Spawn death effect particles at position.
+     *
+     * `damageType` selects a per-element tuning profile (Physical = orange-red,
+     * Fire = orange-yellow with strong upward velocity, Ice = pale-cyan with
+     * slow downward drift, Poison = yellow-green lingering cloud, Magic =
+     * white-purple radial, True = pure white-yellow). Defaults to Physical so
+     * legacy callers (and the few non-combat death paths like scripted kills)
+     * still produce the original orange-red burst.
+     *
+     * The dispatcher is a small inline lookup table inside spawnDeathParticles
+     * that mutates the existing dormant emitter (deathEmitterId_) in place
+     * before triggerBurst — single-emitter parametrization rather than a pool
+     * of per-element emitters. Trade-off: one map probe + a struct copy per
+     * call (cheap at <2 Hz peak death cadence) in exchange for ~80% less code
+     * + zero new emitter slots in the ParticleSystem map. The visual delta
+     * (per-element colour, velocity arc, lifetime) lives in the tuning table,
+     * not in distinct emitters.
      */
-    void spawnDeathParticles(const Engine::vec3& position);
+    void spawnDeathParticles(const Engine::vec3& position,
+                             DamageType damageType = DamageType::Physical);
+
+    /**
+     * Create and configure the non-killing-hit particle emitter.
+     *
+     * Companion to createDeathParticleEmitter() but tuned for the much higher
+     * call frequency of mid-combat impacts: smaller burst (~10 particles),
+     * tighter sphere radius (so the burst reads as a localised "thwack"
+     * rather than a death-shroud), neutral white-yellow albedo (so impact
+     * reads as generic kinetic feedback regardless of the killing-damage
+     * element), and a shorter lifetime (so the burst clears the screen
+     * before the next swing in a 2-3 hit/sec combat cadence).
+     *
+     * Mirrors the dormant-emitter / re-enable-per-shot pattern of the
+     * death emitter — see createDeathParticleEmitter() and
+     * spawnHitParticles() for the rationale on why a single shared
+     * dormant OneShot emitter is preferable to spawning a fresh emitter
+     * per hit (allocation cost + emitter-map fragmentation if hits land
+     * at >10 Hz during combos).
+     */
+    void createHitParticleEmitter();
+
+    /**
+     * Spawn non-killing-hit particles at the impact position.
+     *
+     * Called from the CombatSystem onHitCallback wired in
+     * connectSystemEvents(). Skipped on killing blows: the death-burst
+     * path (spawnDeathParticles) already produces a much larger burst at
+     * the same position, and stacking the smaller hit burst on top adds
+     * visual noise without delta. The gate lives in the lambda, not in
+     * this function, so callers that want unconditional hit-bursts (a
+     * future CombatSystem trace replay, debug overlay, etc.) can call
+     * this directly.
+     */
+    void spawnHitParticles(const Engine::vec3& position,
+                           DamageType damageType = DamageType::Physical);
+
+    /**
+     * Trigger a camera-shake envelope of the given amplitude (peak metres
+     * of camPos jitter) for the given duration (seconds). Latches into
+     * cameraShakeRemaining_ / cameraShakeDuration_ / cameraShakeAmplitude_
+     * which are then consumed by sampleCameraShakeOffset() each frame.
+     *
+     * Re-trigger semantics: if a shake is already active, the new request
+     * MERGES rather than replacing — duration is reset to the larger of
+     * (remaining, requested) so the new event extends the envelope, and
+     * amplitude is set to the larger of (current, requested) so a bigger
+     * impact during a smaller shake escalates the jitter without a smaller
+     * later impact dampening the in-progress one. This mirrors how AAA
+     * combat games stack camera-shake during multi-kill chains: the player
+     * sees ONE compound shake whose amplitude tracks the most violent
+     * event in the window, not a chaotic sum-of-shakes that goes wild.
+     *
+     * Cap: amplitude is clamped to a hard ceiling so a runaway boss-fight
+     * scenario (8+ simultaneous kills via AOE spell) cannot push the
+     * camera so far it disengages from the player; see implementation
+     * for the chosen ceiling and rationale.
+     */
+    void triggerCameraShake(float amplitudeMeters, float durationSeconds);
+
+    /**
+     * Sample the current camera-shake offset for the given game time.
+     *
+     * Returns vec3(0) if no shake is active (cameraShakeRemaining_ <= 0).
+     * Otherwise composes a 3D pseudo-noise from sums of decoupled sin
+     * waves at non-commensurate frequencies (so x, y, z each look like
+     * independent random walks rather than a single coherent shake
+     * along one axis), envelope-modulated by (remaining/duration) so the
+     * jitter decays smoothly to zero rather than popping off at the
+     * envelope boundary. Time-driven (no per-frame state mutation, no
+     * RNG seeded inside the sampler), so the same gameTime + same shake
+     * params always produce the same offset — useful for debugging
+     * frame dumps and for keeping the sampler safe to call from
+     * arbitrary frame paths (no thread-local state, no allocation).
+     */
+    Engine::vec3 sampleCameraShakeOffset() const;
 
     // ========================================================================
     // Update Logic
@@ -434,9 +579,26 @@ private:
     // UI Systems
     // ========================================================================
 
-    std::unique_ptr<Game::HUD> hud_;
-    std::unique_ptr<Game::MainMenu> mainMenu_;
-    std::unique_ptr<Game::PauseMenu> pauseMenu_;
+    // GameUI owns the actually-rendered HUD / MainMenu / PauseMenu / WavePopup
+    // screens (see game/ui/GameUI.hpp). The hud_ / mainMenu_ / pauseMenu_
+    // members below are non-owning convenience aliases into that instance so
+    // the many notification / render / input call sites in this file can
+    // continue to read as `hud_->showNotification(...)` without threading
+    // `gameUI_->getHUD()` through every call. The aliases are assigned once
+    // in initializeUI() after gameUI_->initialize() succeeds and are cleared
+    // in shutdown() before gameUI_ itself is destroyed, so they never
+    // outlive the screens they point at.
+    //
+    // This layout fixes the pre-refactor bug where hud_ / mainMenu_ /
+    // pauseMenu_ were independently-owned unique_ptr<HUD/MainMenu/PauseMenu>
+    // instances — each screen was then constructed and initialized twice
+    // (once here, once inside GameUI), the double HUD was rendered every
+    // frame during Playing, and the PauseMenu callbacks (Resume, Main Menu,
+    // Quit) were wired onto the legacy free-standing instance while input
+    // was routed to the GameUI-owned one, so the pause buttons did nothing.
+    Game::HUD* hud_ = nullptr;
+    Game::MainMenu* mainMenu_ = nullptr;
+    Game::PauseMenu* pauseMenu_ = nullptr;
     std::unique_ptr<Game::GameUI> gameUI_;
 
     // ========================================================================
@@ -460,11 +622,54 @@ private:
     // Particle effects
     uint32_t deathEmitterId_ = 0;
 
+    // Companion to deathEmitterId_, fired from the CombatSystem onHitCallback
+    // wired in connectSystemEvents(). One shared dormant emitter, re-enabled
+    // per non-killing hit. Killing blows skip this and use the death burst
+    // instead (see spawnHitParticles for the gating rationale).
+    uint32_t hitEmitterId_ = 0;
+
+    // ========================================================================
+    // Camera shake (kill-feedback finishing touch)
+    // ========================================================================
+    //
+    // Three packed scalars driving a single envelope-modulated 3D-noise jitter
+    // applied to camPos in the per-frame camera setup. cameraShakeRemaining_
+    // counts down each frame in updateSystems; while it's > 0,
+    // sampleCameraShakeOffset() composes an offset whose amplitude scales by
+    // (remaining/duration) so the shake decays smoothly to zero instead of
+    // popping off when the timer trips zero.
+    //
+    // We store amplitude AND duration (rather than re-deriving duration from
+    // a fixed constant) so triggerCameraShake() can scale the envelope per
+    // event class — boss-kill shake gets longer + bigger, regular-dog kill
+    // stays small + brief — without baking those choices into a switch
+    // statement at the trigger site. The current callers all pass the same
+    // duration (kept as data so future per-element tuning slots in cleanly).
+    //
+    // Why not a separate CameraShakeSystem: shake is purely camera-pose
+    // mutation, has no ECS-component-shaped state (no per-entity field —
+    // it's a single global property of the rendering camera), and the
+    // existing camera setup at update()'s draw-list build is the single
+    // canonical pose-write site. A dedicated System would be one more
+    // global float trio + a dispatcher to copy into camPos each frame, vs
+    // this layout where the shake math lives next to the camera math it
+    // modifies.
+    float cameraShakeRemaining_ = 0.0F;   // seconds left until envelope ends
+    float cameraShakeDuration_ = 0.0F;    // total envelope duration (envelope normaliser)
+    float cameraShakeAmplitude_ = 0.0F;   // peak offset in metres (decays via envelope)
+
     // Initialization flag
     bool initialized_ = false;
 
     // Has the terrain mesh been handed to the ScenePass yet?
     bool terrainUploadedToScenePass_ = false;
+
+    // Has the particle system pointer been bound to the ScenePass yet?
+    // Mirrors the lazy SetTerrain pattern: in `update()` once we observe a
+    // live particle system AND a non-null ScenePass, we hand the pointer over
+    // exactly once. This lets ScenePass's ribbon-trail path read live counts
+    // and (in iteration 3d sub-task b) launch the device build kernel.
+    bool particleSystemBoundToScenePass_ = false;
 };
 
 } // namespace CatGame

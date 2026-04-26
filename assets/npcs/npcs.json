@@ -387,6 +387,63 @@
           "requiredLevel": 10
         }
       ]
+    },
+    {
+      "id": "storm_stormtrader",
+      "name": "Jinglefoot",
+      "type": "Merchant",
+      "clan": "StormClan",
+      "position": [-22.0, 0.5, 18.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/storm_trader.glb",
+      "dialogTreeId": "merchant_general",
+      "quests": [],
+      "shopInventory": [
+        {
+          "itemId": "thunder_shard",
+          "name": "Thunder Shard",
+          "description": "Crackling fragment of a storm — boosts lightning damage for 60 seconds",
+          "price": 120,
+          "stock": -1,
+          "requiredClan": "StormClan"
+        },
+        {
+          "itemId": "stormcaller_bell",
+          "name": "Stormcaller Bell",
+          "description": "Ring to summon a short-range lightning chain attack (3 charges)",
+          "price": 400,
+          "stock": 2,
+          "requiredClan": "StormClan",
+          "requiredLevel": 4
+        },
+        {
+          "itemId": "charged_potion",
+          "name": "Charged Potion",
+          "description": "Restores 100 HP and grants +25% movement speed for 60 seconds",
+          "price": 80,
+          "stock": -1
+        },
+        {
+          "itemId": "ironclad_collar",
+          "name": "Ironclad Collar",
+          "description": "Hammered-iron collar that reduces stun duration by 50%",
+          "price": 550,
+          "stock": 1,
+          "requiredClan": "StormClan",
+          "requiredLevel": 6
+        }
+      ]
+    },
+    {
+      "id": "neutral_scout",
+      "name": "Pathfinder",
+      "type": "QuestGiver",
+      "clan": "None",
+      "position": [5.0, 0.5, 0.0],
+      "interactionRadius": 3.0,
+      "modelPath": "models/cats/scout.glb",
+      "dialogTreeId": "scout_briefing",
+      "quests": ["scout_recon_1", "scout_recon_2", "scout_elimination"]
     }
   ]
 }

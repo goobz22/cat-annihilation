@@ -1,4 +1,5 @@
 #include "ParticleKernels.cuh"
+#include "SimplexNoise.hpp"  // Header-only, __host__ __device__ simplex noise
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <thrust/device_ptr.h>
@@ -120,27 +121,80 @@ __device__ float perlinNoise3D(float3 p) {
     return noise3D(p) * 2.0f - 1.0f;
 }
 
-__device__ float3 curlNoise(float3 p, float frequency, float time) {
-    // Curl noise using numerical derivatives of 3D noise
-    float eps = 0.01f;
-    float3 fp = p * frequency + make_float3(time, time, time);
+__device__ float simplexNoise3D(float3 p) {
+    // Thin CUDA-side wrapper around the host/device simplex reference. Kept
+    // as a __device__ function (not inline-forwarded) so the kernel callsite
+    // stays identical in structure to the perlinNoise3D path — easier to
+    // diff and profile the two paths side by side.
+    return ::CatEngine::CUDA::noise::Simplex3D(p.x, p.y, p.z);
+}
 
-    // Sample noise at neighboring points
-    float3 dx = make_float3(eps, 0.0f, 0.0f);
-    float3 dy = make_float3(0.0f, eps, 0.0f);
-    float3 dz = make_float3(0.0f, 0.0f, eps);
+// Evaluate the curl-noise scalar field at a single sample site for the
+// chosen noise mode. Pulled out so the six-point numerical curl stencil
+// below stays readable — otherwise each row would be a ternary expression
+// with three-argument make_float3 nesting, which hides the stencil geometry.
+__device__ inline float sampleCurlNoiseScalar(float3 p, TurbulenceNoiseMode mode) {
+    // WHY a switch here rather than a function pointer: CUDA device code can
+    // do cheap branch prediction on a scalar enum, but function pointers to
+    // __device__ functions require the address of a separately-linked
+    // __device__ symbol — slower and a compile-time complication on older
+    // CUDA toolchains. The branch lives inside the inlined helper and the
+    // compiler lifts the switch out of the inner stencil loop via CSE.
+    switch (mode) {
+        case TurbulenceNoiseMode::Simplex: return simplexNoise3D(p);
+        case TurbulenceNoiseMode::Perlin:
+        default:                           return perlinNoise3D(p);
+    }
+}
 
-    // Compute partial derivatives
-    float dFy_dx = (perlinNoise3D(fp + dx) - perlinNoise3D(fp - dx)) / (2.0f * eps);
-    float dFz_dx = (perlinNoise3D(fp + dx + dz) - perlinNoise3D(fp - dx + dz)) / (2.0f * eps);
+__device__ float3 curlNoise(float3 p, float frequency, float time,
+                            TurbulenceNoiseMode mode) {
+    // Numerical curl of a scalar potential field sampled at neighbouring
+    // points. The field here is a single scalar, so we evaluate it at three
+    // offset "phases" of the input — the three-way hash-shift is Bridson's
+    // 2007 trick to get three statistically-independent scalar fields out
+    // of one noise function without allocating three separate noises.
+    constexpr float eps = 0.01f;
+    const float3 fp = p * frequency + make_float3(time, time, time);
 
-    float dFx_dy = (perlinNoise3D(fp + dy) - perlinNoise3D(fp - dy)) / (2.0f * eps);
-    float dFz_dy = (perlinNoise3D(fp + dy + dz) - perlinNoise3D(fp - dy + dz)) / (2.0f * eps);
+    // Bridson 2007 phase offsets. These must be large enough (>> `eps`) that
+    // the three noise samples are de-correlated, but small enough that the
+    // three derived channels stay within the noise function's input range
+    // where its amplitude is well-defined. 31/67/103 are primes chosen so
+    // their differences don't land near the simplex skew factor (1/3, 1/6).
+    const float3 offY = make_float3(31.416f, 0.0f, 0.0f);
+    const float3 offZ = make_float3(0.0f, 47.853f, 0.0f);
 
-    float dFx_dz = (perlinNoise3D(fp + dz) - perlinNoise3D(fp - dz)) / (2.0f * eps);
-    float dFy_dz = (perlinNoise3D(fp + dy + dz) - perlinNoise3D(fp - dy + dz)) / (2.0f * eps);
+    const float3 dx = make_float3(eps, 0.0f, 0.0f);
+    const float3 dy = make_float3(0.0f, eps, 0.0f);
+    const float3 dz = make_float3(0.0f, 0.0f, eps);
 
-    // Curl = (dFz/dy - dFy/dz, dFx/dz - dFz/dx, dFy/dx - dFx/dy)
+    // Partial derivatives by central differences. The same six sample sites
+    // are reused across the three curl components — the compiler's CSE will
+    // hoist identical sampleCurlNoiseScalar calls out.
+    // Channel 0 (Fx): lives at fp.
+    // Channel 1 (Fy): lives at fp + offY.
+    // Channel 2 (Fz): lives at fp + offZ.
+    const float dFy_dx = (sampleCurlNoiseScalar(fp + offY + dx, mode) -
+                          sampleCurlNoiseScalar(fp + offY - dx, mode)) / (2.0f * eps);
+    const float dFz_dx = (sampleCurlNoiseScalar(fp + offZ + dx, mode) -
+                          sampleCurlNoiseScalar(fp + offZ - dx, mode)) / (2.0f * eps);
+
+    const float dFx_dy = (sampleCurlNoiseScalar(fp + dy, mode) -
+                          sampleCurlNoiseScalar(fp - dy, mode)) / (2.0f * eps);
+    const float dFz_dy = (sampleCurlNoiseScalar(fp + offZ + dy, mode) -
+                          sampleCurlNoiseScalar(fp + offZ - dy, mode)) / (2.0f * eps);
+
+    const float dFx_dz = (sampleCurlNoiseScalar(fp + dz, mode) -
+                          sampleCurlNoiseScalar(fp - dz, mode)) / (2.0f * eps);
+    const float dFy_dz = (sampleCurlNoiseScalar(fp + offY + dz, mode) -
+                          sampleCurlNoiseScalar(fp + offY - dz, mode)) / (2.0f * eps);
+
+    // Curl = (dFz/dy - dFy/dz, dFx/dz - dFz/dx, dFy/dx - dFx/dy). This
+    // produces a numerically divergence-free vector field: particles
+    // advected by it neither compress nor expand, which prevents the
+    // "swirl, then all clump in one spot" failure mode of raw noise
+    // advection.
     return make_float3(
         dFz_dy - dFy_dz,
         dFx_dz - dFz_dx,
@@ -258,7 +312,19 @@ __global__ void emitParticles(
     float3 localPos = sampleEmissionShape(emitter, &localState);
 
     // Transform to world space
-    particles.positions[particleIdx] = localPos + emitter.position;
+    const float3 worldPos = localPos + emitter.position;
+    particles.positions[particleIdx] = worldPos;
+
+    // Seed the ribbon-trail tangent with a zero-length segment. If we left
+    // prevPositions uninitialised, the first frame's ribbon would stretch
+    // from (wherever the slot's old corpse was) to this brand-new particle's
+    // world position — a visible rubber-banding artifact on every emit. By
+    // writing prev = current at birth the first-frame segment is length 0
+    // and the ribbon renderer short-circuits it as a degenerate quad (see
+    // BuildRibbonStrip in RibbonTrail.hpp, which skips sub-epsilon motion
+    // without bridging). Cost: one coalesced float3 write per emitted
+    // particle, negligible against curand_uniform calls above.
+    particles.prevPositions[particleIdx] = worldPos;
 
     // Initial velocity
     particles.velocities[particleIdx] = randomRange3(
@@ -319,6 +385,20 @@ __global__ void updateParticles(
     float lifetime = particles.lifetimes[idx];
     float maxLifetime = particles.maxLifetimes[idx];
 
+    // Snapshot the position at the START of this simulation step — BEFORE any
+    // integration. This is what the ribbon-trail renderer needs as the tail
+    // endpoint: (prev, current) must bracket exactly one frame of motion.
+    // Writing later (after `pos = pos + vel * dt`) would collapse prev and
+    // current to the same post-integration point and the ribbon tangent would
+    // be zero every frame.
+    //
+    // Alternative considered: a dedicated pre-integration kernel that only
+    // copies positions -> prevPositions. Rejected because it would be a
+    // memory-bound pass duplicating the same-particle indexing this kernel
+    // already pays for — doing the write here reuses the warp's cached pos
+    // load and adds exactly one coalesced store per live particle.
+    particles.prevPositions[idx] = pos;
+
     // Apply forces
     float3 acceleration = make_float3(0.0f, 0.0f, 0.0f);
 
@@ -328,12 +408,17 @@ __global__ void updateParticles(
     // Wind
     acceleration = acceleration + forces.windDirection * forces.windStrength;
 
-    // Turbulence (curl noise)
+    // Turbulence (curl noise). Mode branch happens inside curlNoise so the
+    // six-point stencil geometry stays in one place. The compiler will
+    // constant-fold when the enum value is uniform across a warp, which is
+    // the common case — ForceParams::turbulenceNoiseMode is set by the
+    // emitter config, not per-particle.
     if (forces.turbulenceEnabled) {
         float3 turbulence = curlNoise(
             pos,
             forces.turbulenceFrequency,
-            forces.turbulenceTime
+            forces.turbulenceTime,
+            forces.turbulenceNoiseMode
         );
         acceleration = acceleration + turbulence * forces.turbulenceStrength;
     }
@@ -458,6 +543,17 @@ void permuteParticleArrays(
     const size_t u32Bytes = static_cast<size_t>(count) * sizeof(uint32_t);
 
     float3*   tmpPos          = nullptr;
+    // prevPositions is a first-class SoA column and MUST ride the same
+    // permutation as positions. If this gather were skipped, a compaction
+    // pass that moved particle i from source slot s to destination slot d
+    // would pair its positions[d] (from s) with prevPositions[d] (from
+    // whatever dead particle was at d before) — producing a ribbon segment
+    // that chords from the corpse's last frame to the survivor's current
+    // frame. Visually: long flickering trails to the origin of the arena
+    // every compaction frame. This is exactly the class of bug the comment
+    // above the old permuteParticleArrays warned about (for alive), now
+    // extended to prevPositions.
+    float3*   tmpPrevPos      = nullptr;
     float3*   tmpVel          = nullptr;
     float4*   tmpColor        = nullptr;
     float*    tmpLifetime     = nullptr;
@@ -467,6 +563,7 @@ void permuteParticleArrays(
     uint32_t* tmpAlive        = nullptr;
 
     cudaMallocAsync(&tmpPos,          f3Bytes,  stream);
+    cudaMallocAsync(&tmpPrevPos,      f3Bytes,  stream);
     cudaMallocAsync(&tmpVel,          f3Bytes,  stream);
     cudaMallocAsync(&tmpColor,        f4Bytes,  stream);
     cudaMallocAsync(&tmpLifetime,     f1Bytes,  stream);
@@ -482,6 +579,9 @@ void permuteParticleArrays(
     thrust::gather(policy, idxBegin, idxEnd,
         thrust::device_ptr<float3>(particles.positions),
         thrust::device_ptr<float3>(tmpPos));
+    thrust::gather(policy, idxBegin, idxEnd,
+        thrust::device_ptr<float3>(particles.prevPositions),
+        thrust::device_ptr<float3>(tmpPrevPos));
     thrust::gather(policy, idxBegin, idxEnd,
         thrust::device_ptr<float3>(particles.velocities),
         thrust::device_ptr<float3>(tmpVel));
@@ -507,8 +607,9 @@ void permuteParticleArrays(
     // Copy each gathered temp array back into the source front. All copies
     // enqueue on the same stream so they serialize correctly relative to the
     // preceding gather ops without a host synchronize.
-    cudaMemcpyAsync(particles.positions,    tmpPos,         f3Bytes,  cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(particles.velocities,   tmpVel,         f3Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.positions,     tmpPos,     f3Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.prevPositions, tmpPrevPos, f3Bytes,  cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(particles.velocities,    tmpVel,     f3Bytes,  cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(particles.colors,       tmpColor,       f4Bytes,  cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(particles.lifetimes,    tmpLifetime,    f1Bytes,  cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(particles.maxLifetimes, tmpMaxLifetime, f1Bytes,  cudaMemcpyDeviceToDevice, stream);
@@ -520,6 +621,7 @@ void permuteParticleArrays(
     // drain on this stream before actually reclaiming the memory, so no host
     // sync is required. Matches the allocator's lifetime contract.
     cudaFreeAsync(tmpPos,         stream);
+    cudaFreeAsync(tmpPrevPos,     stream);
     cudaFreeAsync(tmpVel,         stream);
     cudaFreeAsync(tmpColor,       stream);
     cudaFreeAsync(tmpLifetime,    stream);

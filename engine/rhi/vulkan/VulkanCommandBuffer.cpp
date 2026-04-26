@@ -96,9 +96,24 @@ VulkanCommandPool::VulkanCommandPool(VulkanDevice* device, uint32_t queueFamilyI
 }
 
 VulkanCommandPool::~VulkanCommandPool() {
-    if (m_commandPool != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(m_device->GetDevice(), m_commandPool, nullptr);
+    // Both the pool and the owning VkDevice must be live to safely
+    // destroy a VkCommandPool. VulkanRHI::Shutdown() is now careful to
+    // reset() this pool before tearing the device down, but if a future
+    // caller ever holds a VulkanCommandPool past the RHI lifetime (e.g.
+    // from a unit-test harness or a tool that bypasses VulkanRHI) the
+    // device handle could already be VK_NULL_HANDLE here. Skipping the
+    // call in that case avoids firing VUID-vkDestroyCommandPool-device-
+    // parameter; the GPU-side pool is already implicitly freed when the
+    // device it belongs to was destroyed.
+    if (m_commandPool == VK_NULL_HANDLE || m_device == nullptr) {
+        return;
     }
+    VkDevice vkDevice = m_device->GetDevice();
+    if (vkDevice == VK_NULL_HANDLE) {
+        return;
+    }
+    vkDestroyCommandPool(vkDevice, m_commandPool, nullptr);
+    m_commandPool = VK_NULL_HANDLE;
 }
 
 VkCommandBuffer VulkanCommandPool::AllocateCommandBuffer(VkCommandBufferLevel level) {
@@ -229,21 +244,13 @@ void VulkanCommandBuffer::NextSubpass() {
 // ============================================================================
 
 void VulkanCommandBuffer::BindPipeline(IRHIPipeline* pipeline) {
-    static int bindCount = 0;
-    bindCount++;
-    
+    // BindPipeline fires many times per frame (once per pipeline switch, plus
+    // every pass's first draw). Leaving a std::cout trace here during UIPass
+    // bring-up was fine, but on steady-state it produced hundreds of lines
+    // per second of unhelpful log noise. Error path stays loud.
     VkPipeline vkPipeline = GetVulkanPipeline(pipeline);
-    
-    if (bindCount <= 10) {
-        std::cout << "[VulkanCommandBuffer::BindPipeline] pipeline=" << pipeline 
-                  << ", vkPipeline=" << vkPipeline 
-                  << ", cmdBuffer=" << m_commandBuffer << "\n";
-        std::cout.flush();
-    }
-    
     if (vkPipeline == VK_NULL_HANDLE) {
-        std::cerr << "[VulkanCommandBuffer::BindPipeline] ERROR: vkPipeline is NULL!\n";
-        std::cerr.flush();
+        std::cerr << "[VulkanCommandBuffer::BindPipeline] ERROR: vkPipeline is NULL\n";
         return;
     }
 
@@ -251,11 +258,6 @@ void VulkanCommandBuffer::BindPipeline(IRHIPipeline* pipeline) {
     // hard-coding VK_PIPELINE_BIND_POINT_GRAPHICS.
     const VkPipelineBindPoint vkBindPoint = ToVulkanPipelineBindPoint(pipeline->GetBindPoint());
     vkCmdBindPipeline(m_commandBuffer, vkBindPoint, vkPipeline);
-    
-    if (bindCount <= 10) {
-        std::cout << "[VulkanCommandBuffer::BindPipeline] vkCmdBindPipeline called successfully\n";
-        std::cout.flush();
-    }
 }
 
 void VulkanCommandBuffer::BindDescriptorSets(
@@ -368,25 +370,10 @@ void VulkanCommandBuffer::DrawIndexed(
     int32_t vertexOffset,
     uint32_t firstInstance
 ) {
-    static int drawCount = 0;
-    drawCount++;
-    
-    if (drawCount <= 10) {
-        std::cout << "[VulkanCommandBuffer::DrawIndexed] indexCount=" << indexCount 
-                  << ", instanceCount=" << instanceCount
-                  << ", firstIndex=" << firstIndex
-                  << ", vertexOffset=" << vertexOffset
-                  << ", firstInstance=" << firstInstance
-                  << ", cmdBuffer=" << m_commandBuffer << "\n";
-        std::cout.flush();
-    }
-    
+    // Hot path — fires once per UI quad (50+ per frame) and once per mesh
+    // submission. Any logging here dominates stdout within seconds; the
+    // caller is already responsible for knowing what it's drawing.
     vkCmdDrawIndexed(m_commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
-    
-    if (drawCount <= 10) {
-        std::cout << "[VulkanCommandBuffer::DrawIndexed] vkCmdDrawIndexed called\n";
-        std::cout.flush();
-    }
 }
 
 void VulkanCommandBuffer::DrawIndirect(

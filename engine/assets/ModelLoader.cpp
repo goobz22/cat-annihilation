@@ -6,7 +6,17 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <nlohmann/json.hpp>
+
+// stb_image is the same library TextureLoader.cpp implements (with the
+// STB_IMAGE_IMPLEMENTATION macro). Including without that macro pulls in
+// just the declarations — we re-use the implementation that already lives
+// in the binary, no second copy. We only call stbi_load_from_memory and
+// stbi_image_free here, both of which are pure C functions over the
+// callback table stb_image declares — safe to share across translation
+// units in this single-binary build.
+#include <stb_image.h>
 
 using json = nlohmann::json;
 
@@ -336,10 +346,198 @@ static std::string ResolveImageTexturePath(
     return baseDir + image["uri"].get<std::string>();
 }
 
+// Decode the bufferView-embedded image bytes for a glTF texture index
+// into a CPU-side RGBA8 BaseColorImage that the caller retains for both
+// (a) average-tone fallback colour computation and (b) eventual GPU
+// upload (Step 2 of the PBR pipeline; see BaseColorImage in the header
+// for the full why-block).
+//
+// WHY this is split from the averaging step (which used to be a single
+// monolithic "decode + average + free" helper):
+//
+//   The previous monolith decoded with stb_image, walked the pixels to
+//   produce one glm::vec4 average, and freed the decoded buffer before
+//   returning. That collapsed the only chance to capture the texture
+//   into a single "snapshot tint" — the data was gone before any GPU
+//   uploader could see it, so Step 2 (real PBR sampling) would have
+//   needed to decode each JPEG a SECOND time at upload. Splitting into
+//   "decode -> shared_ptr<BaseColorImage>" + "average over BaseColorImage"
+//   lets one decode feed both the immediate fallback factor (still
+//   useful when the renderer hasn't bound a sampler yet, in unit-test
+//   builds with no Vulkan, and as the alpha channel of the cube-proxy
+//   path) AND the future GPU upload — for free, with no extra I/O.
+//
+// Returns nullptr when extraction failed at any guarded step (texture
+// index OOB, no bufferView, bufferView OOB, stb_image decode failed).
+// The caller treats nullptr as "no embedded image — leave the GLB-
+// authored baseColorFactor in place".
+static std::shared_ptr<BaseColorImage> DecodeEmbeddedBaseColorImage(
+    const nlohmann::json& root,
+    const std::vector<std::vector<uint8_t>>& buffers,
+    int texIndex)
+{
+    if (texIndex < 0 ||
+        !root.contains("textures") ||
+        static_cast<size_t>(texIndex) >= root["textures"].size()) {
+        return nullptr;
+    }
+    const auto& tex = root["textures"][texIndex];
+    if (!tex.contains("source")) {
+        return nullptr;
+    }
+    int imageIndex = tex["source"].get<int>();
+    if (imageIndex < 0 ||
+        !root.contains("images") ||
+        static_cast<size_t>(imageIndex) >= root["images"].size()) {
+        return nullptr;
+    }
+    const auto& image = root["images"][imageIndex];
+    // Only handle the bufferView path here. URI-backed images are already
+    // resolved to file paths by ResolveImageTexturePath and should be
+    // loaded by the texture cache via TextureLoader::Load(path), not
+    // decoded a second time here.
+    if (!image.contains("bufferView") || !image["bufferView"].is_number_integer()) {
+        return nullptr;
+    }
+    int bvIndex = image["bufferView"].get<int>();
+    if (!root.contains("bufferViews") ||
+        bvIndex < 0 ||
+        static_cast<size_t>(bvIndex) >= root["bufferViews"].size()) {
+        return nullptr;
+    }
+    const auto& bv = root["bufferViews"][bvIndex];
+    if (!bv.contains("buffer") || !bv.contains("byteLength")) {
+        return nullptr;
+    }
+    int bufferIdx = bv["buffer"].get<int>();
+    if (bufferIdx < 0 ||
+        static_cast<size_t>(bufferIdx) >= buffers.size()) {
+        return nullptr;
+    }
+    const auto& buffer = buffers[bufferIdx];
+    const size_t bvOffset =
+        bv.contains("byteOffset") ? bv["byteOffset"].get<size_t>() : 0;
+    const size_t bvLength = bv["byteLength"].get<size_t>();
+    if (bvOffset + bvLength > buffer.size()) {
+        return nullptr;
+    }
+    const uint8_t* imageBytes = buffer.data() + bvOffset;
+
+    // Decode via stb_image — handles JPEG (Meshy ships baseColor as JPEG
+    // for compression, normal/orm/emissive as PNG with alpha). Forcing 4
+    // channels means the decode result is RGBA8 regardless of source
+    // format, which (a) simplifies the averaging loop, (b) matches the
+    // VK_FORMAT_R8G8B8A8_SRGB layout the Step 2 uploader will use, and
+    // (c) avoids needing to special-case 3-channel JPEGs in any consumer.
+    int w = 0, h = 0, comp = 0;
+    constexpr int kForceRGBA = 4;
+    stbi_uc* decoded = stbi_load_from_memory(
+        imageBytes,
+        static_cast<int>(bvLength),
+        &w, &h, &comp, kForceRGBA);
+    if (decoded == nullptr || w <= 0 || h <= 0) {
+        if (decoded != nullptr) {
+            stbi_image_free(decoded);
+        }
+        return nullptr;
+    }
+
+    auto img = std::make_shared<BaseColorImage>();
+    img->width = w;
+    img->height = h;
+    const size_t byteCount = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+    // Copy from stb's malloc'd buffer into the shared_ptr-owned vector
+    // so we can free stb's allocation immediately. The vector lives for
+    // the lifetime of the Model (or until Step 2 explicitly resets the
+    // shared_ptr after upload), and using std::vector means the GPU
+    // uploader gets a contiguous .data() pointer with a known size and
+    // can hand it straight to vkCmdCopyBufferToImage via a staging
+    // buffer fill loop.
+    img->rgba.resize(byteCount);
+    std::memcpy(img->rgba.data(), decoded, byteCount);
+    stbi_image_free(decoded);
+
+    // Diagnostic label — short enough to fit on one playtest log line
+    // alongside the surrounding model-load chatter, but specific enough
+    // that a `grep [ModelLoader] cached baseColor` against a multi-cat
+    // playtest names every distinct image dimension/index combination.
+    std::ostringstream oss;
+    oss << "image[" << imageIndex << "] " << w << "x" << h;
+    img->sourceLabel = oss.str();
+    return img;
+}
+
+// Compute the alpha-weighted average RGB of a CPU-side BaseColorImage
+// and return it as a vec4 with .a == 1.0 on success or vec4(-1) on
+// degenerate input (zero-area image, all-zero alpha).
+//
+// WHY alpha-weighted rather than a flat sum: Meshy baseColor JPEGs are
+// opaque (alpha 255 everywhere) so for the current asset library this
+// is mathematically identical to a flat sum. But future asset paths
+// (PNG with punch-through alpha for fur silhouettes; the same texture
+// re-purposed for foliage) ship pixels with alpha 0 or partial alpha,
+// and weighting prevents fully-transparent pixels from dragging the
+// dominant tone toward black. The +1 in `weighted` keeps every pixel
+// contributing at least minimally so the formula degenerates to a
+// flat average for fully-transparent images instead of dividing by
+// zero — useful purely as a safety rail; transparent baseColor textures
+// are not a real production case.
+//
+// WHY we don't sRGB-decode before averaging: the existing tint path
+// (MeshSubmissionSystem -> baseColorFactor -> entity.frag) treats the
+// factor as already-in-output-colourspace and does no gamma work, so
+// averaging in sRGB matches what the existing renderer expects. The
+// future per-fragment sampling path (Step 4) will sample from a
+// VK_FORMAT_R8G8B8A8_SRGB image so the GPU does the linearisation —
+// at which point the average tint computed here becomes a fallback for
+// the cube-proxy path only.
+//
+// Cost: O(width * height). 4-16 M ops per cat at typical Meshy
+// resolutions, runs once at load time, no allocation.
+static glm::vec4 ComputeAverageBaseColor(const BaseColorImage& img) {
+    const size_t pixelCount =
+        static_cast<size_t>(img.width) * static_cast<size_t>(img.height);
+    if (pixelCount == 0 || img.rgba.size() < pixelCount * 4) {
+        return glm::vec4(-1.0F);
+    }
+    uint64_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+    const uint8_t* p = img.rgba.data();
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const uint8_t r = p[i * 4 + 0];
+        const uint8_t g = p[i * 4 + 1];
+        const uint8_t b = p[i * 4 + 2];
+        const uint8_t a = p[i * 4 + 3];
+        const uint32_t weighted = static_cast<uint32_t>(a) + 1u;
+        sumR += static_cast<uint64_t>(r) * weighted;
+        sumG += static_cast<uint64_t>(g) * weighted;
+        sumB += static_cast<uint64_t>(b) * weighted;
+        sumA += weighted;
+    }
+    if (sumA == 0) {
+        return glm::vec4(-1.0F);
+    }
+    const float invDenom = 1.0F / (255.0F * static_cast<float>(sumA));
+    return glm::vec4(
+        static_cast<float>(sumR) * invDenom,
+        static_cast<float>(sumG) * invDenom,
+        static_cast<float>(sumB) * invDenom,
+        1.0F);
+}
+
 void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
     if (!data.root.contains("materials")) {
         return;
     }
+
+    // Per-extraction dedup cache for decoded baseColor images. Two
+    // materials in the same model can reference the same texture index
+    // (some Meshy exports do this for the body+limb material split),
+    // and decoding a 16 MB JPEG twice would burn ~5 ms per duplicate +
+    // 16 MB of redundant heap. The shared_ptr stored on each Material
+    // refers into this map, so lifetime is correct as long as at least
+    // one Material survives. The map itself is local to this call —
+    // it's a load-time scratch structure, not a long-lived cache.
+    std::unordered_map<int, std::shared_ptr<BaseColorImage>> imageCache;
 
     for (const auto& matJson : data.root["materials"]) {
         Material material;
@@ -375,8 +573,73 @@ void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
             // bufferView-backed images don't throw; see the helper's WHY
             // comment at the top of this file.
             if (pbr.contains("baseColorTexture") && pbr["baseColorTexture"].contains("index")) {
+                const int baseColorTexIdx =
+                    pbr["baseColorTexture"]["index"].get<int>();
                 material.baseColorTexture = ResolveImageTexturePath(
-                    data.root, data.baseDir, pbr["baseColorTexture"]["index"].get<int>());
+                    data.root, data.baseDir, baseColorTexIdx);
+
+                // GLB-embedded baseColor (URI empty after Resolve...): pull
+                // the bufferView bytes, decode with stb_image into a CPU-
+                // side BaseColorImage retained on the Material, and ALSO
+                // average it to overwrite baseColorFactor.
+                //
+                // WHY both outputs from one decode (Step 1 of the PBR
+                // texture pipeline; see BaseColorImage in ModelLoader.hpp
+                // for the full why-block):
+                //
+                //   - The retained image is what Step 2's GPU uploader
+                //     will sample from to produce a real PBR baseColor
+                //     texture per Model. Without it, Step 2 would have
+                //     to re-decode every JPEG at upload time.
+                //
+                //   - The average factor is still useful right now: the
+                //     existing MeshSubmissionSystem tier-2 fallback
+                //     (tintOverride -> baseColorFactor -> grey) feeds it
+                //     into the per-entity tint that today's entity.frag
+                //     consumes. Until Step 4 flips the shader to sample
+                //     the real texture, the average is the visible-cat
+                //     differentiator (ember rigs land warm/orange,
+                //     frost cool/white-grey, mist cool greys, etc).
+                //
+                // Failure paths are silent — DecodeEmbeddedBaseColorImage
+                // returns nullptr (image URI-backed, bufferView OOB, or
+                // stb decode failure), and we leave both
+                // baseColorImageCpu null and baseColorFactor at the
+                // GLB-authored value. The mesh still renders, just with
+                // the parsed factor instead of an asset-derived one.
+                if (material.baseColorTexture.empty()) {
+                    // Per-extraction dedup: if a sibling material already
+                    // decoded this same texture index in this Model,
+                    // re-use the shared_ptr instead of decoding twice.
+                    std::shared_ptr<BaseColorImage> img;
+                    auto cacheIt = imageCache.find(baseColorTexIdx);
+                    if (cacheIt != imageCache.end()) {
+                        img = cacheIt->second;
+                    } else {
+                        img = DecodeEmbeddedBaseColorImage(
+                            data.root, data.buffers, baseColorTexIdx);
+                        if (img) {
+                            imageCache.emplace(baseColorTexIdx, img);
+                        }
+                    }
+                    if (img) {
+                        material.baseColorImageCpu = img;
+                        const glm::vec4 avg = ComputeAverageBaseColor(*img);
+                        if (avg.a > 0.0F) {
+                            material.baseColorFactor = avg;
+                        }
+                        // One-line load-time diagnostic — grep
+                        // [ModelLoader] cached baseColor against a
+                        // multi-cat playtest gives a snapshot of every
+                        // distinct decoded asset and its dominant tone.
+                        std::cout << "[ModelLoader] cached baseColor "
+                                  << img->sourceLabel
+                                  << " avg=(" << avg.r
+                                  << "," << avg.g
+                                  << "," << avg.b << ")"
+                                  << std::endl;
+                    }
+                }
             }
 
             if (pbr.contains("metallicRoughnessTexture") && pbr["metallicRoughnessTexture"].contains("index")) {

@@ -325,6 +325,116 @@ void VulkanShader::ReflectShader() {
               });
 }
 
+// ----------------------------------------------------------------------------
+// VulkanShader::ReloadFromSPIRV — hot-reload shader-module cache invalidation
+//
+// This is the VkShaderModule-side half of the debug-only GLSL hot-reload
+// feature. The glslc-shell-out half lives in engine/rhi/ShaderHotReload.hpp;
+// its CompileIndex() produces a fresh .spv on disk, the caller slurps it
+// into a std::vector<uint8_t>, and hands it here.
+//
+// Design contract (why this method exists INSTEAD of "destroy-recreate
+// VulkanShader"):
+//   - IRHIShader* handles are cached by the pipeline cache and by callers
+//     like ForwardPass / GeometryPass. Destroying and recreating
+//     VulkanShader would invalidate those pointers; every caller would
+//     then need a rebind step on every reload. That's an awful API.
+//   - Instead we keep THIS VulkanShader* alive and swap its interior
+//     (m_ShaderModule + m_Code + reflection). Callers see the exact same
+//     IRHIShader* before and after the reload — only pipelines that
+//     reference the old VkShaderModule need to be recreated, which is
+//     what the NEXT iteration's pipeline-cache-invalidation half handles.
+//   - Pipelines built with the old VkShaderModule KEEP WORKING after this
+//     destroy. Vulkan spec 11.x: "a VkShaderModule can be destroyed
+//     while pipelines created using it are still in use" — the driver
+//     copies the SPIR-V internally at vkCreate*Pipelines time. So this
+//     method is safe to call at any point, even mid-frame; the old
+//     pipelines render with the previous-good shader until they are
+//     explicitly rebuilt by the caller.
+//
+// Failure mode: if the new bytecode fails the magic-number / alignment
+// checks, we return false and leave m_ShaderModule + m_Code + m_Reflection-
+// Data untouched. The running game keeps rendering with the old shader,
+// and the hot-reloader surfaces the failure to the dev HUD. This is
+// critical — a typo'd edit must never crash the running engine.
+// ----------------------------------------------------------------------------
+bool VulkanShader::ReloadFromSPIRV(const std::vector<uint8_t>& newCode) {
+    // --- Validation gate: reject bad bytecode BEFORE we touch state ---
+    // Same checks the ShaderLoader does + the SPIR-V magic-number
+    // sanity check, so we don't commit to a destroy-recreate unless the
+    // new code will actually produce a working module.
+    if (!ShaderLoader::ValidateSPIRV(newCode)) {
+        return false;
+    }
+    if (newCode.size() < 20) {
+        // SPIR-V header is 5 words (20 bytes). Anything smaller cannot
+        // be a valid module, so ReflectShader would throw below.
+        return false;
+    }
+
+    // --- Pre-destroy dry run: build the VkShaderModule FIRST on the new
+    // code, keep the handle on the stack, then swap atomically. This
+    // ordering guarantees that if vkCreateShaderModule fails on the new
+    // bytecode (valid magic number but the driver rejects the layout),
+    // we have NOT yet destroyed the old module — the caller sees false
+    // and the previous state is preserved. If we did destroy-first the
+    // failure window between destroy and create would leave the shader
+    // in an unusable half-state.
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = newCode.size();
+    createInfo.pCode    = reinterpret_cast<const uint32_t*>(newCode.data());
+
+    VkShaderModule newModule = VK_NULL_HANDLE;
+    VkResult result = vkCreateShaderModule(m_Device->GetVkDevice(),
+                                           &createInfo, nullptr, &newModule);
+    if (result != VK_SUCCESS) {
+        return false;
+    }
+
+    // --- Commit: destroy the old module, swap in the new one and
+    // rerun reflection. The destroy must happen AFTER vkCreateShaderModule
+    // so we can't end up with a dangling m_ShaderModule if the new
+    // module creation fails; see the pre-destroy dry-run rationale above.
+    if (m_ShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(m_Device->GetVkDevice(), m_ShaderModule, nullptr);
+    }
+    m_ShaderModule = newModule;
+    m_Code         = newCode;
+
+    // Reapply debug name so Vulkan validation layers + RenderDoc still
+    // label the module correctly after the swap.
+    if (!m_DebugName.empty() && m_Device->IsDebugUtilsSupported()) {
+        m_Device->SetObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
+                                (uint64_t)m_ShaderModule,
+                                m_DebugName.c_str());
+    }
+
+    // Rerun reflection — if the shader's descriptor/input layout drifted
+    // (designer added a new uniform, changed a binding index), we want
+    // the cached ShaderReflectionData to match the fresh module. Any
+    // pipeline built against the OLD layout is, by construction, stale;
+    // the pipeline-cache-invalidation half of the hot-reload feature
+    // (next iteration) will rebuild those.
+    //
+    // ReflectShader throws on a broken header, but we already verified
+    // the magic number above so the throw path is unreachable in
+    // practice. Wrap in a try anyway — if it ever did throw we'd rather
+    // surface "reload failed" than crash the engine.
+    try {
+        ReflectShader();
+    } catch (const std::exception&) {
+        // Reflection is best-effort; if it throws we leave the previous
+        // m_ReflectionData in place and let the caller decide whether
+        // to treat this as a hard failure. The VkShaderModule itself is
+        // still valid (vkCreateShaderModule succeeded), so the shader
+        // is usable — only reflection-driven pipeline-layout work would
+        // need the stale data.
+    }
+
+    return true;
+}
+
 // ============================================================================
 // ShaderLoader Implementation
 // ============================================================================

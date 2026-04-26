@@ -3,6 +3,7 @@
 #include "passes/ScenePass.hpp"
 #include "../ecs/ECS.hpp"
 #include "../ecs/Entity.hpp"
+#include "../math/Frustum.hpp"
 #include "../math/Transform.hpp"
 #include "../math/Vector.hpp"
 #include "../assets/ModelLoader.hpp"
@@ -49,14 +50,24 @@ public:
      * the ring slot for `frameIndex` so the GPU can read the buffers for
      * the life of the frame.
      *
-     * `skipEntity` is consulted before emitting a draw — it lets the caller
-     * exclude entities that already have a proxy-cube draw elsewhere (the
-     * player and enemy loops in CatAnnihilation.cpp) so we don't double-
-     * render them. Pass an empty std::function to disable skipping.
+     * If `frustum` is non-null, entities whose model AABB sphere lies fully
+     * outside the camera frustum are skipped — no EntityDraw is emitted, no
+     * skinning palette is computed, and no Model retention ref is added for
+     * that frame. With ~16 NPCs scattered across the world plus an active
+     * wave, the player's frustum typically contains 3-6 of them at a time;
+     * dropping the off-camera ones eliminates ~70% of the per-frame CPU
+     * skinning workload (each Meshy-sourced rigged cat is 100k-200k verts).
+     *
+     * Lifetime note: the retention ring is unaffected by culling — frames
+     * that exit the frustum simply contribute no entries to the slot. The
+     * Model's strong ref is still held by the entity's MeshComponent, so
+     * the model isn't unloaded; a cat that walks back into view next frame
+     * is uploaded from the existing per-Model GPU cache without re-loading.
      */
     void Submit(CatEngine::ECS& ecs,
                 std::size_t frameIndex,
-                std::vector<ScenePass::EntityDraw>& out);
+                std::vector<ScenePass::EntityDraw>& out,
+                const Engine::Frustum* frustum = nullptr);
 
     /**
      * Clear retained refs for all frames. Call on renderer shutdown before

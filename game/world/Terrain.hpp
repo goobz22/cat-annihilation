@@ -53,7 +53,19 @@ public:
         float dirtSlopeThreshold = 0.4f;    // Below this slope = dirt
         float rockHeightThreshold = 30.0f;  // Above this height = more rock
 
-        Params() = default;
+        // WHY no explicit `Params() = default;` here:
+        // Clang 21 treats an explicitly-defaulted, in-class default constructor
+        // as *immediately defined* at the point of `= default`, which forces it
+        // to reference the default member initializers above -- and that
+        // reference happens inside the enclosing class `Terrain`'s body, which
+        // is not a complete-class context. The result was a chain of
+        // "default member initializer for 'grassSlopeThreshold' needed within
+        // definition of enclosing class 'Terrain' outside of member functions"
+        // syntax errors that cascaded into every translation unit transitively
+        // including this header (~10 files). Letting the compiler implicitly
+        // declare Params() keeps the same aggregate semantics but defers its
+        // synthesis to the first use site (e.g. the `= Params()` default
+        // argument on line below), which IS a complete-class context.
     };
 
     /**
@@ -61,8 +73,22 @@ public:
      *
      * @param cudaContext CUDA context for GPU operations
      * @param params Generation parameters
+     *
+     * WHY two overloads instead of `= Params()` as a default argument:
+     * clang 21 eagerly synthesises the `Params()` call that lives inside
+     * the enclosing `Terrain` class body, and that synthesis requires the
+     * `Params` default constructor's implicit body to reference each
+     * default member initializer (grassSlopeThreshold = 0.7f, etc.). The
+     * C++ "complete-class context" rule forbids that reference at
+     * class-body scope, so clang rejects it with "default member
+     * initializer for 'grassSlopeThreshold' needed within definition of
+     * enclosing class 'Terrain' outside of member functions". Moving the
+     * `Params()` construction out of the header (into the no-arg
+     * overload's delegating body in Terrain.cpp) puts the synthesis at a
+     * call site where `Terrain` is already complete, which is legal.
      */
-    Terrain(CatEngine::CUDA::CudaContext& cudaContext, const Params& params = Params());
+    explicit Terrain(CatEngine::CUDA::CudaContext& cudaContext);
+    Terrain(CatEngine::CUDA::CudaContext& cudaContext, const Params& params);
 
     /**
      * @brief Destructor

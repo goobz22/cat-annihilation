@@ -47,8 +47,20 @@ public:
      *
      * @param context CUDA context
      * @param config System configuration
+     *
+     * WHY two overloads instead of `= Config{}` as a default argument:
+     * clang 21 refuses to synthesise the nested `Config{}` default
+     * constructor inside `ParticleSystem`'s class body, because it
+     * would need to evaluate each default member initializer
+     * (`maxParticles = 1000000`, `enableSorting = true`, ...) in a
+     * non-complete-class context. Splitting into an explicit no-arg
+     * overload (defined in ParticleSystem.cpp) and a full-arg
+     * overload moves the `Config{}` construction to a site where the
+     * enclosing class is already complete. See Terrain.hpp for the
+     * full analysis of this clang 21 behaviour.
      */
-    ParticleSystem(const CudaContext& context, const Config& config = Config{});
+    explicit ParticleSystem(const CudaContext& context);
+    ParticleSystem(const CudaContext& context, const Config& config);
 
     /**
      * @brief Destructor
@@ -138,6 +150,20 @@ public:
     void setTurbulence(bool enabled, float strength = 1.0f, float frequency = 1.0f);
 
     /**
+     * @brief Select which scalar noise backs the curl field.
+     *
+     * @param mode Perlin (legacy, grid-banding visible) or Simplex (isotropic,
+     *             Gustavson 2012 tetrahedral lattice — see
+     *             engine/cuda/particles/SimplexNoise.hpp).
+     *
+     * WHY split from setTurbulence(): callers upgrading an existing emitter to
+     * simplex should not need to know or re-supply its strength / frequency.
+     * Splitting the mode knob from the amplitude knob keeps migrations to a
+     * single line of code.
+     */
+    void setTurbulenceNoiseMode(TurbulenceNoiseMode mode);
+
+    /**
      * @brief Add point attractor/repulsor
      *
      * @param position Position in world space
@@ -213,6 +239,12 @@ public:
      */
     struct RenderData {
         const float3* positions;    // Device pointer
+        // Device pointer to the position one simulation step ago. Consumed by
+        // the ribbon-trail pipeline as the tail endpoint of each per-particle
+        // billboard quad — (positions[i], prevPositions[i]) forms the line
+        // segment the strip wraps around. Always non-null (the buffer is
+        // allocated alongside positions in initializeBuffers).
+        const float3* prevPositions;
         const float4* colors;       // Device pointer
         const float* sizes;         // Device pointer
         const float* rotations;     // Device pointer
@@ -223,6 +255,45 @@ public:
      * @brief Get rendering data (GPU pointers)
      */
     RenderData getRenderData() const;
+
+    /**
+     * @brief Launch the ribbon-trail strip-builder kernel.
+     *
+     * Writes four `ribbon_device::RibbonVertex` corners per particle slot
+     * into `outDeviceVertices`, filling exactly
+     * `getMaxParticles() * ribbon_device::kVerticesPerParticle` entries. The
+     * caller owns the output buffer (typically a Vulkan-CUDA-interop VkBuffer
+     * mapped to device memory) and is responsible for its lifetime and for
+     * constructing the static index buffer via
+     * `ribbon_device::FillRibbonIndexBufferCPU` once at pipeline-init.
+     *
+     * Degenerate slots (indices beyond the live count, or those whose
+     * `alive[i]==0`, or whose motion/view frame collapses) emit four
+     * coincident zero-alpha vertices that the rasterizer early-culls — the
+     * renderer can safely draw every slot in one `vkCmdDrawIndexed` call
+     * without a compaction pass of its own.
+     *
+     * @param outDeviceVertices  Device pointer to a writable
+     *        RibbonVertex buffer of size
+     *        `ribbon_device::RibbonVertexBufferSize(getMaxParticles())`.
+     * @param viewDirection      Unit camera-forward vector. Caller normalises
+     *        once per frame and passes the result; the kernel skips the
+     *        re-normalise for perf and to surface upstream zero-viewDir
+     *        bugs loudly rather than masking them.
+     * @param tailWidthFactor    Ribbon taper ratio at the tail (0 = tapers
+     *        to a point, 1 = constant width, >1 = wider at tail). Default
+     *        matches the host `ribbon::DefaultStripParams`.
+     *
+     * WHY this lives on ParticleSystem (not on the renderer): the kernel
+     * reads every SoA column (positions, prevPositions, colors, sizes,
+     * lifetimes, maxLifetimes, alive), so the owner of those buffers is
+     * the correct issuer. The renderer only supplies the output VkBuffer
+     * and the viewDir — all other inputs come from the particle system's
+     * private state.
+     */
+    void buildRibbonStrip(void* outDeviceVertices,
+                          const Engine::vec3& viewDirection,
+                          float tailWidthFactor = 0.0f);
 
     /**
      * @brief Copy particle data to host (for debugging/CPU rendering)
@@ -278,6 +349,14 @@ private:
 
     // GPU buffers (SoA layout)
     CudaBuffer<float3> m_positions;
+    // Position one simulation step ago — the ribbon-trail renderer derives the
+    // per-particle tangent direction from (current - prev). Added as a full
+    // SoA column (not a scratch buffer) so that the compaction gather and the
+    // depth sort permutation move it in lockstep with every other column —
+    // forgetting to permute this array would silently break the prev/current
+    // correspondence for every surviving particle. See GpuParticles's
+    // `prevPositions` field and ENGINE_PROGRESS.md 2026-04-24 iteration 2.
+    CudaBuffer<float3> m_prevPositions;
     CudaBuffer<float3> m_velocities;
     CudaBuffer<float4> m_colors;
     CudaBuffer<float> m_lifetimes;

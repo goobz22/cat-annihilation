@@ -1,4 +1,5 @@
 #include "ParticleSystem.hpp"
+#include "RibbonTrailDevice.cuh"
 #include "../CudaError.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -11,6 +12,15 @@ namespace CUDA {
 // ============================================================================
 // Constructor / Destructor
 // ============================================================================
+
+// The no-arg-config overload delegates to the full overload with a
+// default-constructed `Config{}`. The default argument cannot live
+// in the header under clang 21 (see ParticleSystem.hpp for the full
+// explanation).
+ParticleSystem::ParticleSystem(const CudaContext& context)
+    : ParticleSystem(context, Config{})
+{
+}
 
 ParticleSystem::ParticleSystem(const CudaContext& context, const Config& config)
     : m_config(config)
@@ -30,6 +40,11 @@ ParticleSystem::ParticleSystem(const CudaContext& context, const Config& config)
     m_forces.turbulenceFrequency = 1.0f;
     m_forces.turbulenceOctaves = 3.0f;
     m_forces.turbulenceTime = 0.0f;
+    // Default to Perlin for bit-exact parity with pre-simplex builds — the
+    // switch to Simplex is opt-in via setTurbulenceNoiseMode() so any prior
+    // game tuning against the old field stays unchanged until a designer
+    // flips the flag.
+    m_forces.turbulenceNoiseMode = TurbulenceNoiseMode::Perlin;
     m_forces.attractorCount = 0;
     m_forces.attractorPositions = nullptr;
     m_forces.attractorStrengths = nullptr;
@@ -54,6 +69,7 @@ ParticleSystem::ParticleSystem(ParticleSystem&& other) noexcept
     : m_config(other.m_config)
     , m_maxParticles(other.m_maxParticles)
     , m_positions(std::move(other.m_positions))
+    , m_prevPositions(std::move(other.m_prevPositions))
     , m_velocities(std::move(other.m_velocities))
     , m_colors(std::move(other.m_colors))
     , m_lifetimes(std::move(other.m_lifetimes))
@@ -86,6 +102,7 @@ ParticleSystem& ParticleSystem::operator=(ParticleSystem&& other) noexcept {
         m_config = other.m_config;
         m_maxParticles = other.m_maxParticles;
         m_positions = std::move(other.m_positions);
+        m_prevPositions = std::move(other.m_prevPositions);
         m_velocities = std::move(other.m_velocities);
         m_colors = std::move(other.m_colors);
         m_lifetimes = std::move(other.m_lifetimes);
@@ -122,6 +139,11 @@ ParticleSystem& ParticleSystem::operator=(ParticleSystem&& other) noexcept {
 void ParticleSystem::initializeBuffers() {
     // Allocate GPU buffers (SoA layout)
     m_positions.resize(m_maxParticles);
+    // Same capacity as m_positions — the ribbon-trail tangent derivation
+    // assumes every live particle has both columns live. Initial contents
+    // are don't-care because emitParticles writes prevPositions = current
+    // position at birth (zero-length initial segment).
+    m_prevPositions.resize(m_maxParticles);
     m_velocities.resize(m_maxParticles);
     m_colors.resize(m_maxParticles);
     m_lifetimes.resize(m_maxParticles);
@@ -223,6 +245,10 @@ void ParticleSystem::setTurbulence(bool enabled, float strength, float frequency
     m_forces.turbulenceEnabled = enabled;
     m_forces.turbulenceStrength = strength;
     m_forces.turbulenceFrequency = frequency;
+}
+
+void ParticleSystem::setTurbulenceNoiseMode(TurbulenceNoiseMode mode) {
+    m_forces.turbulenceNoiseMode = mode;
 }
 
 uint32_t ParticleSystem::addAttractor(const Engine::vec3& position, float strength, float radius) {
@@ -423,6 +449,7 @@ int ParticleSystem::emitFromEmitter(const ParticleEmitter& emitter, int count) {
 
     GpuParticles particles;
     particles.positions = m_positions.get();
+    particles.prevPositions = m_prevPositions.get();
     particles.velocities = m_velocities.get();
     particles.colors = m_colors.get();
     particles.lifetimes = m_lifetimes.get();
@@ -506,6 +533,7 @@ void ParticleSystem::update(float deltaTime) {
 
     GpuParticles particles;
     particles.positions = m_positions.get();
+    particles.prevPositions = m_prevPositions.get();
     particles.velocities = m_velocities.get();
     particles.colors = m_colors.get();
     particles.lifetimes = m_lifetimes.get();
@@ -566,6 +594,7 @@ void ParticleSystem::compactParticlesInternal() {
 
     GpuParticles particles;
     particles.positions = m_positions.get();
+    particles.prevPositions = m_prevPositions.get();
     particles.velocities = m_velocities.get();
     particles.colors = m_colors.get();
     particles.lifetimes = m_lifetimes.get();
@@ -596,6 +625,7 @@ void ParticleSystem::sort(const Engine::vec3& cameraPosition) {
 
     GpuParticles particles;
     particles.positions = m_positions.get();
+    particles.prevPositions = m_prevPositions.get();
     particles.velocities = m_velocities.get();
     particles.colors = m_colors.get();
     particles.lifetimes = m_lifetimes.get();
@@ -626,11 +656,83 @@ void ParticleSystem::sort(const Engine::vec3& cameraPosition) {
 ParticleSystem::RenderData ParticleSystem::getRenderData() const {
     RenderData data;
     data.positions = m_positions.get();
+    // Exposed for the ribbon-trail renderer. Always non-null once the system
+    // is constructed — m_prevPositions.resize() is called unconditionally in
+    // initializeBuffers() alongside m_positions, and their allocations have
+    // identical lifetimes.
+    data.prevPositions = m_prevPositions.get();
     data.colors = m_colors.get();
     data.sizes = m_sizes.get();
     data.rotations = m_rotations.get();
     data.count = m_particleCount;
     return data;
+}
+
+// ---------------------------------------------------------------------------
+// ParticleSystem::buildRibbonStrip
+// ---------------------------------------------------------------------------
+//
+// Issues `ribbon_device::ribbonTrailBuildKernel` on the particle system's
+// private stream, writing exactly four vertices per slot into the caller's
+// device-memory output buffer. No synchronisation here — the caller is
+// expected to sequence against our stream via its own VkSemaphore /
+// cudaStreamWaitEvent (the Vulkan-CUDA interop pattern the renderer will
+// establish in iteration 4).
+//
+// WHY we pass the output as `void*`: keeping `ribbon_device::RibbonVertex`
+// out of ParticleSystem.hpp's public API prevents every non-CUDA TU that
+// transitively includes the particle system (elemental_magic.hpp, the game
+// layer, the Catch2 suite via mock headers) from having to parse the full
+// device-facing vertex layout. The renderer casts its own typed pointer
+// through `void*` at the call site — same pattern the existing `copyToHost`
+// overload uses for mock-friendliness.
+void ParticleSystem::buildRibbonStrip(void* outDeviceVertices,
+                                      const Engine::vec3& viewDirection,
+                                      float tailWidthFactor) {
+    if (outDeviceVertices == nullptr || m_maxParticles <= 0) {
+        return;
+    }
+
+    // Build the GpuParticles descriptor the kernel consumes. We reuse the
+    // same struct-fill pattern used by update() / compactParticlesInternal()
+    // so the alive / positions / prevPositions / colors / sizes / lifetimes
+    // pointers all come from one authoritative source.
+    GpuParticles particles{};
+    particles.positions     = m_positions.get();
+    particles.velocities    = m_velocities.get();
+    particles.prevPositions = m_prevPositions.get();
+    particles.colors        = m_colors.get();
+    particles.lifetimes     = m_lifetimes.get();
+    particles.maxLifetimes  = m_maxLifetimes.get();
+    particles.sizes         = m_sizes.get();
+    particles.rotations     = m_rotations.get();
+    particles.alive         = m_alive.get();
+    particles.count         = m_particleCount;
+    particles.maxCount      = m_maxParticles;
+
+    // 256 threads per block matches the BLOCK_SIZE constant used by the
+    // rest of the particle kernels (see ParticleKernels.cu). No shared-memory
+    // or warp-level reductions here, so the block size isn't a tuning knob —
+    // any power-of-two in [128, 512] would perform identically.
+    constexpr int kBlockSize = 256;
+    const int blockCount = (m_maxParticles + kBlockSize - 1) / kBlockSize;
+
+    const float3 viewDirF3 = make_float3(
+        viewDirection.x, viewDirection.y, viewDirection.z
+    );
+
+    ribbon_device::ribbonTrailBuildKernel<<<blockCount, kBlockSize, 0, m_stream.get()>>>(
+        particles,
+        static_cast<ribbon_device::RibbonVertex*>(outDeviceVertices),
+        m_particleCount,                                     // liveCount
+        m_maxParticles,                                      // maxParticleCount
+        viewDirF3,
+        tailWidthFactor,
+        ribbon_device::kDefaultMinSegmentLength,
+        ribbon_device::kDefaultMinCrossLength
+    );
+
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void ParticleSystem::copyToHost(Engine::vec3* positions, Engine::vec4* colors, float* sizes) {

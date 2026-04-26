@@ -200,6 +200,25 @@ public:
     bool loadNPCsFromFile(const std::string& filepath);
 
     /**
+     * Drop all tracked NPCs.
+     *
+     * The orchestrating game state (`CatAnnihilation::restart`) wipes the
+     * full ECS via `ecs.clearEntities()` whenever a new run begins. The
+     * Entity handles already in `npcs_` are now stale (their generation
+     * counter has rolled past) and any subsequent `spawnNPC` for the same
+     * id will short-circuit on the "NPC already exists" guard, leaving the
+     * world map empty even though the JSON catalogue still resolves.
+     *
+     * `clearAll` is the symmetric counterpart: it forgets every tracked NPC
+     * and resets transient interaction state (dialog, shop, training) so a
+     * fresh `loadNPCsFromFile` repopulates the freshly-cleared ECS without
+     * collisions. We do NOT touch the player-state members
+     * (`playerEntity_` / `playerClan_` / `playerLevel_`) because those are
+     * owned by `CatAnnihilation` and rewritten on every game-start path.
+     */
+    void clearAll();
+
+    /**
      * Set dialog system reference
      */
     void setDialogSystem(std::shared_ptr<DialogSystem> dialogSystem) { dialogSystem_ = dialogSystem; }
@@ -214,6 +233,33 @@ public:
      */
     using QuestCheckCallback = std::function<bool(const std::string& questId)>;
     void setQuestCheckCallback(const QuestCheckCallback& callback) { questCheckCallback_ = callback; }
+
+    /**
+     * Provide a terrain-height sampler so spawnNPC can snap each NPC's Y
+     * to the heightfield instead of trusting the JSON's authored y.
+     *
+     * Why this is required: assets/npcs/npcs.json authors every world
+     * coordinate as y = 0.5 (a sane default in a flat editor-space view).
+     * The actual Terrain runs Perlin noise scaled by params.heightScale
+     * (default 50 m), so peaks reach ~50 m and even troughs are typically
+     * 5–15 m. A literal y = 0.5 places the rigged Meshy GLB *under* the
+     * terrain at virtually every authored x,z, which is why iter
+     * 2026-04-25 01:50 UTC saw the renderer allocate 16 NPC skinned VBs
+     * (the meshes do submit to ScenePass) yet the playtest screenshot
+     * showed only the player visible — the NPCs were buried below the
+     * heightfield, occluded by it from every reasonable camera angle.
+     *
+     * The sampler is stored as a std::function so `NPCSystem` does not
+     * need to take a hard dependency on `Terrain`/`GameWorld` (which
+     * would inflate the public header surface). When the sampler is
+     * unset (test harnesses, headless paths, fallback when GameWorld
+     * fails to construct) `spawnNPC` falls through to the JSON-authored
+     * y, preserving the previous behaviour.
+     */
+    using TerrainHeightSampler = std::function<float(float, float)>;
+    void setTerrainHeightSampler(TerrainHeightSampler sampler) {
+        heightSampler_ = std::move(sampler);
+    }
 
 private:
     /**
@@ -262,6 +308,12 @@ private:
     DialogEndCallback onInteractionEnd_;
     InteractionCallback onDialogAdvance_;
     QuestCheckCallback questCheckCallback_;
+
+    // Terrain-height query, optional. When non-empty, spawnNPC overrides
+    // the JSON-authored Y coordinate with the sampled height so each NPC
+    // stands on the heightfield surface instead of being buried beneath
+    // it. See setTerrainHeightSampler() above for the full rationale.
+    TerrainHeightSampler heightSampler_;
 };
 
 /**

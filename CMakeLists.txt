@@ -1,4 +1,153 @@
 cmake_minimum_required(VERSION 3.20)
+
+# ---------------------------------------------------------------------------
+# Pre-project MSVC / Windows SDK environment bootstrap
+# ---------------------------------------------------------------------------
+# The `project(... LANGUAGES CXX CUDA)` call below triggers the full
+# compiler-identification + try_compile sanity check chain. On Windows
+# that chain runs cl.exe, nvcc, link.exe, rc.exe and mt.exe, all of which
+# expect a Developer Command Prompt's INCLUDE/LIB/PATH to be set by
+# vcvarsall.bat. When openclaw invokes cmake in a plain non-developer
+# shell, the chain fails in order:
+#
+#   1. nvcc fatal : Cannot find compiler 'cl.exe' in PATH
+#   2. fatal error C1083: Cannot open include file: 'cstdint'
+#   3. RC Pass 1: ... no such file or directory   (rc.exe missing)
+#   4. LINK : fatal error LNK1104: cannot open file 'kernel32.lib'
+#
+# All four symptoms come from missing env vars. This block probes the
+# newest installed MSVC toolset and Windows SDK and materialises PATH,
+# INCLUDE and LIB so the project() call -- and every subsequent build
+# rule -- runs as if we had launched from a Developer Command Prompt.
+if(WIN32 AND "$ENV{INCLUDE}" STREQUAL "")
+    set(_vs_roots
+        "C:/Program Files/Microsoft Visual Studio/2022/Enterprise"
+        "C:/Program Files/Microsoft Visual Studio/2022/Professional"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community"
+        "C:/Program Files/Microsoft Visual Studio/2022/BuildTools"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Enterprise"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools"
+    )
+    set(_cl_exe_found "")
+    foreach(_vs_root IN LISTS _vs_roots)
+        set(_msvc_root "${_vs_root}/VC/Tools/MSVC")
+        if(IS_DIRECTORY "${_msvc_root}")
+            # Enumerate installed toolsets, pick the highest version.
+            file(GLOB _toolsets RELATIVE "${_msvc_root}" "${_msvc_root}/*")
+            set(_best "")
+            foreach(_t IN LISTS _toolsets)
+                if(IS_DIRECTORY "${_msvc_root}/${_t}")
+                    if("${_best}" STREQUAL "" OR "${_t}" VERSION_GREATER "${_best}")
+                        set(_best "${_t}")
+                    endif()
+                endif()
+            endforeach()
+            if(NOT "${_best}" STREQUAL "")
+                set(_candidate "${_msvc_root}/${_best}/bin/Hostx64/x64/cl.exe")
+                if(EXISTS "${_candidate}")
+                    set(_cl_exe_found "${_candidate}")
+                    break()
+                endif()
+            endif()
+        endif()
+    endforeach()
+
+    if(NOT "${_cl_exe_found}" STREQUAL "")
+        get_filename_component(_cl_bin_dir "${_cl_exe_found}" DIRECTORY)
+        message(STATUS "Pre-project: prepending MSVC cl.exe directory to PATH: ${_cl_bin_dir}")
+        # Use native path separators so Windows tools parse it correctly.
+        file(TO_NATIVE_PATH "${_cl_bin_dir}" _cl_bin_dir_native)
+
+        # CMake's compiler sanity check (`try_compile` → link → manifest)
+        # also needs rc.exe and mt.exe, which vcvarsall would have put on
+        # PATH from the Windows SDK bin directory. Find the newest SDK
+        # bin dir and prepend it too, otherwise the try_compile fails with
+        # `RC Pass 1: command "rc /fo ... " failed ... no such file or
+        # directory`.
+        set(_winsdk_bin_root "C:/Program Files (x86)/Windows Kits/10/bin")
+        set(_winsdk_bin_native "")
+        if(IS_DIRECTORY "${_winsdk_bin_root}")
+            file(GLOB _winsdk_bin_versions RELATIVE "${_winsdk_bin_root}" "${_winsdk_bin_root}/*")
+            set(_best_bin "")
+            foreach(_b IN LISTS _winsdk_bin_versions)
+                # Skip non-version sibling directories (x64, x86, arm64).
+                if(IS_DIRECTORY "${_winsdk_bin_root}/${_b}" AND "${_b}" MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
+                    if("${_best_bin}" STREQUAL "" OR "${_b}" VERSION_GREATER "${_best_bin}")
+                        set(_best_bin "${_b}")
+                    endif()
+                endif()
+            endforeach()
+            if(NOT "${_best_bin}" STREQUAL "" AND EXISTS "${_winsdk_bin_root}/${_best_bin}/x64/rc.exe")
+                file(TO_NATIVE_PATH "${_winsdk_bin_root}/${_best_bin}/x64" _winsdk_bin_native)
+                message(STATUS "Pre-project: prepending Windows SDK bin to PATH: ${_winsdk_bin_root}/${_best_bin}/x64")
+            endif()
+        endif()
+
+        if("${_winsdk_bin_native}" STREQUAL "")
+            set(ENV{PATH} "${_cl_bin_dir_native};$ENV{PATH}")
+        else()
+            set(ENV{PATH} "${_cl_bin_dir_native};${_winsdk_bin_native};$ENV{PATH}")
+        endif()
+
+        # Tell CMake to pick this exact compiler so we don't end up with
+        # clang by accident when the cache is empty.
+        set(CMAKE_C_COMPILER   "${_cl_exe_found}" CACHE FILEPATH "MSVC cl.exe (pre-project bootstrap)")
+        set(CMAKE_CXX_COMPILER "${_cl_exe_found}" CACHE FILEPATH "MSVC cl.exe (pre-project bootstrap)")
+
+        # Derive the MSVC toolset include/lib paths from the cl.exe path.
+        # cl.exe = .../VC/Tools/MSVC/<version>/bin/Hostx64/x64/cl.exe
+        # toolset root is four directories up.
+        get_filename_component(_msvc_host_root "${_cl_bin_dir}" DIRECTORY)  # bin/Hostx64
+        get_filename_component(_msvc_bin_root  "${_msvc_host_root}" DIRECTORY) # bin
+        get_filename_component(_msvc_toolset   "${_msvc_bin_root}" DIRECTORY) # <version>
+        set(_msvc_include_dir "${_msvc_toolset}/include")
+        set(_msvc_lib_dir     "${_msvc_toolset}/lib/x64")
+
+        # Find newest installed Windows SDK (include + lib; bin was already
+        # located above when searching for rc.exe).
+        set(_winsdk_inc_root "C:/Program Files (x86)/Windows Kits/10/Include")
+        set(_winsdk_lib_root "C:/Program Files (x86)/Windows Kits/10/Lib")
+        set(_winsdk_best "")
+        if(IS_DIRECTORY "${_winsdk_inc_root}")
+            file(GLOB _winsdk_inc_versions RELATIVE "${_winsdk_inc_root}" "${_winsdk_inc_root}/*")
+            foreach(_v IN LISTS _winsdk_inc_versions)
+                if(IS_DIRECTORY "${_winsdk_inc_root}/${_v}" AND EXISTS "${_winsdk_inc_root}/${_v}/ucrt/stdio.h")
+                    if("${_winsdk_best}" STREQUAL "" OR "${_v}" VERSION_GREATER "${_winsdk_best}")
+                        set(_winsdk_best "${_v}")
+                    endif()
+                endif()
+            endforeach()
+        endif()
+
+        if("${_winsdk_best}" STREQUAL "")
+            message(FATAL_ERROR "Pre-project bootstrap: no Windows SDK with ucrt/stdio.h under ${_winsdk_inc_root}. \
+Install a Windows 10/11 SDK via Visual Studio Installer.")
+        endif()
+
+        set(_winsdk_include "${_winsdk_inc_root}/${_winsdk_best}")
+        set(_winsdk_lib     "${_winsdk_lib_root}/${_winsdk_best}")
+
+        # Populate INCLUDE (semicolon-separated on Windows) so cl.exe and
+        # nvcc-spawned cl.exe both find <cstdint>, <stdio.h>, <windows.h>.
+        set(ENV{INCLUDE}
+            "${_msvc_include_dir};${_winsdk_include}/ucrt;${_winsdk_include}/shared;${_winsdk_include}/um;${_winsdk_include}/winrt")
+        # Populate LIB so link.exe finds kernel32.lib, user32.lib, msvcrt.lib.
+        set(ENV{LIB}
+            "${_msvc_lib_dir};${_winsdk_lib}/ucrt/x64;${_winsdk_lib}/um/x64")
+
+        message(STATUS "Pre-project: MSVC toolset ${_msvc_toolset}")
+        message(STATUS "Pre-project: Windows SDK  ${_winsdk_best}")
+
+        # Remember these so the post-project block below doesn't re-probe.
+        set(_catann_msvc_include_dir "${_msvc_include_dir}")
+        set(_catann_msvc_lib_dir     "${_msvc_lib_dir}")
+        set(_catann_winsdk_include   "${_winsdk_include}")
+        set(_catann_winsdk_lib       "${_winsdk_lib}")
+    endif()
+endif()
+
 project(CatAnnihilation VERSION 1.0.0 LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -7,12 +156,72 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_ARCHITECTURES 86 75 70)  # RTX 30xx, 20xx, 10xx
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ---------------------------------------------------------------------------
+# Post-project MSVC hookups
+# ---------------------------------------------------------------------------
+# The env vars set in the pre-project block reach cmake's own subprocess
+# (the CMake configure step that runs try_compile and compiler detection),
+# but NOT the ninja-launched compile commands: ninja inherits its env from
+# whatever shell invoked it, not from cmake. So CMake's in-process `set(ENV)`
+# calls are invisible to nvcc at build time. nvcc therefore still aborts
+# with "Cannot find compiler 'cl.exe' in PATH" for every .cu translation
+# unit unless we teach nvcc about cl.exe via its own flags.
+if(WIN32 AND MSVC AND DEFINED _catann_msvc_include_dir)
+    # 1. Tell nvcc exactly which cl.exe to use as the host compiler via its
+    #    --compiler-bindir (short form -ccbin) flag. This is independent of
+    #    PATH -- it puts the directory on nvcc's host-compiler search path
+    #    explicitly. We can't rely on CMAKE_CUDA_HOST_COMPILER alone here
+    #    because CMake's NVCC rule variants vary across CMake versions and
+    #    don't always translate that into -ccbin on ninja-generator builds.
+    get_filename_component(_catann_cl_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    # CMake strips quoting when it splits CUDA flags, so wrap the path in
+    # escaped quotes to survive the shell round-trip (the directory name
+    # contains spaces: "...\\Visual Studio\\2022\\...").
+    set(CMAKE_CUDA_FLAGS
+        "${CMAKE_CUDA_FLAGS} -ccbin \"${_catann_cl_bin_dir}\""
+        CACHE STRING "Flags used by the CUDA compiler" FORCE)
+    set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "nvcc host C++ compiler" FORCE)
+
+    # 2. Register MSVC + Windows SDK headers as SYSTEM includes so any
+    #    subsystem using warning flags (/W4 /WX) does not surface diagnostics
+    #    from stdlib headers. We use /external:I via CMake's SYSTEM semantics.
+    include_directories(SYSTEM
+        "${_catann_msvc_include_dir}"
+        "${_catann_winsdk_include}/ucrt"
+        "${_catann_winsdk_include}/shared"
+        "${_catann_winsdk_include}/um"
+        "${_catann_winsdk_include}/winrt"
+    )
+    link_directories(
+        "${_catann_msvc_lib_dir}"
+        "${_catann_winsdk_lib}/ucrt/x64"
+        "${_catann_winsdk_lib}/um/x64"
+    )
+endif()
+# ---------------------------------------------------------------------------
+
 # Option to build tests
 option(BUILD_TESTS "Build test suite" ON)
+
+# Shader hot-reload (debug-only feature). Compiled out of Release by
+# default per the ENGINE_BACKLOG item's acceptance bar: "Must be compiled
+# out of release builds." An explicit -DCAT_SHADER_HOT_RELOAD=ON still
+# overrides the auto-detect so a developer can flip it on in any config
+# (e.g. RelWithDebInfo) when iterating on shaders without wanting Debug's
+# whole-program optimisation cost.
+option(CAT_SHADER_HOT_RELOAD "Enable GLSL shader hot-reload driver (debug-only)" OFF)
 
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Auto-enable shader hot-reload for developer-facing build types. Release
+# stays off regardless of the option (the feature is not shippable — it
+# shells out to glslc at runtime). Explicit -DCAT_SHADER_HOT_RELOAD=ON
+# overrides this auto-detect for any build type.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(CAT_SHADER_HOT_RELOAD ON CACHE BOOL "Enable GLSL shader hot-reload driver (debug-only)" FORCE)
 endif()
 
 # Find packages
@@ -227,10 +436,19 @@ set(ENGINE_UI_SOURCES
     engine/ui/UIButton.cpp
     engine/ui/UIPanel.cpp
     engine/ui/FontRenderer.cpp
+    # GraphicsSettingsPanel is the ImGui-side face of Game::GraphicsSettings.
+    # Paired with the F4 hook in game/main.cpp, it gives a reviewer live
+    # knobs (max FPS, VSync, profiler capture) + a next-launch staging area
+    # for the display/quality fields that require a swapchain rebuild.
+    engine/ui/GraphicsSettingsPanel.cpp
 )
 
 set(ENGINE_DEBUG_SOURCES
     engine/debug/Profiler.cpp
+    # ProfilerOverlay is the ImGui face of Profiler — the header-only
+    # SummarizeFrameTimes helper is unit-tested in isolation; only the
+    # Draw() body (which pulls imgui.h) lives here.
+    engine/debug/ProfilerOverlay.cpp
 )
 
 set(ENGINE_RENDERER_SOURCES
@@ -400,10 +618,38 @@ target_link_libraries(CatAnnihilation PRIVATE
     CatEngine
 )
 
+# Propagate the shader hot-reload gate to both the engine (the header lives
+# under engine/rhi/) and the game binary (main.cpp instantiates the driver).
+# Using PUBLIC on CatEngine would work too, but being explicit about both
+# targets makes it obvious in a build log when the flag is on.
+if(CAT_SHADER_HOT_RELOAD)
+    target_compile_definitions(CatEngine PUBLIC CAT_ENGINE_SHADER_HOT_RELOAD)
+    target_compile_definitions(CatAnnihilation PRIVATE CAT_ENGINE_SHADER_HOT_RELOAD)
+    message(STATUS "Shader hot-reload: ENABLED (CAT_ENGINE_SHADER_HOT_RELOAD)")
+else()
+    message(STATUS "Shader hot-reload: disabled (Release build; define CAT_SHADER_HOT_RELOAD=ON to force)")
+endif()
+
 # Link pthread on Linux only
 if(NOT WIN32)
     target_link_libraries(CatAnnihilation PRIVATE pthread)
 endif()
+
+# Translate the auto-generated compile_commands.json from MSVC (cl.exe)
+# flag syntax to clang flags, so the openclaw `validate` sweep can run
+# clang++ -fsyntax-only against the same per-file include / define set the
+# real ninja build uses. CMake regenerates compile_commands.json on every
+# configure with MSVC-style flags (/DWIN32, -external:I, /EHsc, …) which
+# clang++ would reject as "no such file or directory: '/DWIN32'". Doing
+# this as a POST_BUILD on CatAnnihilation guarantees the translated file
+# is in place by the time the next sweep's validate step reads it. See
+# scripts/translate_compile_commands.ts for the translation rules and a
+# longer rationale (including why a CMake configure-time hook can't work).
+add_custom_command(TARGET CatAnnihilation POST_BUILD
+    COMMAND bun ${CMAKE_SOURCE_DIR}/scripts/translate_compile_commands.ts
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Translating compile_commands.json MSVC->clang for openclaw validate"
+)
 
 # Copy assets to build directory
 add_custom_command(TARGET CatAnnihilation POST_BUILD

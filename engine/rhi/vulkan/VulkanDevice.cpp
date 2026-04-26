@@ -3,13 +3,63 @@
 #include <iostream>
 #include <set>
 #include <algorithm>
+#include <cstring>
 
 namespace CatEngine::RHI {
 
-// Required device extensions
+// Required device extensions — extensions WITHOUT which the engine refuses
+// to start. Kept short on purpose: only swapchain is hard-required because
+// every other engine subsystem (deferred renderer, CUDA simulation, audio,
+// UI) has either a non-extension code path or its own extension probe.
 const std::vector<const char*> VulkanDevice::s_deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
+
+// Optional CUDA-interop extensions — appended to the device-create
+// extension list ONLY when every name in this group is advertised by the
+// chosen physical device (probed via ProbeCudaInteropExtensions). Mirrors
+// the canonical list in VulkanCudaInterop.hpp's
+// `VulkanCudaExtensions::requiredDeviceExtensions[]`.
+//
+// WHY string literals instead of `VK_KHR_*_EXTENSION_NAME` macros:
+// the Win32-suffixed macros are only declared when
+// `VK_USE_PLATFORM_WIN32_KHR` is `#define`'d before `<vulkan/vulkan.h>`
+// is included. VulkanDevice.cpp does NOT define that macro (it's a
+// platform-tag the rest of the engine deliberately leaves to platform-
+// specific TUs like VulkanCudaInterop.cpp), so the macros are
+// undeclared here. Rather than drag the platform define into the device
+// TU — which would pull windows.h transitively and bloat compile times
+// across every consumer of VulkanDevice.hpp — we use the literal Vulkan-
+// registry names directly. These strings are spec-stable: the Vulkan
+// registry guarantees no vendor renames an extension name once
+// shipped, so the names are as durable as the macro names themselves.
+// The two underscore-cross-platform names are macro-checked below to
+// catch a future Vulkan-header rename early; the win32/fd names cannot
+// be checked the same way because the macros are platform-gated.
+namespace {
+constexpr const char* kCudaInteropOptionalExtensions[] = {
+    "VK_KHR_external_memory",     // == VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME (core in 1.1)
+    "VK_KHR_external_semaphore",  // == VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME (core in 1.1)
+#ifdef _WIN32
+    "VK_KHR_external_memory_win32",
+    "VK_KHR_external_semaphore_win32",
+#else
+    "VK_KHR_external_memory_fd",
+    "VK_KHR_external_semaphore_fd",
+#endif
+};
+// Drift mode: if a future Vulkan SDK ever renames any of these
+// extensions (vanishingly unlikely — the Vulkan registry's stability
+// promise is explicit) the probe will simply report unsupported on a
+// driver that already speaks the renamed name, and the engine falls
+// back to the CPU-fill path with a startup log line. That's a graceful
+// failure mode; we deliberately do not block the build on a literal-
+// vs-macro drift. (A constexpr string comparator could static_assert
+// equality with the cross-platform macros, but `std::strcmp` is not
+// constexpr until C++23 and a hand-rolled constexpr-strcmp adds noise
+// to a path that's already documented and guarded by the runtime
+// startup log line.)
+} // anonymous namespace
 
 VulkanDevice::~VulkanDevice() {
     Shutdown();
@@ -129,6 +179,13 @@ bool VulkanDevice::SelectPhysicalDevice(VkInstance instance, VkSurfaceKHR surfac
 
     m_physicalDevice = bestDevice;
     m_queueFamilyIndices = FindQueueFamilies(bestDevice, surface);
+
+    // Probe optional CUDA-interop extensions on the chosen device. The
+    // probe is a pure introspection step — even when it returns true the
+    // extensions are not yet enabled (that happens in CreateLogicalDevice
+    // below). Set the flag tentatively here and clear it in the create
+    // step if vkCreateDevice rejects the optional list for any reason.
+    m_cudaInteropSupported = ProbeCudaInteropExtensions(m_physicalDevice);
 
     return true;
 }
@@ -261,6 +318,40 @@ bool VulkanDevice::CheckDeviceExtensionSupport(VkPhysicalDevice device) {
     return requiredExtensions.empty();
 }
 
+bool VulkanDevice::ProbeCudaInteropExtensions(VkPhysicalDevice device) const {
+    // Enumerate everything advertised by `device`. We don't try to short-
+    // circuit on count — vkEnumerateDeviceExtensionProperties is cheap
+    // (single driver call returning a small property array) and the
+    // calling site is one-shot at startup.
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+    if (extensionCount == 0) {
+        return false;
+    }
+
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
+
+    // For each optional extension we want, scan the driver's advertised
+    // list. ALL must be present for the bridge to work — partial support
+    // (e.g. external_memory but not external_memory_win32) is treated as
+    // "not supported" because the helpers in VulkanCudaInterop.cpp call
+    // both the cross-platform and the win32/fd entry points.
+    for (const char* required : kCudaInteropOptionalExtensions) {
+        bool found = false;
+        for (const auto& available : availableExtensions) {
+            if (std::strcmp(required, available.extensionName) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool VulkanDevice::CreateLogicalDevice(bool enableValidation) {
     // Get unique queue family indices
     std::vector<uint32_t> uniqueQueueFamilies = m_queueFamilyIndices.GetUniqueIndices();
@@ -284,14 +375,27 @@ bool VulkanDevice::CreateLogicalDevice(bool enableValidation) {
     deviceFeatures.geometryShader = VK_TRUE;
     deviceFeatures.tessellationShader = VK_TRUE;
 
+    // Build the live extension list: required ∪ supported optional. We
+    // build a fresh vector here (rather than mutating s_deviceExtensions)
+    // because the static is const-correct and shared across hypothetical
+    // multi-device sessions, while the optional CUDA-interop set is a
+    // per-physical-device decision driven by m_cudaInteropSupported.
+    std::vector<const char*> enabledExtensions(s_deviceExtensions.begin(),
+                                                s_deviceExtensions.end());
+    if (m_cudaInteropSupported) {
+        for (const char* ext : kCudaInteropOptionalExtensions) {
+            enabledExtensions.push_back(ext);
+        }
+    }
+
     // Create device
     VkDeviceCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(s_deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = s_deviceExtensions.data();
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.ppEnabledExtensionNames = enabledExtensions.data();
 
     // Validation layers (deprecated for device, but set for compatibility)
     if (enableValidation) {
@@ -302,10 +406,39 @@ bool VulkanDevice::CreateLogicalDevice(bool enableValidation) {
         createInfo.enabledLayerCount = 0;
     }
 
-    if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS) {
-        std::cerr << "[VulkanDevice] Failed to create logical device" << std::endl;
-        return false;
+    VkResult createResult = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+    if (createResult != VK_SUCCESS) {
+        // The most likely failure mode here is VK_ERROR_EXTENSION_NOT_PRESENT
+        // when the optional CUDA-interop list was probed-as-supported but
+        // the live driver still rejects it (rare but documented in NVIDIA
+        // bug reports for some Vulkan-loader/driver mismatch combos). When
+        // that happens we retry once with the optional list dropped, so the
+        // game still launches on a half-broken interop stack — falling back
+        // to the legacy CPU-fill ribbon path is strictly better than
+        // refusing to start.
+        if (createResult == VK_ERROR_EXTENSION_NOT_PRESENT && m_cudaInteropSupported) {
+            std::cerr << "[VulkanDevice] CUDA-interop optional extensions rejected at "
+                         "device-create despite probe pass; retrying with required-only list."
+                      << std::endl;
+            m_cudaInteropSupported = false;
+            createInfo.enabledExtensionCount = static_cast<uint32_t>(s_deviceExtensions.size());
+            createInfo.ppEnabledExtensionNames = s_deviceExtensions.data();
+            createResult = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+        }
+        if (createResult != VK_SUCCESS) {
+            std::cerr << "[VulkanDevice] Failed to create logical device" << std::endl;
+            return false;
+        }
     }
+
+    // One-shot diagnostic: tell the user whether the renderer can take the
+    // CUDA-interop fast path or has to fall back to CPU upload. This line
+    // shows up exactly once at startup, so an autoplay smoke run logs it
+    // alongside the device-name banner — handy when triaging "why is the
+    // ribbon trail using the static test strip instead of GPU particles".
+    std::cout << "[VulkanDevice] CUDA-interop extensions: "
+              << (m_cudaInteropSupported ? "ENABLED" : "disabled (CPU-fallback path)")
+              << std::endl;
 
     // Get queues
     vkGetDeviceQueue(m_device, *m_queueFamilyIndices.graphics, 0, &m_graphicsQueue);

@@ -1,6 +1,7 @@
 #include "CatEntity.hpp"
 #include "../components/GameComponents.hpp"
 #include "../components/MeshComponent.hpp"
+#include "../components/LocomotionStateMachine.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/core/Logger.hpp"
 #include "../../engine/assets/AssetManager.hpp"
@@ -14,16 +15,34 @@ namespace CatGame {
 
 namespace {
 
-// Default player cat model. The `cats/*.glb` directory holds Meshy-AI
-// generated, auto-rigged variants (ember/frost/mist/storm leaders, elders,
-// mentors). `ember_leader.glb` is the designated hero model — same
-// proportions as the other leaders, strong silhouette, T-pose at import,
-// ~250k polys (within Meshy's auto-rigger limit). Kept as a file-scope
-// constant rather than inlined in createCustom() so iteration can swap
-// variants for testing without recompiling the factory. Downstream code
-// (loadModel, configureAnimations) is path-agnostic — all it needs is a
-// readable .glb or .gltf.
-constexpr const char* kDefaultCatModelPath = "assets/models/cats/ember_leader.glb";
+// Default player cat model. The `cats/*.glb` directory holds two parallel
+// sets of Meshy-AI assets:
+//   * `cats/<name>.glb`        — the raw Meshy export. Single-mesh, single-
+//                                 node "rig" (the model's root node IS the
+//                                 mesh), no animation clips. Loading these
+//                                 produces nodes=1 / clips=0 in the playtest
+//                                 log — a confirmed regression observed
+//                                 2026-04-24 (player rendered as a static
+//                                 T-posed mesh that slid across terrain
+//                                 with no skeletal motion).
+//   * `cats/rigged/<name>.glb` — Meshy auto-rigger output, processed through
+//                                 the rig-batch tooling (see
+//                                 `assets/models/cats/rig_batch_v6.log`).
+//                                 These carry a real skeleton hierarchy and
+//                                 — when the rigger added them — animation
+//                                 clips. The rig_batch tooling drops the
+//                                 rigged GLBs in this subdirectory so the
+//                                 raw exports stay byte-identical with
+//                                 Meshy's web download for repro purposes.
+//
+// We bind to the rigged variant by default so the player cat actually
+// has a skeleton the Animator + skinning shader can drive. Downstream code
+// (`loadModel`, `configureAnimations`) is path-agnostic; the only difference
+// they observe is that `model->nodes.size() > 1` and the inverse-bind
+// matrices are non-identity, which is exactly what the rigged path needs.
+// If a future iteration wants to test the raw mesh (e.g. to compare flat-
+// shaded vs skinned output), swap to `assets/models/cats/ember_leader.glb`.
+constexpr const char* kDefaultCatModelPath = "assets/models/cats/rigged/ember_leader.glb";
 
 } // namespace
 
@@ -60,11 +79,21 @@ CatEngine::Entity CatEntity::createCustom(
     health.currentHealth = maxHealth;
     health.invincibilityDuration = 0.5F;
 
-    // Set up death callback - triggers EntityDeathEvent via HealthSystem
+    // Set up death callback - the actual death-event publish is handled in
+    // the game-layer setOnEntityDeath callback (CatAnnihilation.cpp:286),
+    // which fires from HealthSystem::handleDeath when currentHealth<=0 in
+    // updateHealth observes the !isDead transition. The game-layer
+    // callback publishes EntityDeathEvent (which spawns the death-burst
+    // particle effect via spawnDeathParticles), publishes EnemyKilledEvent
+    // for enemies (which awards XP, plays the kill sting, and updates
+    // quest progress), and routes the player to GameOver. We deliberately
+    // leave HealthComponent::onDeath empty here so the canonical
+    // game-layer callback owns the death-handling chain — HealthComponent
+    // calling onDeath inline before HealthSystem sees the transition would
+    // bypass the !isDead guard in HealthSystem::updateHealth and prevent
+    // handleDeath / handleEnemyDeath / the death-pose freeze (and now the
+    // particle burst) from firing.
     health.onDeath = [entity]() {
-        // Death is handled by the HealthSystem which publishes EntityDeathEvent
-        // The CatAnnihilation class listens for this event and triggers GameOver state
-        // No direct action needed here - event-driven architecture handles it
         (void)entity;  // Entity ID available if needed for cleanup
     };
 
@@ -117,6 +146,33 @@ CatEngine::Entity CatEntity::createCustom(
     // less entity, so the factory never aborts the whole game.
     if (loadModel(ecs, entity, kDefaultCatModelPath)) {
         configureAnimations(ecs, entity);
+
+        // Stamp the player's clan-leader identity onto the mesh tint. The
+        // player is canonically the EmberClan leader (their default model
+        // is `ember_leader.glb`), so the tint mirrors the
+        // NPCSystem::ComputeNpcTint(EmberClan, ClanLeader) result: warm
+        // ember orange with the +12% leader brightness, clamped into [0,1].
+        // We hardcode the result here rather than calling into NPCSystem
+        // because (a) CatEntity has no NPCSystem dependency and dragging
+        // one in for a single tint lookup would couple the player factory
+        // to NPC code, and (b) the player tint is a fixed identity — if a
+        // future patch makes the player switchable across clans, that's a
+        // bigger refactor that would expose tint as a parameter to
+        // createCustom().
+        //
+        // Without this the player rendered identical-white to every
+        // unlit / no-baseColorFactor cat in the world (16 NPCs + the
+        // player → 17 visually-identical white silhouettes); now the
+        // player reads as the saturated ember-orange leader from any
+        // distance.
+        MeshComponent* meshAttached = ecs.getComponent<MeshComponent>(entity);
+        if (meshAttached != nullptr) {
+            // Pre-clamped result of (0.95, 0.45, 0.20) * 1.12, with the
+            // x-channel saturating at 1.00. Matches what
+            // NPCSystem::ComputeNpcTint emits for an EmberClan ClanLeader.
+            meshAttached->hasTintOverride = true;
+            meshAttached->tintOverride = Engine::vec3(1.00F, 0.504F, 0.224F);
+        }
     }
 
     return entity;
@@ -266,6 +322,16 @@ bool CatEntity::configureAnimations(CatEngine::ECS& ecs, CatEngine::Entity entit
     if (animator->hasState("idle")) {
         animator->play("idle", 0.0F);
     }
+
+    // Wire the locomotion state machine so the per-frame "speed" parameter
+    // (fed from MovementComponent::getCurrentSpeed() in CatAnnihilation::update)
+    // drives idle <-> walk <-> run transitions automatically. Without this,
+    // every cat sat in idle even while sliding across the terrain at full
+    // speed — the rig would T-bob in place and the visible velocity was a
+    // disconnected translation of the bind pose. The helper conditionally
+    // adds only the transitions whose endpoint clips actually exist on the
+    // rig, so a stripped-down NPC with only "idle" stays single-clip safe.
+    wireLocomotionTransitions(*animator);
 
     mesh->animator = animator;
     return true;

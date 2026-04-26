@@ -107,7 +107,11 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
         return;
     }
 
-    // Sort transparent objects back-to-front
+    // Gather transparent draw list. For the sort path this must run first so
+    // the comparator can order back-to-front; for WBOIT the order is
+    // irrelevant but the list itself is still needed to know which instances
+    // to dispatch. SortTransparentObjects() is cheap when the list is empty
+    // so calling it in both modes keeps the branch structure simple.
     SortTransparentObjects();
 
     if (m_TransparentObjects.empty()) {
@@ -121,8 +125,31 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
     renderArea.width = m_Width;
     renderArea.height = m_Height;
 
+    // Choose pipeline based on transparency mode + lighting mode.
+    //
+    // WeightedBlendedOIT selects the accum pipeline here; the composite pass
+    // is invoked after the draw loop below. When the offscreen accum/reveal
+    // framebuffer is not wired up (m_Framebuffer is nullptr in the sort
+    // path's current deployment, and the WBOIT framebuffer tracking is a
+    // downstream step), BeginRenderPass will no-op safely — the pipeline
+    // state is still valid and the whole path exits without issuing draws,
+    // matching the existing sort-path behaviour.
+    //
+    // SortedBackToFront keeps the classic behaviour: bind either the full
+    // PBR pipeline or the simplified-lighting pipeline and issue sorted
+    // draws into the legacy render pass.
+    RHI::IRHIPipeline* activePipeline = nullptr;
+    RHI::IRHIRenderPass* activeRenderPass = m_RenderPass;
+    if (m_TransparencyMode == TransparencyMode::WeightedBlendedOIT) {
+        activePipeline = m_OITAccumPipeline;
+        activeRenderPass = m_OITAccumRenderPass;
+    } else {
+        activePipeline = m_UseSimplifiedLighting ?
+            m_TransparentSimplePipeline : m_TransparentPipeline;
+    }
+
     // No clear values - we're loading existing content
-    commandBuffer->BeginRenderPass(m_RenderPass, m_Framebuffer, renderArea, nullptr, 0);
+    commandBuffer->BeginRenderPass(activeRenderPass, m_Framebuffer, renderArea, nullptr, 0);
 
     // Set viewport and scissor
     RHI::Viewport viewport{};
@@ -134,10 +161,6 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
     viewport.maxDepth = 1.0f;
     commandBuffer->SetViewport(viewport);
     commandBuffer->SetScissor(renderArea);
-
-    // Choose pipeline based on lighting mode
-    RHI::IRHIPipeline* activePipeline = m_UseSimplifiedLighting ?
-        m_TransparentSimplePipeline : m_TransparentPipeline;
 
     if (activePipeline) {
         commandBuffer->BindPipeline(activePipeline);
@@ -192,6 +215,31 @@ void ForwardPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameI
     }
 
     commandBuffer->EndRenderPass();
+
+    // WBOIT composite sub-step. After the accum render pass finishes, the
+    // accum + reveal textures hold the per-pixel transparent layers; the
+    // composite pass reads those as samplers and writes (avg, 1 - reveal)
+    // back into the HDR buffer with a standard over-operator blend.
+    //
+    // Like the sort-path above, this short-circuits cleanly when the
+    // offscreen framebuffer is not wired up (m_Framebuffer / composite
+    // framebuffer both nullptr in the current deployment) — BeginRenderPass
+    // no-ops against a null framebuffer and no draw is issued. That matches
+    // the existing "pass class compiled and hooked but not yet driven by the
+    // live renderer" state and avoids changing visible behaviour in the
+    // playtest while the P0 shader + pipeline groundwork lands.
+    if (m_TransparencyMode == TransparencyMode::WeightedBlendedOIT &&
+        m_OITCompositePipeline && m_OITCompositeRenderPass) {
+        commandBuffer->BeginRenderPass(m_OITCompositeRenderPass, m_Framebuffer,
+                                       renderArea, nullptr, 0);
+        commandBuffer->SetViewport(viewport);
+        commandBuffer->SetScissor(renderArea);
+        commandBuffer->BindPipeline(m_OITCompositePipeline);
+        // Full-screen triangle — three vertices, no vertex buffer, shader
+        // derives positions from gl_VertexIndex.
+        commandBuffer->Draw(3, 1, 0, 0);
+        commandBuffer->EndRenderPass();
+    }
 }
 
 void ForwardPass::Cleanup() {
@@ -252,6 +300,42 @@ void ForwardPass::Cleanup() {
     if (m_ParticleFragShader) {
         m_RHI->DestroyShader(m_ParticleFragShader);
         m_ParticleFragShader = nullptr;
+    }
+
+    // WBOIT resources. Destroy in reverse creation order: pipelines first
+    // (they hold references into render passes), then render passes, then
+    // the composite pipeline layout, then shaders.
+    if (m_OITAccumPipeline) {
+        m_RHI->DestroyPipeline(m_OITAccumPipeline);
+        m_OITAccumPipeline = nullptr;
+    }
+    if (m_OITCompositePipeline) {
+        m_RHI->DestroyPipeline(m_OITCompositePipeline);
+        m_OITCompositePipeline = nullptr;
+    }
+    if (m_OITAccumRenderPass) {
+        m_RHI->DestroyRenderPass(m_OITAccumRenderPass);
+        m_OITAccumRenderPass = nullptr;
+    }
+    if (m_OITCompositeRenderPass) {
+        m_RHI->DestroyRenderPass(m_OITCompositeRenderPass);
+        m_OITCompositeRenderPass = nullptr;
+    }
+    if (m_OITCompositePipelineLayout) {
+        m_RHI->DestroyPipelineLayout(m_OITCompositePipelineLayout);
+        m_OITCompositePipelineLayout = nullptr;
+    }
+    if (m_OITAccumFragShader) {
+        m_RHI->DestroyShader(m_OITAccumFragShader);
+        m_OITAccumFragShader = nullptr;
+    }
+    if (m_OITCompositeVertShader) {
+        m_RHI->DestroyShader(m_OITCompositeVertShader);
+        m_OITCompositeVertShader = nullptr;
+    }
+    if (m_OITCompositeFragShader) {
+        m_RHI->DestroyShader(m_OITCompositeFragShader);
+        m_OITCompositeFragShader = nullptr;
     }
 
     // Destroy render pass
@@ -420,6 +504,255 @@ bool ForwardPass::CreatePipelines() {
     m_TransparentSimplePipeline = m_RHI->CreateGraphicsPipeline(pipelineDesc);
     if (!m_TransparentSimplePipeline) {
         std::cerr << "[ForwardPass] CreateGraphicsPipeline failed for TransparentSimple\n";
+        return false;
+    }
+
+    // =====================================================================
+    // WBOIT path — accum render pass, accum pipeline, composite render pass,
+    // composite pipeline. Built at Setup() even if the caller never selects
+    // WeightedBlendedOIT, so a runtime toggle is instantaneous.
+    // =====================================================================
+    //
+    // Why two render passes instead of one subpass? The accum step writes
+    // two colour attachments (RGBA16F + R8) with DIFFERENT blend factors per
+    // attachment; WBOIT composite then reads those attachments as samplers
+    // and writes a third target (the HDR buffer). Vulkan allows per-target
+    // blending within a single subpass, but a separate composite subpass
+    // would need input-attachments — which the current RHI abstraction does
+    // not expose. Two render passes + an explicit sampler-read is the
+    // simpler, more portable choice.
+
+    // ---- Load WBOIT shaders -------------------------------------------------
+    const char* kOITAccumPath       = "shaders/compiled/transparent_oit_accum.frag.spv";
+    const char* kOITCompositeVert   = "shaders/compiled/oit_composite.vert.spv";
+    const char* kOITCompositeFrag   = "shaders/compiled/oit_composite.frag.spv";
+
+    std::vector<uint8_t> oitAccumCode     = LoadSpirvBinary(kOITAccumPath);
+    std::vector<uint8_t> oitCompVertCode  = LoadSpirvBinary(kOITCompositeVert);
+    std::vector<uint8_t> oitCompFragCode  = LoadSpirvBinary(kOITCompositeFrag);
+
+    if (oitAccumCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kOITAccumPath << "\n";
+        return false;
+    }
+    if (oitCompVertCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kOITCompositeVert << "\n";
+        return false;
+    }
+    if (oitCompFragCode.empty()) {
+        std::cerr << "[ForwardPass] Failed to load " << kOITCompositeFrag << "\n";
+        return false;
+    }
+
+    RHI::ShaderDesc oitAccumDesc{};
+    oitAccumDesc.stage = RHI::ShaderStage::Fragment;
+    oitAccumDesc.entryPoint = "main";
+    oitAccumDesc.debugName = "transparent_oit_accum.frag";
+    oitAccumDesc.code = oitAccumCode.data();
+    oitAccumDesc.codeSize = oitAccumCode.size();
+    m_OITAccumFragShader = m_RHI->CreateShader(oitAccumDesc);
+    if (!m_OITAccumFragShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for transparent_oit_accum.frag\n";
+        return false;
+    }
+
+    RHI::ShaderDesc oitCompVertDesc{};
+    oitCompVertDesc.stage = RHI::ShaderStage::Vertex;
+    oitCompVertDesc.entryPoint = "main";
+    oitCompVertDesc.debugName = "oit_composite.vert";
+    oitCompVertDesc.code = oitCompVertCode.data();
+    oitCompVertDesc.codeSize = oitCompVertCode.size();
+    m_OITCompositeVertShader = m_RHI->CreateShader(oitCompVertDesc);
+    if (!m_OITCompositeVertShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for oit_composite.vert\n";
+        return false;
+    }
+
+    RHI::ShaderDesc oitCompFragDesc{};
+    oitCompFragDesc.stage = RHI::ShaderStage::Fragment;
+    oitCompFragDesc.entryPoint = "main";
+    oitCompFragDesc.debugName = "oit_composite.frag";
+    oitCompFragDesc.code = oitCompFragCode.data();
+    oitCompFragDesc.codeSize = oitCompFragCode.size();
+    m_OITCompositeFragShader = m_RHI->CreateShader(oitCompFragDesc);
+    if (!m_OITCompositeFragShader) {
+        std::cerr << "[ForwardPass] CreateShader failed for oit_composite.frag\n";
+        return false;
+    }
+
+    // ---- Accum render pass: 2 color attachments + read-only depth ---------
+    // Attachment 0: accum (RGBA16_SFLOAT) — cleared to (0,0,0,0), additive blend.
+    // Attachment 1: reveal (R8_UNORM)      — cleared to 1.0,     multiplicative blend.
+    // Attachment 2: depth (D32_SFLOAT)     — loaded, store-don't-care, read-only.
+    RHI::RenderPassDesc accumRpDesc{};
+    accumRpDesc.debugName = "ForwardPass_OITAccum";
+
+    RHI::AttachmentDesc accumAttachment{};
+    accumAttachment.format = RHI::TextureFormat::RGBA16_SFLOAT;
+    accumAttachment.sampleCount = 1;
+    accumAttachment.loadOp = RHI::LoadOp::Clear;
+    accumAttachment.storeOp = RHI::StoreOp::Store;
+    accumRpDesc.attachments.push_back(accumAttachment);
+
+    RHI::AttachmentDesc revealAttachment{};
+    revealAttachment.format = RHI::TextureFormat::R8_UNORM;
+    revealAttachment.sampleCount = 1;
+    revealAttachment.loadOp = RHI::LoadOp::Clear;
+    revealAttachment.storeOp = RHI::StoreOp::Store;
+    accumRpDesc.attachments.push_back(revealAttachment);
+
+    RHI::AttachmentDesc accumDepth{};
+    accumDepth.format = RHI::TextureFormat::D32_SFLOAT;
+    accumDepth.sampleCount = 1;
+    accumDepth.loadOp = RHI::LoadOp::Load;
+    accumDepth.storeOp = RHI::StoreOp::DontCare;
+    accumDepth.stencilLoadOp = RHI::LoadOp::DontCare;
+    accumDepth.stencilStoreOp = RHI::StoreOp::DontCare;
+    accumRpDesc.attachments.push_back(accumDepth);
+
+    RHI::SubpassDesc accumSubpass{};
+    accumSubpass.bindPoint = RHI::PipelineBindPoint::Graphics;
+    accumSubpass.colorAttachments.push_back({0});
+    accumSubpass.colorAttachments.push_back({1});
+    RHI::AttachmentReference accumDepthRef{2};
+    accumSubpass.depthStencilAttachment = &accumDepthRef;
+    accumRpDesc.subpasses.push_back(accumSubpass);
+
+    m_OITAccumRenderPass = m_RHI->CreateRenderPass(accumRpDesc);
+    if (!m_OITAccumRenderPass) {
+        std::cerr << "[ForwardPass] CreateRenderPass failed for OITAccum\n";
+        return false;
+    }
+
+    // ---- Accum pipeline ----------------------------------------------------
+    // Reuses the same vertex shader, vertex input, rasterisation, and depth
+    // state as the sort path. The distinguishing state is:
+    //   * 2 blend attachments (not 1), each with WBOIT-specific factors.
+    //   * Bound to m_OITAccumRenderPass, not m_RenderPass.
+    RHI::BlendAttachmentState accumBlend{};
+    accumBlend.blendEnable = true;
+    accumBlend.srcColorBlendFactor = RHI::BlendFactor::One;
+    accumBlend.dstColorBlendFactor = RHI::BlendFactor::One;
+    accumBlend.colorBlendOp = RHI::BlendOp::Add;
+    accumBlend.srcAlphaBlendFactor = RHI::BlendFactor::One;
+    accumBlend.dstAlphaBlendFactor = RHI::BlendFactor::One;
+    accumBlend.alphaBlendOp = RHI::BlendOp::Add;
+    accumBlend.colorWriteMask = 0xF;
+
+    // Reveal target: Zero*src, OneMinusSrcColor*dst → dst ← dst * (1 - src).
+    // Writing `alpha` into .r therefore multiplies the running dst.r (which
+    // was cleared to 1.0) by (1 - alpha) for each fragment. Only the red
+    // channel is meaningful; write-mask is 0xF anyway for WAR simplicity —
+    // the shader still outputs zero to .gba.
+    RHI::BlendAttachmentState revealBlend{};
+    revealBlend.blendEnable = true;
+    revealBlend.srcColorBlendFactor = RHI::BlendFactor::Zero;
+    revealBlend.dstColorBlendFactor = RHI::BlendFactor::OneMinusSrcColor;
+    revealBlend.colorBlendOp = RHI::BlendOp::Add;
+    revealBlend.srcAlphaBlendFactor = RHI::BlendFactor::Zero;
+    revealBlend.dstAlphaBlendFactor = RHI::BlendFactor::OneMinusSrcAlpha;
+    revealBlend.alphaBlendOp = RHI::BlendOp::Add;
+    revealBlend.colorWriteMask = 0xF;
+
+    RHI::PipelineDesc accumPipelineDesc{};
+    accumPipelineDesc.shaders = { m_ForwardVertShader, m_OITAccumFragShader };
+    accumPipelineDesc.vertexInput = vertexInput;
+    accumPipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
+    accumPipelineDesc.rasterization = rasterState;
+    accumPipelineDesc.depthStencil = depthState; // test on, write off — same as sort path
+    accumPipelineDesc.blendAttachments = { accumBlend, revealBlend };
+    accumPipelineDesc.renderPass = m_OITAccumRenderPass;
+    accumPipelineDesc.subpass = 0;
+    accumPipelineDesc.debugName = "ForwardPass_OITAccum";
+    m_OITAccumPipeline = m_RHI->CreateGraphicsPipeline(accumPipelineDesc);
+    if (!m_OITAccumPipeline) {
+        std::cerr << "[ForwardPass] CreateGraphicsPipeline failed for OITAccum\n";
+        return false;
+    }
+
+    // ---- Composite render pass: writes HDR, samples accum + reveal -------
+    // Exactly 1 attachment (the HDR target); no depth test because we're
+    // drawing a full-screen triangle that should always win.
+    RHI::RenderPassDesc compositeRpDesc{};
+    compositeRpDesc.debugName = "ForwardPass_OITComposite";
+
+    RHI::AttachmentDesc hdrAttachment{};
+    hdrAttachment.format = RHI::TextureFormat::RGBA16_SFLOAT;
+    hdrAttachment.sampleCount = 1;
+    hdrAttachment.loadOp = RHI::LoadOp::Load; // preserve deferred-lit scene
+    hdrAttachment.storeOp = RHI::StoreOp::Store;
+    compositeRpDesc.attachments.push_back(hdrAttachment);
+
+    RHI::SubpassDesc compositeSubpass{};
+    compositeSubpass.bindPoint = RHI::PipelineBindPoint::Graphics;
+    compositeSubpass.colorAttachments.push_back({0});
+    compositeRpDesc.subpasses.push_back(compositeSubpass);
+
+    m_OITCompositeRenderPass = m_RHI->CreateRenderPass(compositeRpDesc);
+    if (!m_OITCompositeRenderPass) {
+        std::cerr << "[ForwardPass] CreateRenderPass failed for OITComposite\n";
+        return false;
+    }
+
+    // Descriptor set layout for the composite: set=0 with 2 combined image
+    // samplers (accum + reveal). Lives on its own layout because its shape
+    // is simpler than the sort-path pipeline layout — the composite shader
+    // does not touch the per-frame / per-material descriptor sets.
+    RHI::DescriptorSetLayoutDesc compositeSet0Desc{};
+    compositeSet0Desc.debugName = "ForwardPass_OITComposite_Set0";
+    for (uint32_t i = 0; i < 2; ++i) {
+        RHI::DescriptorBinding binding{};
+        binding.binding = i;
+        binding.descriptorType = RHI::DescriptorType::CombinedImageSampler;
+        binding.descriptorCount = 1;
+        binding.stageFlags = RHI::ShaderStage::Fragment;
+        compositeSet0Desc.bindings.push_back(binding);
+    }
+    RHI::IRHIDescriptorSetLayout* compositeSet0Layout =
+        m_RHI->CreateDescriptorSetLayout(compositeSet0Desc);
+    RHI::IRHIDescriptorSetLayout* compositeSetLayouts[1] = { compositeSet0Layout };
+    m_OITCompositePipelineLayout = m_RHI->CreatePipelineLayout(compositeSetLayouts, 1);
+    m_RHI->DestroyDescriptorSetLayout(compositeSet0Layout);
+
+    // Composite blend: standard over operator against HDR. The shader emits
+    // (avg, 1 - reveal) so this is literally "transparent layer over the
+    // opaque HDR surface."
+    RHI::BlendAttachmentState compositeBlend{};
+    compositeBlend.blendEnable = true;
+    compositeBlend.srcColorBlendFactor = RHI::BlendFactor::SrcAlpha;
+    compositeBlend.dstColorBlendFactor = RHI::BlendFactor::OneMinusSrcAlpha;
+    compositeBlend.colorBlendOp = RHI::BlendOp::Add;
+    compositeBlend.srcAlphaBlendFactor = RHI::BlendFactor::One;
+    compositeBlend.dstAlphaBlendFactor = RHI::BlendFactor::OneMinusSrcAlpha;
+    compositeBlend.alphaBlendOp = RHI::BlendOp::Add;
+    compositeBlend.colorWriteMask = 0xF;
+
+    // Full-screen triangle has no vertex attributes — gl_VertexIndex drives
+    // the positions. Empty vertexInput is intentional.
+    RHI::VertexInputState compositeVertexInput{};
+
+    RHI::RasterizationState compositeRaster{};
+    compositeRaster.cullMode = RHI::CullMode::None;
+    compositeRaster.frontFace = RHI::FrontFace::CounterClockwise;
+    compositeRaster.lineWidth = 1.0f;
+
+    RHI::DepthStencilState compositeDepth{};
+    compositeDepth.depthTestEnable = false;
+    compositeDepth.depthWriteEnable = false;
+
+    RHI::PipelineDesc compositePipelineDesc{};
+    compositePipelineDesc.shaders = { m_OITCompositeVertShader, m_OITCompositeFragShader };
+    compositePipelineDesc.vertexInput = compositeVertexInput;
+    compositePipelineDesc.primitiveType = RHI::PrimitiveType::Triangles;
+    compositePipelineDesc.rasterization = compositeRaster;
+    compositePipelineDesc.depthStencil = compositeDepth;
+    compositePipelineDesc.blendAttachments = { compositeBlend };
+    compositePipelineDesc.renderPass = m_OITCompositeRenderPass;
+    compositePipelineDesc.subpass = 0;
+    compositePipelineDesc.debugName = "ForwardPass_OITComposite";
+    m_OITCompositePipeline = m_RHI->CreateGraphicsPipeline(compositePipelineDesc);
+    if (!m_OITCompositePipeline) {
+        std::cerr << "[ForwardPass] CreateGraphicsPipeline failed for OITComposite\n";
         return false;
     }
 

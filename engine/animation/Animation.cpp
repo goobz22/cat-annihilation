@@ -91,11 +91,60 @@ void Animation::sample(float time, std::vector<Transform>& outTransforms) const 
     // Normalize time
     float normalizedTime = normalizeTime(time, true);
 
-    // Sample each channel and build the pose
+    // Per-component merge into outTransforms.
+    //
+    // glTF stores each animated path (translation / rotation / scale) as a
+    // SEPARATE animation channel — three channels per animated bone, each
+    // targeting the same target node but only carrying one path's keyframes.
+    // ModelLoader::ExtractAnimations preserves that 1-path-per-channel
+    // shape (each AnimationChannel has only one of positionKeyframes /
+    // rotationKeyframes / scaleKeyframes populated; the other two stay
+    // empty), and CatEntity::configureAnimations forwards them to the
+    // engine animator with that same shape.
+    //
+    // The pre-fix code was:
+    //
+    //     outTransforms[channel.boneIndex] = sampleChannel(channel, ...);
+    //
+    // which assigned a brand-new Transform per channel with default
+    // values for any unset path: zero translation, identity rotation,
+    // unit scale. So when three channels for the same bone fired one
+    // after another, each clobbered the previous one's contribution:
+    //
+    //     channel A (translation): outTransforms[5] = (animPos, identity, 1,1,1)
+    //     channel B (rotation):    outTransforms[5] = (0,0,0, animRot, 1,1,1)   <- pos lost
+    //     channel C (scale):       outTransforms[5] = (0,0,0, identity, animScale)  <- rot lost too
+    //
+    // With most rig exporters writing scale last, every animated bone
+    // ended up at world-origin in its own local space, identity-rotated.
+    // This collapsed the entire skeleton onto bone 0 every frame — the
+    // visible result was a static T-pose-or-collapsed look on every cat
+    // and dog GLB the Meshy auto-rigger ships, with the per-frame CPU
+    // skinning loop dutifully transforming verts by a near-degenerate
+    // bone palette. The "cat T-poses" complaint at the top of the
+    // 2026-04-25 SHIP-THE-CAT directive traces directly to this bug.
+    //
+    // The fix: merge per-component into the OUTPUT transforms in-place,
+    // touching only the components for which the channel has keyframes.
+    // The caller seeds outTransforms with bindPose before invoking us
+    // (see Animator::sampleCurrentAnimation + Animator::updateTransition),
+    // so any component a channel doesn't animate stays at its bind value
+    // — i.e. a clip authored as rotation-only correctly preserves the
+    // bone's bind-pose translation / scale while applying the rotation.
     for (const auto& channel : m_channels) {
-        if (channel.boneIndex >= 0 &&
-            channel.boneIndex < static_cast<int>(outTransforms.size())) {
-            outTransforms[channel.boneIndex] = sampleChannel(channel, normalizedTime);
+        if (channel.boneIndex < 0 ||
+            channel.boneIndex >= static_cast<int>(outTransforms.size())) {
+            continue;
+        }
+        Transform& target = outTransforms[channel.boneIndex];
+        if (!channel.positionKeyframes.empty()) {
+            target.position = interpolatePosition(channel.positionKeyframes, normalizedTime);
+        }
+        if (!channel.rotationKeyframes.empty()) {
+            target.rotation = interpolateRotation(channel.rotationKeyframes, normalizedTime);
+        }
+        if (!channel.scaleKeyframes.empty()) {
+            target.scale = interpolateScale(channel.scaleKeyframes, normalizedTime);
         }
     }
 }

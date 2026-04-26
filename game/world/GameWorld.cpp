@@ -10,6 +10,17 @@ namespace CatGame {
 // Construction / Destruction
 // ============================================================================
 
+// The no-arg-config overload delegates to the full overload with a
+// default-constructed `Config{}`. See GameWorld.hpp for why the
+// default argument can't live in the header under clang 21.
+GameWorld::GameWorld(
+    CatEngine::CUDA::CudaContext& cudaContext,
+    CatEngine::Physics::PhysicsWorld& physicsWorld
+)
+    : GameWorld(cudaContext, physicsWorld, Config{})
+{
+}
+
 GameWorld::GameWorld(
     CatEngine::CUDA::CudaContext& cudaContext,
     CatEngine::Physics::PhysicsWorld& physicsWorld,

@@ -91,9 +91,53 @@ public:
     // Feature queries
     bool IsBufferDeviceAddressSupported() const { return m_bufferDeviceAddressSupported; }
 
+    // CUDA-interop extension support.
+    //
+    // Reports whether every Vulkan device extension required by
+    // `engine/rhi/vulkan/VulkanCudaInterop` (external-memory + external-
+    // semaphore + the platform Win32/FD glue) was both present on the
+    // physical device AND successfully enabled at logical-device creation.
+    // Downstream code (e.g. ScenePass when allocating a ribbon-trail vertex
+    // buffer, ParticleSystem when importing it as a CUDA device pointer)
+    // gates on this flag so the engine still runs cleanly on GPUs / drivers
+    // that don't advertise the extensions: in that case the renderer falls
+    // back to the legacy CPU-fill path and CUDA never touches the buffer.
+    //
+    // WHY a runtime probe instead of a build-time switch: the CMake build
+    // already links CUDA and the interop helper unconditionally (CUDA itself
+    // is a hard requirement of the engine — the simulation, particles, and
+    // physics pipelines all depend on it). What's optional is the *Vulkan*
+    // side of the bridge — `VK_KHR_external_memory_win32` is widely supported
+    // on NVIDIA + AMD on Windows but not guaranteed on every driver / IHV
+    // (e.g. some Intel iGPU drivers ship without the win32 variant). A
+    // runtime probe matches the engine's existing pattern for `samplerAnisotropy`
+    // and `geometryShader` — query the device, populate a bool, let callers
+    // decide whether to take the fast path or the fallback.
+    bool IsCudaInteropSupported() const { return m_cudaInteropSupported; }
+
     VkQueue GetGraphicsQueue() const { return m_graphicsQueue; }
     VkQueue GetComputeQueue() const { return m_computeQueue; }
     VkQueue GetTransferQueue() const { return m_transferQueue; }
+
+    // The device owns exactly one short-lived-command VkCommandPool, created
+    // on init and reused for every one-shot operation the device already
+    // exposes (TransitionImageLayout, CopyBuffer, CopyBufferToImage). Tools
+    // that need to dispatch their own one-shot work — notably the
+    // swapchain readback path in Renderer::CaptureSwapchainToPPM, which has
+    // to allocate a primary command buffer, record a copy-image-to-buffer,
+    // submit to the graphics queue, and wait — need direct access to that
+    // pool. Exposing it read-only (callers can allocate + free, they cannot
+    // mutate the pool itself) is strictly less invasive than publishing
+    // yet another helper wrapper for every new one-shot use case.
+    //
+    // NOTE for future maintainers: do NOT reset this pool while a frame is
+    // in flight; the same pool is used by the renderer's per-frame command
+    // buffer allocation path. All current callers (and any new callers)
+    // must either (a) follow a vkQueueWaitIdle/vkDeviceWaitIdle before
+    // reusing buffers from this pool or (b) allocate with the primary
+    // command buffer pattern already used here and free immediately after
+    // the one-shot submit completes.
+    VkCommandPool GetCommandPool() const { return m_commandPool; }
 
     const QueueFamilyIndices& GetQueueFamilyIndices() const { return m_queueFamilyIndices; }
 
@@ -157,6 +201,16 @@ private:
     bool CheckDeviceExtensionSupport(VkPhysicalDevice device);
 
     /**
+     * Probe whether every CUDA-interop optional extension is advertised
+     * by `device`. Pure introspection — does NOT enable anything; the
+     * extensions only get added to the actual device-create extension
+     * list (and the m_cudaInteropSupported flag flipped) when this
+     * returns true. Kept const-on-state-of-this so we can call it from
+     * SelectPhysicalDevice before any per-device member fields are set.
+     */
+    bool ProbeCudaInteropExtensions(VkPhysicalDevice device) const;
+
+    /**
      * Create logical device
      */
     bool CreateLogicalDevice(bool enableValidation);
@@ -203,6 +257,17 @@ private:
 
     // Buffer device address support
     bool m_bufferDeviceAddressSupported = false;
+
+    // True when every CUDA-interop extension was advertised by the physical
+    // device AND successfully enabled at logical-device creation. Set by
+    // SelectPhysicalDevice's optional-extension probe and confirmed at the
+    // end of CreateLogicalDevice (vkCreateDevice can still return
+    // VK_ERROR_EXTENSION_NOT_PRESENT in pathological driver bug cases even
+    // after the probe says yes — the latter half is what flips the flag
+    // back to false if the actual create fails on the optional list, so
+    // downstream code never reads "supported" while the extension wasn't
+    // actually enabled on the live device).
+    bool m_cudaInteropSupported = false;
 
     // Command pool for one-time commands
     VkCommandPool m_commandPool = VK_NULL_HANDLE;

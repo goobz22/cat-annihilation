@@ -6,6 +6,19 @@
 #include <sstream>
 #include <fstream>
 
+// WHY: Every log call in this file previously passed "QuestSystem" as the
+// first argument, expecting a printf-style (tag, fmt, args...) signature.
+// The underlying logger actually binds the first arg to
+// std::format_string<Args...> (C++20 std::format), so the tag *became* the
+// format string, all printf specifiers (%s, %d, %zu) were ignored, and the
+// intended message was silently discarded — output was literally just the
+// word "QuestSystem". That masked the "quests.json missing, using defaults"
+// WARN that fires every startup because CatAnnihilation.cpp points at the
+// wrong path. Fix: embed the tag as a "[QuestSystem] " prefix in the
+// format string and convert all specifiers to std::format's `{}` syntax.
+// std::format's formatter<std::string> means the old `.c_str()` calls on
+// std::string arguments are no longer needed.
+
 namespace CatGame {
 
 QuestSystem::QuestSystem(int priority)
@@ -20,7 +33,7 @@ void QuestSystem::init(CatEngine::ECS* ecs) {
     loadQuestsFromData();
 
     initialized_ = true;
-    Engine::Logger::info("QuestSystem", "Quest system initialized with %zu quests", quests_.size());
+    Engine::Logger::info("[QuestSystem] Quest system initialized with {} quests", quests_.size());
 }
 
 void QuestSystem::update(float dt) {
@@ -41,16 +54,16 @@ void QuestSystem::update(float dt) {
 void QuestSystem::setPlayerInfo(int level, Clan clan) {
     playerLevel_ = level;
     playerClan_ = clan;
-    Engine::Logger::info("QuestSystem", "Player info updated: Level %d, Clan %s",
-                        level, QuestHelpers::clanToString(clan).c_str());
+    Engine::Logger::info("[QuestSystem] Player info updated: Level {}, Clan {}",
+                        level, QuestHelpers::clanToString(clan));
 }
 
 void QuestSystem::loadQuestsFromFile(const std::string& path) {
-    Engine::Logger::info("QuestSystem", "Loading quests from file: %s", path.c_str());
+    Engine::Logger::info("[QuestSystem] Loading quests from file: {}", path);
 
     std::ifstream file(path);
     if (!file.is_open()) {
-        Engine::Logger::warn("QuestSystem", "Failed to open quest file: %s, using default quests", path.c_str());
+        Engine::Logger::warn("[QuestSystem] Failed to open quest file: {}, using default quests", path);
         loadQuestsFromData();
         return;
     }
@@ -122,9 +135,9 @@ void QuestSystem::loadQuestsFromFile(const std::string& path) {
             }
         }
 
-        Engine::Logger::info("QuestSystem", "Loaded %zu quests from JSON file", quests_.size());
+        Engine::Logger::info("[QuestSystem] Loaded {} quests from JSON file", quests_.size());
     } catch (const nlohmann::json::exception& e) {
-        Engine::Logger::error("QuestSystem", "Failed to parse quest file: %s", e.what());
+        Engine::Logger::error("[QuestSystem] Failed to parse quest file: {}", e.what());
         loadQuestsFromData();
     }
 }
@@ -137,52 +150,52 @@ void QuestSystem::loadQuestsFromData() {
         quests_[quest.id] = std::move(quest);
     }
 
-    Engine::Logger::info("QuestSystem", "Loaded %zu quests from quest data", quests_.size());
+    Engine::Logger::info("[QuestSystem] Loaded {} quests from quest data", quests_.size());
 }
 
 bool QuestSystem::activateQuest(const std::string& questId) {
     // Check if quest exists
     auto* quest = getQuestMutable(questId);
     if (!quest) {
-        Engine::Logger::warning("QuestSystem", "Cannot activate quest '%s': Quest not found", questId.c_str());
+        Engine::Logger::warning("[QuestSystem] Cannot activate quest '{}': Quest not found", questId);
         return false;
     }
 
     // Check if already active
     if (quest->isActive) {
-        Engine::Logger::warning("QuestSystem", "Quest '%s' is already active", questId.c_str());
+        Engine::Logger::warning("[QuestSystem] Quest '{}' is already active", questId);
         return false;
     }
 
     // Check if already completed (and not repeatable)
     if (quest->isCompleted && !quest->canRepeat) {
-        Engine::Logger::warning("QuestSystem", "Quest '%s' is already completed", questId.c_str());
+        Engine::Logger::warning("[QuestSystem] Quest '{}' is already completed", questId);
         return false;
     }
 
     // Check max active quests
     if (static_cast<int>(activeQuestIds_.size()) >= maxActiveQuests_) {
-        Engine::Logger::warning("QuestSystem", "Cannot activate quest: Max active quests reached (%d)", maxActiveQuests_);
+        Engine::Logger::warning("[QuestSystem] Cannot activate quest: Max active quests reached ({})", maxActiveQuests_);
         return false;
     }
 
     // Check prerequisites
     if (!checkPrerequisites(*quest)) {
-        Engine::Logger::warning("QuestSystem", "Cannot activate quest '%s': Prerequisites not met", questId.c_str());
+        Engine::Logger::warning("[QuestSystem] Cannot activate quest '{}': Prerequisites not met", questId);
         return false;
     }
 
     // Check level requirement
     if (playerLevel_ < quest->requiredLevel) {
-        Engine::Logger::warning("QuestSystem", "Cannot activate quest '%s': Requires level %d (player is %d)",
-                              questId.c_str(), quest->requiredLevel, playerLevel_);
+        Engine::Logger::warning("[QuestSystem] Cannot activate quest '{}': Requires level {} (player is {})",
+                              questId, quest->requiredLevel, playerLevel_);
         return false;
     }
 
     // Check clan requirement
     if (quest->requiredClan.has_value() && quest->requiredClan.value() != playerClan_) {
-        Engine::Logger::warning("QuestSystem", "Cannot activate quest '%s': Requires clan %s",
-                              questId.c_str(), QuestHelpers::clanToString(quest->requiredClan.value()).c_str());
+        Engine::Logger::warning("[QuestSystem] Cannot activate quest '{}': Requires clan {}",
+                              questId, QuestHelpers::clanToString(quest->requiredClan.value()));
         return false;
     }
 
@@ -203,7 +216,7 @@ bool QuestSystem::activateQuest(const std::string& questId) {
     activeQuestIds_.push_back(questId);
 
     notifyQuestActivated(*quest);
-    Engine::Logger::info("QuestSystem", "Quest activated: %s", quest->title.c_str());
+    Engine::Logger::info("[QuestSystem] Quest activated: {}", quest->title);
 
     return true;
 }
@@ -227,7 +240,7 @@ bool QuestSystem::abandonQuest(const std::string& questId) {
         obj.completed = false;
     }
 
-    Engine::Logger::info("QuestSystem", "Quest abandoned: %s", quest->title.c_str());
+    Engine::Logger::info("[QuestSystem] Quest abandoned: {}", quest->title);
     return true;
 }
 
@@ -239,7 +252,7 @@ bool QuestSystem::completeQuest(const std::string& questId) {
 
     // Check if all objectives are complete
     if (!quest->areAllObjectivesComplete()) {
-        Engine::Logger::warning("QuestSystem", "Cannot complete quest '%s': Objectives not finished", questId.c_str());
+        Engine::Logger::warning("[QuestSystem] Cannot complete quest '{}': Objectives not finished", questId);
         return false;
     }
 
@@ -265,7 +278,7 @@ bool QuestSystem::completeQuest(const std::string& questId) {
     totalQuestsCompleted_++;
 
     notifyQuestCompleted(*quest);
-    Engine::Logger::info("QuestSystem", "Quest completed: %s", quest->title.c_str());
+    Engine::Logger::info("[QuestSystem] Quest completed: {}", quest->title);
 
     return true;
 }
@@ -287,7 +300,7 @@ bool QuestSystem::failQuest(const std::string& questId) {
     );
 
     notifyQuestFailed(*quest);
-    Engine::Logger::info("QuestSystem", "Quest failed: %s", quest->title.c_str());
+    Engine::Logger::info("[QuestSystem] Quest failed: {}", quest->title);
 
     return true;
 }
@@ -304,7 +317,7 @@ void QuestSystem::resetDailyQuests() {
             }
         }
     }
-    Engine::Logger::info("QuestSystem", "Daily quests reset");
+    Engine::Logger::info("[QuestSystem] Daily quests reset");
 }
 
 void QuestSystem::onEnemyKilled(const std::string& enemyType) {
@@ -512,7 +525,7 @@ void QuestSystem::updateObjective(const std::string& targetId, ObjectiveType typ
                 // Check if objective just completed
                 if (obj.completed && previousCount < obj.requiredCount) {
                     notifyObjectiveCompleted(*quest, obj);
-                    Engine::Logger::info("QuestSystem", "Objective completed: %s", obj.description.c_str());
+                    Engine::Logger::info("[QuestSystem] Objective completed: {}", obj.description);
                 }
             }
         }
@@ -525,15 +538,15 @@ void QuestSystem::grantRewards(const QuestReward& rewards) {
     totalCurrencyEarned_ += rewards.currency;
 
     // Log rewards
-    Engine::Logger::info("QuestSystem", "Granting rewards: %d XP, %d currency, %zu items",
+    Engine::Logger::info("[QuestSystem] Granting rewards: {} XP, {} currency, {} items",
                         rewards.xp, rewards.currency, rewards.items.size());
 
     if (rewards.abilityUnlock.has_value()) {
-        Engine::Logger::info("QuestSystem", "Ability unlocked: %s", rewards.abilityUnlock.value().c_str());
+        Engine::Logger::info("[QuestSystem] Ability unlocked: {}", rewards.abilityUnlock.value());
     }
 
     if (rewards.territoryUnlock.has_value()) {
-        Engine::Logger::info("QuestSystem", "Territory unlocked: %s", rewards.territoryUnlock.value().c_str());
+        Engine::Logger::info("[QuestSystem] Territory unlocked: {}", rewards.territoryUnlock.value());
     }
 
     // Delegate reward granting to the game layer via callback

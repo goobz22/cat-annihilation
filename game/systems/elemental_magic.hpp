@@ -11,6 +11,12 @@
 
 namespace CatGame {
 
+// Forward declaration so the magic system can route spell + DOT damage through
+// CombatSystem::applyDamageWithType. Forward-declared (not full include) to
+// keep elemental_magic.hpp's include surface narrow — only the .cpp needs the
+// full type to call applyDamageWithType().
+class CombatSystem;
+
 /**
  * Element types for the magic system
  */
@@ -121,6 +127,33 @@ public:
         std::shared_ptr<CatEngine::CUDA::ParticleSystem> particleSystem,
         int priority = 15
     );
+
+    /**
+     * Wire CombatSystem so spell hits and DOT ticks route damage through
+     * CombatSystem::applyDamageWithType. This is what makes the per-element
+     * particle dispatcher (kHitProfiles / kDeathProfiles in CatAnnihilation)
+     * fire on spell impacts: applyDamageWithType stamps
+     * HealthComponent.lastDamageType, fires onHitCallback_ (which the game
+     * layer wires to spawnHitParticles with the typed-damage element), and
+     * routes through health->damage() so the death path also picks up the
+     * killing-blow type for the per-element death-burst.
+     *
+     * BEFORE this wire-up, applySpellDamage and the DOT tick called
+     * health->damage() directly — bypassing onHitCallback_ entirely, so spell
+     * hits produced no per-element burst at all (only the death-burst fired,
+     * because the death event chain runs from health->damage() via
+     * HealthSystem::handleDeath regardless of caller). Routing through
+     * CombatSystem fixes both halves: hit AND death visuals now agree on the
+     * element on the killing path.
+     *
+     * Optional: pass nullptr to disable routing (the system falls back to
+     * the legacy direct health->damage() path). This keeps unit tests and
+     * any caller that doesn't have a CombatSystem available compatible with
+     * the prior shape.
+     *
+     * @param combat Non-owning pointer to the live CombatSystem instance.
+     */
+    void setCombatSystem(CombatSystem* combat) { combatSystem_ = combat; }
 
     /**
      * Initialize the system
@@ -334,6 +367,17 @@ private:
 
     // Particle system
     std::shared_ptr<CatEngine::CUDA::ParticleSystem> particleSystem_;
+
+    // Optional CombatSystem reference. When set, applySpellDamage and the
+    // DOT tick in updateElementalEffects route through
+    // CombatSystem::applyDamageWithType instead of calling health->damage()
+    // directly, so onHitCallback_ fires (lighting up the per-element
+    // hit-burst dispatcher) and HealthComponent.lastDamageType is stamped
+    // (lighting up the per-element death-burst dispatcher when the tick
+    // is the killing blow). Non-owning. nullptr is the default and falls
+    // back to the legacy direct-health path so the system still works in
+    // contexts without a CombatSystem (unit tests, headless utilities).
+    CombatSystem* combatSystem_ = nullptr;
 
     // Constants
     static constexpr float PROJECTILE_SPEED = 25.0f;

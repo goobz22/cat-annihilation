@@ -9,6 +9,14 @@ namespace CatGame {
 // Construction / Destruction
 // ============================================================================
 
+// The no-arg overload delegates to the full overload with a
+// default-constructed `Params{}`. See Forest.hpp for why the default
+// argument can't live in the header under clang 21.
+Forest::Forest(const Terrain* terrain)
+    : Forest(terrain, Params{})
+{
+}
+
 Forest::Forest(const Terrain* terrain, const Params& params)
     : m_terrain(terrain)
     , m_params(params)

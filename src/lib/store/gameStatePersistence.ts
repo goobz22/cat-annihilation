@@ -161,9 +161,15 @@ export const loadPlayerProgress = (): Partial<PersistedPlayerProgress> | null =>
 /**
  * Save player progress to localStorage
  */
-export const savePlayerProgress = (catStats: any, weaponSkills: any, currentWave: number, enemiesKilled: number): void => {
+export const savePlayerProgress = (
+  catStats: any,
+  weaponSkills: any,
+  currentWave: number,
+  enemiesKilled: number,
+  survivalTimeSeconds: number = 0
+): void => {
   const existing = loadPlayerProgress() || {};
-  
+
   const progressToSave: PersistedPlayerProgress = {
     catLevel: catStats.level,
     catXp: catStats.xp,
@@ -171,7 +177,7 @@ export const savePlayerProgress = (catStats: any, weaponSkills: any, currentWave
     survivalHighScore: {
       wave: Math.max(existing.survivalHighScore?.wave || 1, currentWave),
       enemiesKilled: Math.max(existing.survivalHighScore?.enemiesKilled || 0, enemiesKilled),
-      survivalTime: existing.survivalHighScore?.survivalTime || 0 // TODO: Track survival time
+      survivalTime: Math.max(existing.survivalHighScore?.survivalTime || 0, survivalTimeSeconds)
     }
   };
 

@@ -216,11 +216,16 @@ __global__ void emitWaterParticles(
         randomRange(&localState, -0.5f, 0.5f)
     );
 
-    particles.positions[particleIdx] = make_float3(
+    const float3 spawnPos = make_float3(
         params.position.x + offset.x,
         params.position.y + offset.y,
         params.position.z + offset.z
     );
+    particles.positions[particleIdx] = spawnPos;
+    // Ribbon-trail seed: zero-length initial segment at birth so the first
+    // frame's trail doesn't snap from the slot's previous corpse to the new
+    // emit site (see ParticleKernels.cu emitParticles for the full rationale).
+    particles.prevPositions[particleIdx] = spawnPos;
 
     // Velocity with wave pattern
     float waveOffset = randomRange(&localState, 0.0f, TWO_PI);
@@ -281,11 +286,14 @@ __global__ void emitAirParticles(
         sinf(angle) * radius
     );
 
-    particles.positions[particleIdx] = make_float3(
+    const float3 spawnPos = make_float3(
         params.position.x + offset.x,
         params.position.y + offset.y,
         params.position.z + offset.z
     );
+    particles.positions[particleIdx] = spawnPos;
+    // Zero-length ribbon seed — see water emit for the rationale.
+    particles.prevPositions[particleIdx] = spawnPos;
 
     // Swirling velocity
     float3 swirlVel = make_float3(
@@ -341,6 +349,8 @@ __global__ void emitEarthParticles(
     float speed = randomRange(&localState, 2.0f, 5.0f);
 
     particles.positions[particleIdx] = params.position;
+    // Zero-length ribbon seed — see water emit for the rationale.
+    particles.prevPositions[particleIdx] = params.position;
 
     // Debris velocity
     float3 debrisVel = make_float3(
@@ -398,11 +408,14 @@ __global__ void emitFireParticles(
         randomRange(&localState, -0.3f, 0.3f)
     );
 
-    particles.positions[particleIdx] = make_float3(
+    const float3 spawnPos = make_float3(
         params.position.x + offset.x,
         params.position.y + offset.y,
         params.position.z + offset.z
     );
+    particles.positions[particleIdx] = spawnPos;
+    // Zero-length ribbon seed — see water emit for the rationale.
+    particles.prevPositions[particleIdx] = spawnPos;
 
     // Upward velocity with turbulence
     float3 fireVel = make_float3(
@@ -451,8 +464,12 @@ __global__ void updateWaterParticles(
 
     if (!particles.alive[idx]) return;
 
-    // Update position with wave motion
+    // Update position with wave motion.
+    // Snapshot the pre-step position for the ribbon-trail tangent BEFORE
+    // applyWaveMotion transforms it. Same invariant the main updateParticles
+    // kernel upholds in ParticleKernels.cu.
     float3 pos = particles.positions[idx];
+    particles.prevPositions[idx] = pos;
     pos = applyWaveMotion(pos, params.time, params.water.waveFrequency,
                          params.water.waveAmplitude);
     particles.positions[idx] = pos;
@@ -472,8 +489,10 @@ __global__ void updateAirParticles(
 
     if (!particles.alive[idx]) return;
 
-    // Apply vortex motion
+    // Apply vortex motion. Snapshot prev before the vortex/turbulence
+    // transform so the ribbon tangent reflects this step's motion.
     float3 pos = particles.positions[idx];
+    particles.prevPositions[idx] = pos;
     pos = applyVortexMotion(pos, params.position, params.air.swirlRadius,
                            params.air.swirlSpeed, params.time);
 

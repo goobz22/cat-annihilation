@@ -3,6 +3,8 @@
 #include "RenderPass.hpp"
 #include "../../math/Vector.hpp"
 #include "../../math/Matrix.hpp"
+#include "../../rhi/ShaderReloadRegistry.hpp"
+#include <array>
 #include <vector>
 #include <memory>
 
@@ -72,6 +74,30 @@ private:
     bool CreatePipelines();
 
     /**
+     * Rebuild ONLY the VkPipeline objects using the currently-bound
+     * VulkanShader modules. Called when a shader hot-reload swapped a
+     * VkShaderModule in place: the IRHIShader* pointer is unchanged but the
+     * VkPipeline created earlier still references the old module, so we
+     * tear down + recreate the pipelines so the next draw picks up the
+     * new shader bytecode. Assumes shaders, descriptor sets, and render
+     * pass are already valid. Does NOT reload SPIR-V from disk — that's
+     * the registry-subscriber apply() callback's job, and it runs before
+     * this method.
+     *
+     * Caller must guarantee no command buffer is actively recording
+     * against the old pipelines; the simplest proof is a WaitIdle()
+     * inside this method, which we do — a hot-reload is an explicit
+     * developer action so a one-frame GPU stall is acceptable.
+     *
+     * @return true on success, false if CreateGraphicsPipeline rejected
+     *         either pipeline (in which case the existing m_OpaquePipeline
+     *         and m_SkinnedPipeline are LEFT NULL so Execute's null-guard
+     *         prevents a crash; the developer sees the failure in the log
+     *         and can fix the shader).
+     */
+    bool RebuildPipelinesForHotReload();
+
+    /**
      * Create descriptor sets
      */
     void CreateDescriptorSets();
@@ -108,6 +134,39 @@ private:
     RHI::IRHIShader* m_GeometryVertShader = nullptr;
     RHI::IRHIShader* m_GeometryFragShader = nullptr;
     RHI::IRHIShader* m_SkinnedVertShader = nullptr;
+
+    // --- Shader hot-reload wiring -----------------------------------------
+    // The driver's renderer-side subscriber contract is described in detail
+    // in engine/rhi/ShaderReloadRegistry.hpp. Per that contract we:
+    //
+    //   - Register each shader by its SOURCE path (shaders/geometry/*.vert
+    //     etc.), NOT the compiled .spv path. The driver watches .vert/.frag/
+    //     .comp sources and fires its callback with the source path so
+    //     subscribers can key on the same string the driver observed.
+    //   - Store the returned SubscriptionHandle so Cleanup() can unregister
+    //     when the pass tears down. Without unregistration a post-Cleanup
+    //     reload would try to apply bytes against destroyed shaders (UB).
+    //   - Set m_PipelinesDirty inside the onReloaded callback so the next
+    //     Execute() rebuilds both the opaque + skinned pipelines against
+    //     the in-place-swapped VkShaderModules. We deliberately do NOT
+    //     rebuild pipelines from inside the callback itself because the
+    //     callback fires on the main thread mid-input-poll, whereas the
+    //     safe rebuild window is inside Execute() where we hold the
+    //     pass's state and know no command buffer is recording against
+    //     the pipeline-to-be-destroyed.
+    //
+    // Fixed-size array rather than std::vector because the pass always
+    // owns exactly three shader handles — compile-time size sidesteps a
+    // heap allocation and makes the "did every Register succeed?" check
+    // in Cleanup a trivial loop.
+    std::array<RHI::ShaderReloadRegistry::SubscriptionHandle, 3>
+        m_ShaderReloadHandles{};
+
+    // Set by the hot-reload onReloaded callback; consumed + cleared at the
+    // top of Execute(). Pipelines are rebuilt lazily (next Execute) rather
+    // than eagerly (inside the callback) so a reload that happens during
+    // input polling doesn't race with an in-flight command buffer.
+    bool m_PipelinesDirty = false;
 
     // Scene reference
     GPUScene* m_Scene = nullptr;

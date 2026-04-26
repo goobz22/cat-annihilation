@@ -45,10 +45,21 @@ public:
     using FocusCallback = std::function<void(bool focused)>;
 
     /**
+     * @brief Construct a new Window object with default configuration.
+     *
+     * Provided as a separate overload (rather than `Window(const Config& = Config{})`)
+     * because clang rejects default-arguments that value-initialize a nested
+     * type whose own default member initializers (Config::title etc.) sit
+     * inside the same enclosing class body — it considers the initializers
+     * "needed within definition of enclosing class 'Window' outside of
+     * member functions". MSVC is permissive about this; portability wins.
+     */
+    Window();
+    /**
      * @brief Construct a new Window object
      * @param config Window configuration
      */
-    explicit Window(const Config& config = Config{});
+    explicit Window(const Config& config);
 
     /**
      * @brief Destroy the Window object

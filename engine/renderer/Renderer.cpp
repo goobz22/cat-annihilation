@@ -212,11 +212,32 @@ bool Renderer::BeginFrame() {
                 1, &barrier
             );
 
-            // Clear the image to dark blue (0.1, 0.1, 0.2, 1.0)
+            // Clear the image to a clear-midday sky-blue (0.50, 0.72, 0.95).
+            //
+            // History: the prior dark blue (0.1, 0.1, 0.2) read as "deep
+            // space" — fine when the terrain blanket-covered the framebuffer
+            // and no clear pixels survived to the screen, but a genuine
+            // visual liability now that the camera-pitch fix in
+            // PlayerControlSystem.hpp lets the upper portion of frame see
+            // past the heightfield's far edge. The 2026-04-25T1928Z playtest
+            // frame-dump confirmed terrain dominated 100% of the centre
+            // column; with a horizon-level pitch + this brighter clear, the
+            // sky portion of every frame now reads as sky instead of
+            // looking like an unrendered region of the swapchain.
+            //
+            // RGB rationale: (0.50, 0.72, 0.95) approximates a clear-summer
+            // midday sky at zenith — a touch desaturated to keep the cat's
+            // ember-orange and the dogs' tints (warm tan / silver / dark red /
+            // dark brown) from having to fight a saturated cyan in HSV
+            // space. The 0.95 blue keeps it firmly in "sky" rather than
+            // "ice" territory, the 0.72 green prevents it from reading
+            // as flat aviation-blue, and the 0.50 red gives the tiniest
+            // warmth that suggests sunlight without tipping into yellow.
+            // No alpha-blending here (the pass writes RGBA8 with α=1).
             VkClearColorValue clearColor = {};
-            clearColor.float32[0] = 0.1f;
-            clearColor.float32[1] = 0.1f;
-            clearColor.float32[2] = 0.2f;
+            clearColor.float32[0] = 0.50f;
+            clearColor.float32[1] = 0.72f;
+            clearColor.float32[2] = 0.95f;
             clearColor.float32[3] = 1.0f;
 
             VkImageSubresourceRange clearRange = {};

@@ -9,6 +9,7 @@
 #include "../../cuda/particles/ParticleSystem.hpp"
 #include "../../../game/world/Terrain.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -53,7 +54,33 @@ bool ScenePass::Setup(RHI::VulkanDevice* device, RHI::VulkanSwapchain* swapchain
     if (!CreateDepthResources(m_width, m_height)) return false;
     if (!CreateFramebuffers()) return false;
     if (!CreatePipeline()) return false;
+    // CreateTextureResources MUST run before CreateEntityPipelineAndMesh —
+    // the entity pipeline layout pulls in m_textureDescriptorSetLayout
+    // (created here) so the layout handle has to be valid at pipeline
+    // construction time. CreateTextureResources also builds the 1×1 white
+    // default texture + its descriptor set, which the entity loop binds
+    // for cube proxies and any model lacking baseColorImageCpu.
+    if (!CreateTextureResources()) return false;
     if (!CreateEntityPipelineAndMesh()) return false;
+    // Sky pipeline is created EAGERLY (same as other pipelines) but its
+    // failure is non-fatal: the renderer falls back to the flat sky-blue
+    // clear that's already in the framebuffer when we begin the render
+    // pass with LOAD_OP_LOAD. That keeps the engine usable on a partial
+    // shader directory (e.g. a stripped CI build) while still surfacing
+    // the failure to stderr so a reviewer notices the gradient regression.
+    if (!CreateSkyPipeline()) {
+        std::cerr << "[ScenePass] Sky pipeline setup failed — "
+                  << "falling back to flat sky-blue clear; "
+                  << "scene/entity rendering unaffected\n";
+    }
+    // 2026-04-25 SHIP-THE-CAT iter (time-of-day cycling): stamp the cycle
+    // origin AFTER all init work so phase=0 lines up with "first rendered
+    // frame" rather than "process started" — that means screenshots taken
+    // a fixed number of seconds into autoplay land on the same point of
+    // the cycle regardless of how long Vulkan/CUDA init took on a given
+    // host. steady_clock survives wall-clock adjustments (NTP, DST,
+    // manual clock changes) so the cycle never jumps backward.
+    m_dayCycleStart = std::chrono::steady_clock::now();
     // Ribbon resources are created eagerly (same frame as the rest of the
     // pass) so toggling m_ribbonsEnabled at runtime via SetRibbonsEnabled()
     // is a zero-cost flag flip — no pipeline compile, no buffer allocation.
@@ -82,6 +109,7 @@ void ScenePass::Shutdown() {
     m_vertexCount = 0;
 
     DestroyRibbonPipelineAndBuffers();
+    DestroySkyPipeline();
     DestroyEntityPipelineAndMesh();
     // Per-Model GPU mesh cache (path (b)). Releasing the unique_ptr<VulkanBuffer>
     // values destroys their underlying VkBuffer/VkDeviceMemory through the
@@ -93,6 +121,18 @@ void ScenePass::Shutdown() {
     // as the per-Model cache above — the device wait at the top of Shutdown
     // drained every frame that could have been reading these buffers.
     m_skinnedMeshCache.clear();
+    // Per-Model baseColor texture cache. Frees every cached VkImage /
+    // VkImageView / VkDeviceMemory + the descriptor pool (which one-shot
+    // frees every per-Model descriptor set) + the shared sampler + the
+    // descriptor set layout + the default-white texture. Must run AFTER
+    // DestroyEntityPipelineAndMesh — the entity pipeline layout still
+    // references m_textureDescriptorSetLayout at the moment the pipeline
+    // is destroyed, and tearing the layout down first would leave a
+    // dangling reference until vkDestroyPipelineLayout fires. Doing it in
+    // this order is safe because the device-wait-idle at the top of
+    // Shutdown drained any frame that could have been sampling these
+    // textures.
+    DestroyTextureResources();
     DestroyPipeline();
     DestroyFramebuffers();
     DestroyDepthResources();
@@ -114,7 +154,8 @@ void ScenePass::Shutdown() {
     m_swapchain = nullptr;
 }
 
-void ScenePass::OnResize(uint32_t width, uint32_t height) {
+void ScenePass::OnResize(uint32_t width, uint32_t height,
+                         RHI::VulkanSwapchain* newSwapchain) {
     if (m_device == nullptr || width == 0 || height == 0) return;
 
     // SWAPCHAIN-RECREATE NOTE: this used to early-out when (width, height)
@@ -134,6 +175,25 @@ void ScenePass::OnResize(uint32_t width, uint32_t height) {
     // unconditionally keeps the function symmetric and trivially correct
     // — the per-frame cost is zero (the function is only called on
     // resize / swapchain-recreate, not in the steady-state hot path).
+    //
+    // SWAPCHAIN-POINTER REBIND: m_swapchain was set by Setup() and points to
+    // the VulkanSwapchain Renderer owned at startup. Renderer::RecreateSwapchain
+    // calls `device->DestroySwapchain(swapchain)` (a real `delete`) before
+    // allocating a new one, so the pre-rebind m_swapchain is dangling here.
+    // Update it FIRST, before any code path (CreateFramebuffers) reads
+    // m_swapchain->GetImageCount() / GetVkImageView(i) — both of which
+    // dereference freed memory if the rebind is skipped. The bug surfaced as
+    // CreateFramebuffers reading stale image-view handles, framebuffer
+    // creation succeeding silently with non-existent attachments, and every
+    // subsequent ScenePass::Execute call hitting the
+    // `swapchainImageIndex >= m_framebuffers.size()` early-return because the
+    // attachments-bound framebuffers were never visible to the new swapchain.
+    // The visible symptom: post-recreate frames showed only the BeginFrame
+    // clear color (89,89,124 sRGB) with HUD on top — no terrain, no entities.
+    if (newSwapchain != nullptr) {
+        m_swapchain = newSwapchain;
+    }
+
     vkDeviceWaitIdle(m_device->GetDevice());
     DestroyFramebuffers();
     DestroyDepthResources();
@@ -362,24 +422,55 @@ VkShaderModule ScenePass::LoadShaderModule(const char* spirvPath) {
 }
 
 bool ScenePass::CreatePipeline() {
-    m_vertShader = LoadShaderModule("shaders/scene/scene.vert.spv");
-    m_fragShader = LoadShaderModule("shaders/scene/scene.frag.spv");
+    // WHY shaders/compiled/ (not shaders/scene/) — 2026-04-25: CMake's GLSL→SPV
+    // rule writes outputs flat to ${CMAKE_SOURCE_DIR}/shaders/compiled/<name>.spv
+    // (CMakeLists.txt:674 SHADER_OUTPUT_DIR). Loading from shaders/scene/*.spv
+    // means edits to scene.vert/.frag silently no-op at runtime (the load path
+    // never sees the new SPV) — exactly the 9-day-stale-SPV regression the
+    // prior iteration flagged in ENGINE_PROGRESS. ribbon_trail.{vert,frag}
+    // already loads from shaders/compiled/ (line 1535 below) so this aligns
+    // the entity + scene paths with the working precedent and removes the
+    // need for the manual cp the prior iteration documented.
+    m_vertShader = LoadShaderModule("shaders/compiled/scene.vert.spv");
+    m_fragShader = LoadShaderModule("shaders/compiled/scene.frag.spv");
     if (m_vertShader == VK_NULL_HANDLE || m_fragShader == VK_NULL_HANDLE) {
         return false;
     }
 
     VkDevice dev = m_device->GetDevice();
 
-    // Pipeline layout: one push constant block (mat4 viewProj = 64 bytes, vertex stage).
-    VkPushConstantRange pcRange = {};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pcRange.offset = 0;
-    pcRange.size = sizeof(float) * 16;
+    // Pipeline layout — TWO push constant ranges (2026-04-25 fog iter):
+    //   range[0] vertex   offset 0..63   mat4 viewProj
+    //   range[1] fragment offset 64..79  vec3 cameraPos + 4-byte pad
+    //
+    // Why two non-overlapping ranges instead of one VERTEX|FRAGMENT
+    // range covering the whole 80 bytes:
+    //   * Smaller per-stage memory footprint (the vertex stage doesn't
+    //     reserve 16 bytes it never reads; vice versa for the
+    //     fragment stage).
+    //   * Each stage's GLSL push_constant block can refer to JUST its
+    //     slice via `layout(offset=N)` annotations, which keeps the
+    //     scene.vert push_constant declaration unchanged from the
+    //     pre-fog baseline (one fewer file to touch).
+    //   * Validation layers correctly diagnose "stage X read PC byte
+    //     Y outside its declared range" with separate ranges; a
+    //     combined range hides that class of bug.
+    //
+    // The cameraPos slot is 16 bytes wide (vec4 worth of memory) but
+    // the shader only reads the .xyz — std430 vec3 alignment rounds
+    // the slot up to 16, and the C++ side pushes 16 to match.
+    VkPushConstantRange pcRanges[2] = {};
+    pcRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRanges[0].offset = 0;
+    pcRanges[0].size = sizeof(float) * 16;          // mat4 viewProj
+    pcRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcRanges[1].offset = sizeof(float) * 16;        // 64
+    pcRanges[1].size = sizeof(float) * 4;           // vec3 + pad
 
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pcRange;
+    layoutInfo.pushConstantRangeCount = 2;
+    layoutInfo.pPushConstantRanges = pcRanges;
 
     if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
         std::cerr << "[ScenePass] vkCreatePipelineLayout failed\n";
@@ -517,6 +608,175 @@ void ScenePass::DestroyPipeline() {
     }
 }
 
+bool ScenePass::CreateSkyPipeline() {
+    // 2026-04-25 SHIP-THE-CAT iter: build a fullscreen-triangle pipeline
+    // that paints a zenith→horizon gradient + warm sun halo over every
+    // pixel of the colour attachment as the FIRST draw inside the render
+    // pass. Replaces the flat clear-blue upper half of the frame the
+    // prior two iterations (terrain fog, entity fog) couldn't touch.
+    //
+    // The shaders ship NO vertex input bindings — gl_VertexIndex drives
+    // a three-vertex oversized triangle that covers the whole framebuffer
+    // after clipping. That keeps the pipeline self-contained: no buffer
+    // allocations, no descriptor sets, no push constants this iteration.
+    m_skyVertShader = LoadShaderModule("shaders/compiled/sky_gradient.vert.spv");
+    m_skyFragShader = LoadShaderModule("shaders/compiled/sky_gradient.frag.spv");
+    if (m_skyVertShader == VK_NULL_HANDLE || m_skyFragShader == VK_NULL_HANDLE) {
+        std::cerr << "[ScenePass] CreateSkyPipeline: missing sky_gradient SPIR-V "
+                  << "(check CMake glslc compile rule + shaders/compiled/ output)\n";
+        return false;
+    }
+
+    VkDevice dev = m_device->GetDevice();
+
+    // Pipeline layout — single fragment-stage push range, 32 bytes at
+    // offset 0 carrying two vec4 sky stops (zenith + horizon).
+    //
+    // 2026-04-25 SHIP-THE-CAT iter (time-of-day cycling): the previous
+    // iteration's empty layout left the colour stops baked as `const
+    // vec3` in sky_gradient.frag — that worked for the initial gradient
+    // landing but ruled out per-frame animation without recompiling
+    // shaders. The 32-byte block (vec4 zenith, vec4 horizon) lets
+    // ScenePass::Execute lerp through dawn/midday/dusk presets each
+    // frame and push the result without touching SPIR-V.
+    //
+    // 32-byte size is well under the 128-byte Vulkan minimum guarantee,
+    // leaving room for a follow-up that adds time phase + sun direction
+    // (another vec4) for procedural cloud noise without growing the
+    // layout. .a slot of each colour vec4 is currently unused; reserved
+    // for sun-disc parameters or per-stop intensity multipliers later.
+    VkPushConstantRange skyPushRange = {};
+    skyPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    skyPushRange.offset = 0;
+    skyPushRange.size = 32;  // 2 × vec4
+
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &skyPushRange;
+    layoutInfo.setLayoutCount = 0;
+
+    if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_skyPipelineLayout) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] CreateSkyPipeline: vkCreatePipelineLayout failed\n";
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = m_skyVertShader;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = m_skyFragShader;
+    stages[1].pName = "main";
+
+    // Zero vertex bindings — the shader fabricates the triangle from
+    // gl_VertexIndex. vkCmdDraw(cmd, 3, 1, 0, 0) at draw time.
+    VkPipelineVertexInputStateCreateInfo vi = {};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 0;
+    vi.vertexAttributeDescriptionCount = 0;
+
+    VkPipelineInputAssemblyStateCreateInfo ia = {};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp = {};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs = {};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    // Cull NONE — the oversized triangle's winding is whatever it is, and
+    // we don't want to depend on which corner the GPU happens to call
+    // "first". Fullscreen triangles never benefit from culling anyway.
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms = {};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth: TEST DISABLED + WRITE DISABLED. The sky paints over whatever
+    // was in the framebuffer (the LOAD_OP_LOAD post-clear blue) without
+    // touching the depth buffer. Subsequent terrain/entity draws then
+    // depth-test against the cleared depth (1.0 everywhere) and
+    // correctly draw on top of the sky. compareOp doesn't matter when
+    // testing is disabled, but we set ALWAYS for clarity in case a
+    // future change re-enables the test without remembering to fix the
+    // op.
+    VkPipelineDepthStencilStateCreateInfo ds = {};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    ds.minDepthBounds = 0.0f;
+    ds.maxDepthBounds = 1.0f;
+
+    VkPipelineColorBlendAttachmentState cba = {};
+    cba.blendEnable = VK_FALSE;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo cb = {};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dyn = {};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates = dynStates;
+
+    VkGraphicsPipelineCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vi;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &rs;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &cb;
+    info.pDynamicState = &dyn;
+    info.layout = m_skyPipelineLayout;
+    info.renderPass = m_renderPass;
+    info.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &m_skyPipeline) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] CreateSkyPipeline: vkCreateGraphicsPipelines failed\n";
+        return false;
+    }
+    return true;
+}
+
+void ScenePass::DestroySkyPipeline() {
+    if (m_device == nullptr) return;
+    VkDevice dev = m_device->GetDevice();
+    if (m_skyPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(dev, m_skyPipeline, nullptr);
+        m_skyPipeline = VK_NULL_HANDLE;
+    }
+    if (m_skyPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(dev, m_skyPipelineLayout, nullptr);
+        m_skyPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_skyVertShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(dev, m_skyVertShader, nullptr);
+        m_skyVertShader = VK_NULL_HANDLE;
+    }
+    if (m_skyFragShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(dev, m_skyFragShader, nullptr);
+        m_skyFragShader = VK_NULL_HANDLE;
+    }
+}
+
 void ScenePass::SetTerrain(const CatGame::Terrain& terrain) {
     const auto& verts = terrain.getVertices();
     const auto& idxs = terrain.getIndices();
@@ -556,7 +816,36 @@ void ScenePass::SetTerrain(const CatGame::Terrain& terrain) {
 void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
                         const Engine::mat4& viewProj,
                         const std::vector<EntityDraw>& entities) {
-    if (swapchainImageIndex >= m_framebuffers.size()) return;
+    // ---- UNCONDITIONAL ENTRY-COUNT DIAGNOSTIC (root-cause hunt 2026-04-25) ----
+    // Why this is at the VERY TOP, before any guard:
+    //
+    // The prior iteration's diagnostic was placed AFTER
+    // `if (swapchainImageIndex >= m_framebuffers.size()) return;`, which made
+    // it impossible to distinguish "Execute is never called" from "Execute is
+    // called but bails at a guard". The CatRender-DIAG print from
+    // CatAnnihilation::render fired at frames 1/30/60/300/600 (proving the
+    // outer renderer loop calls Execute every frame), but ScenePass-DIAG
+    // fired only ONCE -- meaning Execute IS being entered every frame, but
+    // returns early at one of the guards on every frame after frame 1.
+    // The frame-dump captured at process exit therefore showed the
+    // BeginFrame clear color (89,89,124 sRGB) with HUD on top -- ScenePass
+    // contributed ZERO post-frame-1 pixels. Every per-clan tint, tabby UV
+    // shader, baseColor sampling, camera-distance change, and lookAt
+    // recentering from the prior 8+ iterations was edited into a code path
+    // that does not run after frame 1.
+    //
+    // This block records (a) every entry to Execute (entryCount), (b) the
+    // first reason for early-return (gateReason), and (c) a coarse periodic
+    // sample so we can see entry/gate counts evolve across the run. Once
+    // the root cause is fixed, the entryCount and drawCount should stay in
+    // lockstep at ~60/sec.
+    static int entryCount = 0;
+    static int drawCount = 0;          // entries that survived all guards
+    static int lastReportedEntry = -1; // throttle log spam at ~1/sec
+    ++entryCount;
+
+    const uint32_t fbCount = static_cast<uint32_t>(m_framebuffers.size());
+    const bool fbGuardFires = (swapchainImageIndex >= fbCount);
     const bool drawTerrain = (m_indexCount != 0 && m_pipeline != VK_NULL_HANDLE);
     const bool drawEntities = (!entities.empty() && m_entityPipeline != VK_NULL_HANDLE);
     // Ribbons are drawn when the CLI gate is on AND the pipeline + buffers
@@ -565,7 +854,68 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
     const bool drawRibbons = (m_ribbonsEnabled
                               && m_ribbonPipeline != VK_NULL_HANDLE
                               && m_ribbonIndexCount != 0);
-    if (!drawTerrain && !drawEntities && !drawRibbons) return;
+    const bool nothingToDrawGuardFires = (!drawTerrain && !drawEntities && !drawRibbons);
+
+    const char* gateReason = "ok";
+    if (fbGuardFires) {
+        gateReason = "imgIdx>=fbCount";
+    } else if (nothingToDrawGuardFires) {
+        gateReason = "no-terrain-no-entities-no-ribbons";
+    }
+
+    // Throttled report: first 3 frames + every 60th entry, plus an extra
+    // burst at known wave-tick boundaries so we cover the full playtest
+    // without flooding the log.
+    const bool burstReport = (entryCount <= 3
+                              || entryCount == 30
+                              || entryCount == 120
+                              || entryCount == 600
+                              || entryCount == 1200
+                              || entryCount % 300 == 0);
+    if (burstReport && entryCount != lastReportedEntry) {
+        lastReportedEntry = entryCount;
+        const uint32_t swapW = m_swapchain ? m_swapchain->GetWidth() : 0;
+        const uint32_t swapH = m_swapchain ? m_swapchain->GetHeight() : 0;
+        std::cerr << "[ScenePass-DIAG] entry=" << entryCount
+                  << " draw=" << drawCount
+                  << " gate=" << gateReason
+                  << " imgIdx=" << swapchainImageIndex
+                  << " fbCount=" << fbCount
+                  << " m_width=" << m_width << " m_height=" << m_height
+                  << " swap=" << swapW << "x" << swapH
+                  << " drawTerrain=" << drawTerrain
+                  << " drawEntities=" << drawEntities
+                  << " drawRibbons=" << drawRibbons
+                  << " entityPipe=" << (m_entityPipeline != VK_NULL_HANDLE ? 1 : 0)
+                  << " terrainPipe=" << (m_pipeline != VK_NULL_HANDLE ? 1 : 0)
+                  << " entitiesArg=" << entities.size()
+                  << "\n";
+    }
+
+    if (fbGuardFires) return;
+    if (nothingToDrawGuardFires) return;
+    ++drawCount;
+
+    // Sample one entity's clip-space position on a slow cadence so we can
+    // see whether entities are even projected into the unit-cube clip
+    // volume. Outside the unit cube -> clipped/culled and never raster.
+    if (drawCount == 1 || (drawCount % 300 == 0 && !entities.empty())) {
+        const auto& e0 = entities.front();
+        const Engine::vec3 p = e0.position;
+        const float* m = reinterpret_cast<const float*>(&viewProj);
+        // viewProj is column-major Engine::mat4 (m[col][row]).
+        // Compute viewProj * vec4(p, 1) the OpenGL way: row-times-col.
+        const float clipX = m[0]*p.x + m[4]*p.y + m[8] *p.z + m[12];
+        const float clipY = m[1]*p.x + m[5]*p.y + m[9] *p.z + m[13];
+        const float clipZ = m[2]*p.x + m[6]*p.y + m[10]*p.z + m[14];
+        const float clipW = m[3]*p.x + m[7]*p.y + m[11]*p.z + m[15];
+        std::cerr << "[ScenePass-DIAG-CLIP] draw=" << drawCount
+                  << " e0pos=(" << p.x << "," << p.y << "," << p.z
+                  << ") clip=(" << clipX << "," << clipY << "," << clipZ << "," << clipW
+                  << ") ndc=(" << (clipW != 0 ? clipX/clipW : 0)
+                  << "," << (clipW != 0 ? clipY/clipW : 0)
+                  << "," << (clipW != 0 ? clipZ/clipW : 0) << ")\n";
+    }
 
     VkClearValue clears[2] = {};
     // Color is LOAD_OP_LOAD so this entry is unused but must be present.
@@ -597,12 +947,201 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
     scissor.extent = { m_width, m_height };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // ---- Sky gradient ----------------------------------------------------
+    //
+    // 2026-04-25 SHIP-THE-CAT iter (sky gradient): paint a zenith→horizon
+    // gradient + warm sun halo over every framebuffer pixel BEFORE terrain
+    // and entity draws. The pipeline runs with depth test + write
+    // disabled so it doesn't consume the depth-buffer's 1.0-clear values
+    // that terrain depends on; subsequent draws happily depth-test against
+    // 1.0 everywhere and correctly land in front of the sky.
+    //
+    // The shader fabricates a single oversized fullscreen triangle from
+    // gl_VertexIndex — no vertex/index buffers bound, no descriptor sets,
+    // no push constants this iteration. Three-vertex draw call covers the
+    // whole framebuffer after rasterizer clipping.
+    //
+    // We guard on m_skyPipeline != VK_NULL_HANDLE because Setup() treats
+    // sky-pipeline creation failure as non-fatal (the engine still draws
+    // terrain+entities over the LOAD_OP_LOAD flat clear). If the pipeline
+    // didn't compile (missing SPIR-V, mismatched render-pass format), we
+    // simply skip the sky draw and rely on the existing flat clear-blue
+    // background that previous iterations established. That keeps the
+    // engine usable on a partial shader directory.
+    if (m_skyPipeline != VK_NULL_HANDLE) {
+        // ---- Time-of-day colour stop interpolation ----------------------
+        //
+        // 2026-04-25 SHIP-THE-CAT iter (time-of-day cycling): walk a
+        // wallclock-driven phase in [0, 1) once per `m_dayCycleSeconds`
+        // and lerp between three colour-stop presets. Phase wraps so the
+        // cycle is continuous (no visible jump from dusk back to dawn).
+        //
+        // Colour-stop presets — chosen by eye against the existing
+        // 1904x993 frame-dump output:
+        //
+        //   DAWN    zenith=(0.55, 0.50, 0.62)  horizon=(0.95, 0.62, 0.45)
+        //     A muted warm-violet zenith over a peach-orange horizon —
+        //     the classic "sun about to crest the eastern hills" look.
+        //     Horizon goes warm enough that the warm SUN_HALO mix in
+        //     the fragment shader reads as a continuation of the
+        //     gradient rather than a competing layer.
+        //
+        //   MIDDAY  zenith=(0.32, 0.52, 0.85)  horizon=(0.50, 0.72, 0.95)
+        //     Identical to the previous iteration's `const vec3` values
+        //     so a `--day-night-rate 0` (or anyone running the
+        //     golden-image CI path) sees the exact pre-cycling output
+        //     bit-for-bit. This is the engine-wide "haze" reference
+        //     colour and stays in lockstep with terrain/entity fog at
+        //     this phase point — distant geometry blends seamlessly
+        //     into the sky.
+        //
+        //   DUSK    zenith=(0.40, 0.30, 0.55)  horizon=(0.92, 0.45, 0.30)
+        //     A deeper magenta-tinted zenith over a red-orange horizon —
+        //     the "sun has set, last light lingering" look. Slightly
+        //     darker than dawn to read as evening rather than morning;
+        //     the asymmetry between dawn and dusk is a real perceptual
+        //     cue (dusk skies tend to redder horizons because of more
+        //     suspended particulate by end of day).
+        //
+        // The three stops are walked as a 3-segment loop with the
+        // wrap-back implicit:
+        //   phase ∈ [0.000, 0.333) — DAWN   → MIDDAY
+        //   phase ∈ [0.333, 0.667) — MIDDAY → DUSK
+        //   phase ∈ [0.667, 1.000) — DUSK   → DAWN  (wrap)
+        //
+        // All math is single-precision float on the CPU; the result
+        // copied into a 32-byte push block matches the std430 layout
+        // declared in sky_gradient.frag's SkyPC. The whole compute is
+        // ~30 ns per frame — well under any rendering budget.
+        struct SkyStop { float r, g, b; };
+        constexpr SkyStop kZenithDawn   = { 0.55F, 0.50F, 0.62F };
+        constexpr SkyStop kHorizonDawn  = { 0.95F, 0.62F, 0.45F };
+        constexpr SkyStop kZenithMid    = { 0.32F, 0.52F, 0.85F };
+        constexpr SkyStop kHorizonMid   = { 0.50F, 0.72F, 0.95F };
+        constexpr SkyStop kZenithDusk   = { 0.40F, 0.30F, 0.55F };
+        constexpr SkyStop kHorizonDusk  = { 0.92F, 0.45F, 0.30F };
+
+        float phase = 0.5F;  // Default = midday — used when cycling is
+                             // disabled (m_dayCycleSeconds <= 0) so the
+                             // golden-image CI path produces a
+                             // deterministic frame.
+        if (m_dayCycleSeconds > 0.0F) {
+            const auto now = std::chrono::steady_clock::now();
+            const float elapsedSec =
+                std::chrono::duration<float>(now - m_dayCycleStart).count();
+            // fmod handles arbitrarily long sessions without overflow —
+            // a 30 s cycle running for a day still produces a clean
+            // [0, 1) phase. std::fmod returns negative results for
+            // negative inputs, but elapsedSec is monotonic-positive
+            // here so we don't need the abs().
+            phase = std::fmod(elapsedSec / m_dayCycleSeconds, 1.0F);
+        }
+
+        // Map phase to (segIdx, localT) over three segments.
+        // segIdx in [0, 3); localT in [0, 1).
+        const float scaled = phase * 3.0F;
+        const int segIdx = static_cast<int>(scaled);
+        const float localT = scaled - static_cast<float>(segIdx);
+
+        SkyStop zenithA = kZenithMid, zenithB = kZenithMid;
+        SkyStop horizonA = kHorizonMid, horizonB = kHorizonMid;
+        switch (segIdx) {
+            case 0:
+                zenithA = kZenithDawn;  zenithB = kZenithMid;
+                horizonA = kHorizonDawn; horizonB = kHorizonMid;
+                break;
+            case 1:
+                zenithA = kZenithMid;   zenithB = kZenithDusk;
+                horizonA = kHorizonMid;  horizonB = kHorizonDusk;
+                break;
+            case 2:
+            default:  // Phase pinned at exactly 1.0 from fmod's IEEE
+                      // boundary: treat as start-of-cycle (DAWN) rather
+                      // than reading into uninitialised stops.
+                zenithA = kZenithDusk;  zenithB = kZenithDawn;
+                horizonA = kHorizonDusk; horizonB = kHorizonDawn;
+                break;
+        }
+        const auto lerpComponent = [](float a, float b, float t) {
+            return a + (b - a) * t;
+        };
+
+        // Pack 32-byte push block: vec4 zenith (rgb + 0), vec4 horizon
+        // (rgb + 0). std430 puts each vec4 at a 16-byte boundary with
+        // no padding — see SkyPC docblock in sky_gradient.frag.
+        float skyPushBytes[8] = {
+            lerpComponent(zenithA.r, zenithB.r, localT),
+            lerpComponent(zenithA.g, zenithB.g, localT),
+            lerpComponent(zenithA.b, zenithB.b, localT),
+            0.0F,
+            lerpComponent(horizonA.r, horizonB.r, localT),
+            lerpComponent(horizonA.g, horizonB.g, localT),
+            lerpComponent(horizonA.b, horizonB.b, localT),
+            0.0F,
+        };
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
+        vkCmdPushConstants(cmd, m_skyPipelineLayout,
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(skyPushBytes), skyPushBytes);
+        // Three vertices, one instance, vertexOffset 0, instanceOffset 0.
+        // The shader maps gl_VertexIndex 0/1/2 to the three corners of an
+        // oversized triangle that, after rasterizer clipping, fills the
+        // entire framebuffer with a single primitive (no diagonal seam,
+        // strictly fewer fragments shaded than a quad-as-two-triangles).
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+
+    // ---- Camera world-space position (shared by terrain + entity fog) ----
+    //
+    // Both the terrain shader (per-fragment, for length(worldXZ - cameraXZ))
+    // and the entity-fog CPU compute below (per-entity, same metric)
+    // need the world-space camera position. Hoisted out of the
+    // if (drawTerrain) block so a frame with entities but no terrain
+    // (e.g., a debug scene with the heightfield disabled) still gets
+    // correct entity fog.
+    //
+    // Why we recover cameraPos from invViewProj instead of taking it as a
+    // parameter: the existing ScenePass::Execute signature only carries
+    // viewProj, not view, not camera. Plumbing cameraPos through every
+    // caller would touch CatAnnihilation::render and the renderer's pass
+    // dispatch — too invasive for a one-iteration fog change. Inverse-
+    // projecting the NDC origin (0,0,0,1) reconstructs the eye for free
+    // in CPU and we already do this for the ribbon-trail viewDir math
+    // further down, so the inverse cost is paid for.
+    const Engine::mat4 invVP = viewProj.inverse();
+    const Engine::vec3 camWorldPos =
+        invVP.transformPoint(Engine::vec3(0.0F, 0.0F, 0.0F));
+
+    // Fog tuning — must match shaders/scene/scene.frag's FOG_DENSITY exactly.
+    // Drift between this constant and the terrain shader's value would
+    // produce entities that fog at a slightly different rate than the
+    // terrain behind them (e.g., a dog at 80 m would be more or less hazy
+    // than the grass under its feet), which reads as broken atmosphere.
+    constexpr float kFogDensity = 0.012F;
+
     // ---- Terrain ----------------------------------------------------------
     if (drawTerrain) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+
+        // Vertex push constant — mat4 viewProj at offset 0 (unchanged
+        // from the pre-fog baseline; only the range count changed).
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(float) * 16,
                            reinterpret_cast<const float*>(&viewProj));
+
+        // Fragment push constant — world-space camera position at
+        // offset 64 (16-byte slot: vec3 + 4 bytes of slack so the
+        // shader's std430 vec3 alignment is satisfied).
+        // Copy into a 16-byte aligned float[4] for the push call.
+        // The shader reads .xyz; the [3] slot is dead but must be
+        // present for the 16-byte std430 vec3 slot.
+        float cameraPosPad[4] = {
+            camWorldPos.x, camWorldPos.y, camWorldPos.z, 0.0F
+        };
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           sizeof(float) * 16, sizeof(cameraPosPad),
+                           cameraPosPad);
 
         VkBuffer vb = m_vertexBuffer->GetVkBuffer();
         VkDeviceSize vbOffset = 0;
@@ -638,6 +1177,13 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
         // same shape skip the bind cost. nullptr = nothing bound yet.
         const RHI::VulkanBuffer* lastVertexBuffer = nullptr;
         const RHI::VulkanBuffer* lastIndexBuffer = nullptr;
+
+        // Track which baseColor descriptor set is currently bound. Same
+        // skip-redundant-bind optimisation as vertex/index buffers — five
+        // dog_regular spawns in a row should rebind the texture set ONCE,
+        // not five times. VK_NULL_HANDLE = nothing bound yet, so the first
+        // draw always emits a vkCmdBindDescriptorSets.
+        VkDescriptorSet lastBoundTextureSet = VK_NULL_HANDLE;
 
         for (const auto& e : entities) {
             // Path (c): skinned mesh — the entity has an animator, a per-
@@ -724,6 +1270,24 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
                 lastIndexBuffer = ibToBind;
             }
 
+            // Bind the per-Model baseColor descriptor set. The cube proxy
+            // path (e.model == nullptr) and any model that lacked a
+            // baseColorImageCpu both end up with the default-white
+            // texture's descriptor set — so this call NEVER passes
+            // VK_NULL_HANDLE and the fragment shader's sampler always
+            // reads valid data. EnsureModelTexture is idempotent: cache
+            // hit returns immediately, cache miss does the upload.
+            VkDescriptorSet textureSet = EnsureModelTexture(e.model);
+            if (textureSet != lastBoundTextureSet) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_entityPipelineLayout,
+                                        /*firstSet*/ 0, /*setCount*/ 1,
+                                        &textureSet,
+                                        /*dynamicOffsetCount*/ 0,
+                                        /*pDynamicOffsets*/ nullptr);
+                lastBoundTextureSet = textureSet;
+            }
+
             const Engine::mat4 mvp = viewProj * modelMatrix;
             std::memcpy(pc.mvp, &mvp, sizeof(float) * 16);
             pc.color[0] = e.color.x;
@@ -734,6 +1298,47 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             vkCmdPushConstants(cmd, m_entityPipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(EntityPC), &pc);
+
+            // ---- Per-entity fog factor (fragment stage) -----------------
+            //
+            // Compute the entity's world center as the model matrix's
+            // translation column. modelMatrix is column-major, so
+            // column 3 (modelMatrix[3]) is the (x, y, z, 1) translation
+            // — equivalent to modelMatrix * vec4(0, 0, 0, 1) but skips
+            // the matrix-vector multiply since the local origin is the
+            // zero vector. Works for both the proxy-cube path (which
+            // builds modelMatrix from position + halfExtents above) and
+            // the real-mesh / skinned paths (which carry the full TRS
+            // from EntityDraw::modelMatrix).
+            //
+            // Horizontal distance only (.xz, ignoring Y) for the same
+            // reason scene.frag uses it: the fog factor should be
+            // independent of terrain height variation so a dog on a
+            // hilltop fades to sky at the same rate as a dog at sea
+            // level. This also matches the terrain fragment fog
+            // exactly, so an entity's fog blends seamlessly with the
+            // terrain pixels behind it instead of producing a slightly
+            // different haze density.
+            const Engine::vec4 entityWorld = modelMatrix[3];
+            const float dx = entityWorld.x - camWorldPos.x;
+            const float dz = entityWorld.z - camWorldPos.z;
+            const float horizDist = std::sqrt(dx * dx + dz * dz);
+            const float densityScaled = kFogDensity * horizDist;
+            // exp_squared profile, same as scene.frag — gentle near
+            // the camera, saturates faster at depth than plain exp.
+            const float fogFactor = 1.0F - std::exp(-densityScaled * densityScaled);
+
+            // vec4 fogParams: .x carries the fog factor, .yzw reserved
+            // for future per-draw lighting params (see entity.frag's
+            // EntityFragPC comment). Push at offset 80 to match the
+            // VkPushConstantRange registered in
+            // CreateEntityPipelineAndMesh.
+            const float fogParams[4] = { fogFactor, 0.0F, 0.0F, 0.0F };
+            vkCmdPushConstants(cmd, m_entityPipelineLayout,
+                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                               sizeof(EntityPC), sizeof(fogParams),
+                               fogParams);
+
             vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
         }
     }
@@ -844,36 +1449,84 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
 // ============================================================================
 
 bool ScenePass::CreateEntityPipelineAndMesh() {
-    m_entityVertShader = LoadShaderModule("shaders/scene/entity.vert.spv");
-    m_entityFragShader = LoadShaderModule("shaders/scene/entity.frag.spv");
+    // WHY shaders/compiled/ (not shaders/scene/) — see CreatePipeline() above
+    // for the full reasoning. CMake's compile rule writes flat to
+    // shaders/compiled/<name>.spv; loading from shaders/scene/*.spv silently
+    // no-ops on every shader edit. ribbon_trail already uses shaders/compiled/
+    // (this iteration unifies entity + scene with that precedent).
+    m_entityVertShader = LoadShaderModule("shaders/compiled/entity.vert.spv");
+    m_entityFragShader = LoadShaderModule("shaders/compiled/entity.frag.spv");
     if (m_entityVertShader == VK_NULL_HANDLE || m_entityFragShader == VK_NULL_HANDLE) {
         return false;
     }
 
     VkDevice dev = m_device->GetDevice();
 
-    // Pipeline layout: push constant block = mat4 mvp (64) + vec4 color (16) = 80 B.
-    VkPushConstantRange pcRange = {};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pcRange.offset = 0;
-    pcRange.size = sizeof(float) * 20;
+    // Pipeline layout: TWO push constant ranges so the vertex and fragment
+    // stages each see only their own slice of the block.
+    //
+    // [0] vertex 0..79 — mat4 mvp (offset 0, size 64) + vec4 color (offset
+    //     64, size 16). Existing layout, unchanged.
+    // [1] fragment 80..95 — vec4 fogParams (offset 80, size 16). New for
+    //     2026-04-25 SHIP-THE-CAT entity-fog iteration. fogParams.x carries
+    //     a CPU-precomputed fog factor in [0, 1]; the rest of the slot is
+    //     reserved for future per-draw lighting params so we don't have to
+    //     grow the push range again next iteration.
+    //
+    // Two ranges instead of one combined VERTEX|FRAGMENT range so each
+    // stage's GLSL push_constant block reads ONLY its own slice — Vulkan
+    // validation layers correctly diagnose any cross-stage misuse (e.g.,
+    // a typo'd offset that would write into the other stage's data) as a
+    // VUID-vkCmdPushConstants-offset error rather than silently corrupting
+    // the wrong stage's uniforms. This mirrors the layout pattern the
+    // terrain pipeline (m_pipeline) adopted in the prior iteration when it
+    // grew a fragment cameraPos slot for distance fog.
+    VkPushConstantRange pcRanges[2] = {};
+    pcRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRanges[0].offset = 0;
+    pcRanges[0].size = sizeof(float) * 20;  // mat4 + vec4
+    pcRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcRanges[1].offset = sizeof(float) * 20;  // begin at offset 80
+    pcRanges[1].size = sizeof(float) * 4;     // vec4 fogParams = 16 B
 
+    // Descriptor set layout slot for the per-Model baseColor sampler.
+    // CreateTextureResources (called from Setup BEFORE this function) has
+    // already produced m_textureDescriptorSetLayout, so we just reference
+    // it here. The layout is "set 0", a single binding 0 = combined image
+    // sampler at the fragment stage. Push constants and descriptor sets
+    // live in independent slots inside the pipeline layout, so this
+    // doesn't conflict with the dual push-constant-range layout above.
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pcRange;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &m_textureDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 2;
+    layoutInfo.pPushConstantRanges = pcRanges;
     if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_entityPipelineLayout) != VK_SUCCESS) {
         std::cerr << "[ScenePass] entity pipeline layout creation failed\n";
         return false;
     }
 
-    // Vertex format: vec3 position + vec3 normal (stride 24).
+    // Vertex format: vec3 position + vec3 normal + vec2 texcoord0 (stride 32).
+    //
+    // WHY UV joins the entity vertex format (2026-04-25): the prior iterations
+    // made every Meshy GLB renderable as a silhouette, but every cat / dog
+    // / NPC sat as a flat-tinted shape because the fragment shader had no
+    // access to per-vertex UVs and so couldn't sample the asset's authored
+    // baseColor texture. Adding texcoord0 here is the foundational step of
+    // textured PBR — even before per-model sampler descriptors are wired,
+    // the fragment shader can use UV to drive a procedural fur-pattern that
+    // breaks the flat-fill look of the meshes. Layout follows the vertex-
+    // streaming contract in EnsureModelGpuMesh / EnsureSkinnedMesh, which
+    // pack 8 packed floats per vertex (positionXYZ, normalXYZ, uvUV) — the
+    // pipeline binding is the source of truth for the stride; both packers
+    // must mirror this exactly.
     VkVertexInputBindingDescription binding = {};
     binding.binding = 0;
-    binding.stride = sizeof(float) * 6;
+    binding.stride = sizeof(float) * 8;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrs[2] = {};
+    VkVertexInputAttributeDescription attrs[3] = {};
     attrs[0].location = 0;
     attrs[0].binding = 0;
     attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -882,12 +1535,20 @@ bool ScenePass::CreateEntityPipelineAndMesh() {
     attrs[1].binding = 0;
     attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attrs[1].offset = sizeof(float) * 3;
+    // texcoord0 — a missing / sentinel-zero UV from the cube fallback or a
+    // stripped GLB still produces a valid (but visually-uniform) sample, so
+    // the pipeline doesn't need a fallback path; the shader handles uniform
+    // UV by falling back to flat tint.
+    attrs[2].location = 2;
+    attrs[2].binding = 0;
+    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[2].offset = sizeof(float) * 6;
 
     VkPipelineVertexInputStateCreateInfo vi = {};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &binding;
-    vi.vertexAttributeDescriptionCount = 2;
+    vi.vertexAttributeDescriptionCount = 3;
     vi.pVertexAttributeDescriptions = attrs;
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
@@ -967,26 +1628,38 @@ bool ScenePass::CreateEntityPipelineAndMesh() {
 
     // ---- Unit cube (extents ±0.5), flat-shaded with per-face normals --------
     // 6 faces × 4 corners = 24 verts; 6 faces × 6 indices = 36 indices.
-    struct CubeVert { float x, y, z, nx, ny, nz; };
+    //
+    // WHY a per-face UV in [0,1]² rather than zeroes (2026-04-25): the entity
+    // pipeline now consumes `vec2 texcoord0` at location=2. The cube is the
+    // fallback for entities with no Model (pure logic markers, dropped
+    // assets), and feeding a zeroed UV would collapse every face fragment to
+    // a single procedural-shader sample point, which produces a visible
+    // single-colour artefact instead of the expected per-face shading. A
+    // canonical [0,1]² UV per face matches what a Meshy mesh would produce
+    // and lets the procedural-fur fragment shader keep the cube looking
+    // identical to its pre-2026-04-25 form (the shader's pattern tiles at
+    // the same scale as the GLB UV space, so a 1×1 cube face shows one
+    // tile). Stride is now 8 floats per vertex (xyz + nxyznz + uv).
+    struct CubeVert { float x, y, z, nx, ny, nz, u, v; };
     const CubeVert verts[24] = {
         // +X face (normal = +X)
-        { 0.5f,-0.5f,-0.5f,  1,0,0}, { 0.5f, 0.5f,-0.5f,  1,0,0},
-        { 0.5f, 0.5f, 0.5f,  1,0,0}, { 0.5f,-0.5f, 0.5f,  1,0,0},
+        { 0.5f,-0.5f,-0.5f,  1,0,0, 0,0}, { 0.5f, 0.5f,-0.5f,  1,0,0, 1,0},
+        { 0.5f, 0.5f, 0.5f,  1,0,0, 1,1}, { 0.5f,-0.5f, 0.5f,  1,0,0, 0,1},
         // -X face (normal = -X)
-        {-0.5f,-0.5f, 0.5f, -1,0,0}, {-0.5f, 0.5f, 0.5f, -1,0,0},
-        {-0.5f, 0.5f,-0.5f, -1,0,0}, {-0.5f,-0.5f,-0.5f, -1,0,0},
+        {-0.5f,-0.5f, 0.5f, -1,0,0, 0,0}, {-0.5f, 0.5f, 0.5f, -1,0,0, 1,0},
+        {-0.5f, 0.5f,-0.5f, -1,0,0, 1,1}, {-0.5f,-0.5f,-0.5f, -1,0,0, 0,1},
         // +Y face (normal = +Y)
-        {-0.5f, 0.5f,-0.5f,  0,1,0}, {-0.5f, 0.5f, 0.5f,  0,1,0},
-        { 0.5f, 0.5f, 0.5f,  0,1,0}, { 0.5f, 0.5f,-0.5f,  0,1,0},
+        {-0.5f, 0.5f,-0.5f,  0,1,0, 0,0}, {-0.5f, 0.5f, 0.5f,  0,1,0, 1,0},
+        { 0.5f, 0.5f, 0.5f,  0,1,0, 1,1}, { 0.5f, 0.5f,-0.5f,  0,1,0, 0,1},
         // -Y face (normal = -Y)
-        {-0.5f,-0.5f, 0.5f,  0,-1,0}, {-0.5f,-0.5f,-0.5f,  0,-1,0},
-        { 0.5f,-0.5f,-0.5f,  0,-1,0}, { 0.5f,-0.5f, 0.5f,  0,-1,0},
+        {-0.5f,-0.5f, 0.5f,  0,-1,0, 0,0}, {-0.5f,-0.5f,-0.5f,  0,-1,0, 1,0},
+        { 0.5f,-0.5f,-0.5f,  0,-1,0, 1,1}, { 0.5f,-0.5f, 0.5f,  0,-1,0, 0,1},
         // +Z face (normal = +Z)
-        { 0.5f,-0.5f, 0.5f,  0,0,1}, { 0.5f, 0.5f, 0.5f,  0,0,1},
-        {-0.5f, 0.5f, 0.5f,  0,0,1}, {-0.5f,-0.5f, 0.5f,  0,0,1},
+        { 0.5f,-0.5f, 0.5f,  0,0,1, 0,0}, { 0.5f, 0.5f, 0.5f,  0,0,1, 1,0},
+        {-0.5f, 0.5f, 0.5f,  0,0,1, 1,1}, {-0.5f,-0.5f, 0.5f,  0,0,1, 0,1},
         // -Z face (normal = -Z)
-        {-0.5f,-0.5f,-0.5f,  0,0,-1}, {-0.5f, 0.5f,-0.5f,  0,0,-1},
-        { 0.5f, 0.5f,-0.5f,  0,0,-1}, { 0.5f,-0.5f,-0.5f,  0,0,-1},
+        {-0.5f,-0.5f,-0.5f,  0,0,-1, 0,0}, {-0.5f, 0.5f,-0.5f,  0,0,-1, 1,0},
+        { 0.5f, 0.5f,-0.5f,  0,0,-1, 1,1}, { 0.5f,-0.5f,-0.5f,  0,0,-1, 0,1},
     };
     uint32_t indices[36];
     for (int face = 0; face < 6; ++face) {
@@ -1031,12 +1704,19 @@ bool ScenePass::CreateEntityPipelineAndMesh() {
 // vkCmdDrawIndexed and binds straight into the existing entity pipeline
 // (which expects exactly position+normal at locations 0/1).
 //
-// WHY drop tangents / UVs / joints / weights at this step: the entity
-// pipeline doesn't consume them. A separate "skinned + textured" pipeline
-// will land in a follow-up iteration that needs all of those; doing both
-// rewrites in one iteration would balloon the change. Right now the win
-// is "every dog/cat is a recognisable silhouette" and that needs only
-// position+normal.
+// WHY texcoord0 is now packed (2026-04-25): the entity pipeline grew a
+// `vec2 texcoord0` attribute at location=2 (see CreateEntityPipelineAndMesh).
+// The fragment shader uses it to break the previously-flat tint of every
+// Meshy mesh — the prior iteration shipped per-clan tints (white herd
+// problem solved at the colour-axis level), but the silhouettes still
+// rendered as single-tone fills, which the user-directive listed as
+// "materials/textures from the Meshy GLBs binding correctly to PBR sampler
+// slots". Step one of that journey is having UV available in the fragment
+// shader at all; per-model sampler binding (decoded from the GLB-embedded
+// JPEG / PNG bytes the Meshy assets ship with) is the next iteration's
+// work. Tangents / joints / weights are still dropped — bind-pose models
+// don't need them, and the skinned path goes through EnsureSkinnedMesh
+// which has its own packer (also updated in this iteration).
 //
 // WHY no submesh tracking: the entity pipeline has one tint colour per
 // draw, so we can't bind different materials to different submeshes
@@ -1079,13 +1759,18 @@ bool ScenePass::EnsureModelGpuMesh(const CatEngine::Model* model) {
         return false;
     }
 
-    // Pack interleaved (vec3 position, vec3 normal). Stride 24, matching the
-    // entity pipeline's binding 0 layout exactly. Using a flat float vector
-    // (no struct) avoids alignment surprises across compiler/platform combos
-    // — the entity pipeline already declares the format as 6 packed floats
-    // (R32G32B32_SFLOAT × 2) so this layout is the source of truth.
+    // Pack interleaved (vec3 position, vec3 normal, vec2 texcoord0). Stride
+    // 32, matching the entity pipeline's binding 0 layout exactly. Using a
+    // flat float vector (no struct) avoids alignment surprises across
+    // compiler/platform combos — the entity pipeline declares the format as
+    // 8 packed floats (R32G32B32_SFLOAT + R32G32B32_SFLOAT + R32G32_SFLOAT)
+    // so this layout is the source of truth. Mismatch (e.g. shipping 6
+    // floats per vertex with an 8-float stride) would make every other
+    // vertex read garbage uvs from the next vertex's position bytes —
+    // visible immediately as wildly noisy pattern instead of the smooth
+    // procedural-fur shading.
     std::vector<float> packedVertices;
-    packedVertices.reserve(totalVertices * 6U);
+    packedVertices.reserve(totalVertices * 8U);
 
     std::vector<uint32_t> packedIndices;
     packedIndices.reserve(totalIndices);
@@ -1102,6 +1787,14 @@ bool ScenePass::EnsureModelGpuMesh(const CatEngine::Model* model) {
             packedVertices.push_back(vertex.normal.x);
             packedVertices.push_back(vertex.normal.y);
             packedVertices.push_back(vertex.normal.z);
+            // texcoord0 — ModelLoader writes glm::vec2{0,0} for vertices
+            // without an authored UV (TEXCOORD_0 accessor missing), so this
+            // copy is safe regardless of asset completeness. Meshy GLBs
+            // ship a real texcoord0 per vertex; older hand-authored .gltf
+            // placeholders default to zero, which the fragment shader
+            // recognises and falls back to flat tint for.
+            packedVertices.push_back(vertex.texcoord0.x);
+            packedVertices.push_back(vertex.texcoord0.y);
         }
         // Re-base indices: this mesh's local index 0 must point at the first
         // vertex slot the concatenated buffer placed for this mesh, which is
@@ -1146,6 +1839,60 @@ bool ScenePass::EnsureModelGpuMesh(const CatEngine::Model* model) {
               << totalVertices << " verts, "
               << totalIndices << " indices ("
               << (vbDesc.size + ibDesc.size) / 1024 << " KB)\n";
+
+    // ---- One-shot UV-population diagnostic (per first-encounter model) ----
+    //
+    // WHY: prior iteration's pixel-diff against the baseline PPM showed only
+    // 1139 pixels (0.06%) differed after wiring the UV pipeline + a procedural
+    // fur fragment shader, all of those concentrated in the top sky/cloud row
+    // and bottom HUD row — i.e. nowhere near where dogs/cats render. The
+    // entity fragment shader (shaders/scene/entity.frag) gates fur modulation
+    // on `hasUV = (abs(vUV.x) + abs(vUV.y)) > 1e-4`. If most vertices ship
+    // through with texcoord0=(0,0), every entity collapses to the flat-shaded
+    // fallback path even though the pipeline is structurally correct.
+    //
+    // This block scans the FIRST mesh of each model exactly once (the cache
+    // hit at top of EnsureModelGpuMesh short-circuits subsequent calls, so
+    // this runs once per model in the entire session) and prints UV stats:
+    // count of vertices with non-zero UV, the UV bounding box, and the first
+    // vertex's UV. Three possible outcomes for Meshy GLBs:
+    //   (a) nonZero == 0 across ALL Meshy assets → ModelLoader is silently
+    //       dropping TEXCOORD_0 (most likely an accessor-extraction bug, OR
+    //       Meshy GLBs ship without TEXCOORD_0 entirely). Next iteration adds
+    //       a planar-projection UV fallback or hand-extracts from one GLB to
+    //       compare.
+    //   (b) nonZero > 0 but uMax-uMin tiny (e.g. all UVs in [0, 0.001]) →
+    //       fragment-shader gate threshold is wrong / numerical issue.
+    //   (c) nonZero > 0 with sane UV range → the breakage is downstream
+    //       (vertex format mismatch on GPU side, etc.).
+    //
+    // Diagnostic is verbose by design — once per model is cheap (fewer than
+    // ~30 lines per session at current asset count) and the per-asset
+    // comparison is the value of the print over a single global stat.
+    if (!model->meshes.empty() && !model->meshes[0].vertices.empty()) {
+        const auto& m0 = model->meshes[0];
+        std::size_t nonZero = 0;
+        float uMin = m0.vertices[0].texcoord0.x;
+        float uMax = uMin;
+        float vMin = m0.vertices[0].texcoord0.y;
+        float vMax = vMin;
+        for (const auto& vert : m0.vertices) {
+            if ((std::abs(vert.texcoord0.x) + std::abs(vert.texcoord0.y)) > 1e-6f) {
+                ++nonZero;
+            }
+            uMin = std::min(uMin, vert.texcoord0.x);
+            uMax = std::max(uMax, vert.texcoord0.x);
+            vMin = std::min(vMin, vert.texcoord0.y);
+            vMax = std::max(vMax, vert.texcoord0.y);
+        }
+        std::cout << "[ScenePass-UV] model=" << model->path
+                  << " mesh0Verts=" << m0.vertices.size()
+                  << " nonZeroUV=" << nonZero << "/" << m0.vertices.size()
+                  << " uRange=[" << uMin << "," << uMax << "]"
+                  << " vRange=[" << vMin << "," << vMax << "]"
+                  << " firstUV=(" << m0.vertices[0].texcoord0.x
+                  << "," << m0.vertices[0].texcoord0.y << ")\n";
+    }
 
     m_modelMeshCache[model] = std::move(gpuMesh);
     return true;
@@ -1232,7 +1979,11 @@ bool ScenePass::EnsureSkinnedMesh(const void* skinningKey,
     if (cached.vertexBuffer == nullptr
         || cached.vertexCount != expectedVertexCount) {
         RHI::BufferDesc vbDesc{};
-        vbDesc.size = totalVertices * 6U * sizeof(float);  // stride 24 B
+        // Stride 32 B: position.xyz + normal.xyz + texcoord0.uv. Bumped from
+        // 24 B in the 2026-04-25 textured-PBR-foundation iteration. The
+        // entity pipeline binding declares stride 32 in
+        // CreateEntityPipelineAndMesh — these two MUST stay in lockstep.
+        vbDesc.size = totalVertices * 8U * sizeof(float);
         vbDesc.usage = RHI::BufferUsage::Vertex;
         // HostVisible + HostCoherent because we re-upload every frame from
         // the CPU-skinning loop below. UpdateData() under HostCoherent does
@@ -1250,11 +2001,15 @@ bool ScenePass::EnsureSkinnedMesh(const void* skinningKey,
     }
 
     // CPU-skinning loop. Layout matches the bind-pose path's packed
-    // (position.xyz, normal.xyz) interleaved float[6] record. We reuse the
-    // existing per-Model index buffer because skinning deforms positions
-    // only, not topology — same triangles, different vertex world space.
+    // (position.xyz, normal.xyz, texcoord0.uv) interleaved float[8] record.
+    // We reuse the existing per-Model index buffer because skinning deforms
+    // positions only, not topology — same triangles, different vertex world
+    // space. UV is forwarded unchanged from the bind-pose vertex (skinning
+    // doesn't touch texture coordinates — they are a property of the mesh,
+    // not the pose), which is why the same texcoord0 stream feeds both
+    // paths from the same source vertex.
     std::vector<float> packedVertices;
-    packedVertices.reserve(totalVertices * 6U);
+    packedVertices.reserve(totalVertices * 8U);
 
     // Hoist the bone-palette pointer + size out of the loop. `mat4` is
     // 64 B and `Engine::mat4::operator[]` returns a `vec4&` — pointer
@@ -1351,6 +2106,13 @@ bool ScenePass::EnsureSkinnedMesh(const void* skinningKey,
             packedVertices.push_back(nOut.x);
             packedVertices.push_back(nOut.y);
             packedVertices.push_back(nOut.z);
+            // texcoord0 is a property of the mesh, not the pose — copy
+            // straight from the source vertex without any skinning math.
+            // Keeping this in lockstep with EnsureModelGpuMesh's bind-pose
+            // packer ensures the entity pipeline can bind either VB
+            // interchangeably (path b vs path c on EntityDraw).
+            packedVertices.push_back(vertex.texcoord0.x);
+            packedVertices.push_back(vertex.texcoord0.y);
         }
     }
 
@@ -1871,6 +2633,714 @@ void ScenePass::DestroyEntityPipelineAndMesh() {
         vkDestroyShaderModule(dev, m_entityFragShader, nullptr);
         m_entityFragShader = VK_NULL_HANDLE;
     }
+}
+
+// ============================================================================
+// PBR baseColor texture pipeline (2026-04-25 SHIP-THE-CAT iter — Step 2)
+// ============================================================================
+//
+// The piece the user has been waiting on for ~6 hours: take the RGBA8
+// baseColor bytes ModelLoader already decodes from each Meshy GLB and get
+// them in front of the entity fragment shader's sampler so the rendered
+// cats / dogs actually look like their authored materials instead of flat
+// per-clan tints.
+//
+// Why this lives in ScenePass instead of a generic "TextureManager":
+//   - The entity pipeline is the only consumer of the baseColor sampler
+//     this iteration. Lighting / shadow / skinning passes don't need it
+//     (yet); a free-floating manager would be speculative.
+//   - The descriptor set layout has to be visible to CreateEntityPipeline
+//     AndMesh, which is also a ScenePass member. Co-locating the two
+//     keeps the layout-handle lifetime obvious and documented in one
+//     file.
+//   - Texture lifetimes are tied to model lifetimes, which are tied to
+//     AssetManager. ScenePass already keeps a parallel m_modelMeshCache
+//     keyed by const Model*, so we get cleanup ordering for free by
+//     mirroring that map.
+//
+// Resource sizing:
+//   - kMaxDescriptorSets = 64. Worst-case observed in this engine's
+//     content directory is 24 cat GLBs + 4 dog variants + 1 default white
+//     = 29; doubled for headroom in case future iterations add prop
+//     models / weapon meshes / scenery decals that share this pipeline.
+//     Bumping this to a dynamic multi-pool allocator becomes worthwhile
+//     past a few hundred distinct meshes; we are not there yet.
+constexpr uint32_t kMaxBaseColorDescriptorSets = 64U;
+
+bool ScenePass::CreateTextureResources() {
+    if (m_device == nullptr) return false;
+    VkDevice dev = m_device->GetDevice();
+
+    // ---- Descriptor set layout: set=0, binding=0 = sampler2D ----------
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslInfo.bindingCount = 1;
+    dslInfo.pBindings = &binding;
+
+    if (vkCreateDescriptorSetLayout(dev, &dslInfo, nullptr,
+                                    &m_textureDescriptorSetLayout) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] baseColor descriptor set layout creation failed\n";
+        return false;
+    }
+
+    // ---- Descriptor pool ----------------------------------------------
+    // FREE_DESCRIPTOR_SET_BIT is intentionally NOT set: we never free
+    // individual sets, only the whole pool at Shutdown via
+    // vkResetDescriptorPool / vkDestroyDescriptorPool. Skipping the flag
+    // lets the driver pack sets more tightly (no per-set free metadata).
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = kMaxBaseColorDescriptorSets;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = kMaxBaseColorDescriptorSets;
+
+    if (vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+                               &m_textureDescriptorPool) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] baseColor descriptor pool creation failed\n";
+        return false;
+    }
+
+    // ---- Shared sampler ------------------------------------------------
+    // Linear min/mag/mip for clean texture filtering at any zoom level
+    // (cat textures are 2k JPEGs but the entity fills <10 % of frame
+    // height for most camera distances, so trilinear is a meaningful
+    // win over nearest). Anisotropy enabled when the device supports it
+    // — VulkanDevice queries samplerAnisotropy at init and exposes it
+    // via GetFeatures().samplerAnisotropy.
+    VkPhysicalDeviceFeatures supportedFeatures = m_device->GetFeatures();
+
+    VkSamplerCreateInfo sampInfo{};
+    sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampInfo.magFilter = VK_FILTER_LINEAR;
+    sampInfo.minFilter = VK_FILTER_LINEAR;
+    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampInfo.anisotropyEnable = (supportedFeatures.samplerAnisotropy == VK_TRUE)
+                                    ? VK_TRUE
+                                    : VK_FALSE;
+    sampInfo.maxAnisotropy = (supportedFeatures.samplerAnisotropy == VK_TRUE)
+                                ? std::min(8.0F,
+                                           m_device->GetProperties().limits.maxSamplerAnisotropy)
+                                : 1.0F;
+    sampInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    sampInfo.unnormalizedCoordinates = VK_FALSE;
+    sampInfo.compareEnable = VK_FALSE;
+    sampInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    sampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampInfo.minLod = 0.0F;
+    // maxLod = VK_LOD_CLAMP_NONE: let the sampler reach the deepest mip
+    // level present on whatever image is bound. The driver clamps internally
+    // against `imageView.subresourceRange.levelCount`, so this constant is
+    // safe across the full range of textures this pass uploads (1×1 default
+    // white = 1 mip, 2k Meshy baseColor = 12 mips). Pre-mipmap iteration this
+    // was 0.0F to match the single-level imageInfo.mipLevels = 1 upload path;
+    // with Create2DTextureFromRGBA + GenerateMipmapChain now staging full
+    // pyramids on every >1×1 texture, raising the cap unlocks the mipmap
+    // pyramid for distance-aware LOD selection. The visible win is that
+    // distant cats stop sampling the full 2k JPEG and instead pick a
+    // fragment-area-appropriate level — moiré and shimmer on stripey fur
+    // collapse, GPU bandwidth on entity rasterisation drops because the
+    // pyramid mips fit much better in the texture-cache lines.
+    sampInfo.maxLod = VK_LOD_CLAMP_NONE;
+    sampInfo.mipLodBias = 0.0F;
+
+    if (vkCreateSampler(dev, &sampInfo, nullptr, &m_baseColorSampler) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] baseColor sampler creation failed\n";
+        return false;
+    }
+
+    // ---- Default-white 1×1 texture ------------------------------------
+    // Used by every model lacking a baseColorImageCpu (cube proxy,
+    // URI-backed asset where ModelLoader didn't decode the image, decode
+    // failure). Sampling white × per-clan tint == flat tint, so models
+    // on this fallback look identical to the pre-PBR-Step-2 form.
+    const uint8_t whitePixel[4] = { 255, 255, 255, 255 };
+    if (!Create2DTextureFromRGBA(1U, 1U, whitePixel, "DefaultWhiteBaseColor",
+                                 m_defaultWhiteTexture.image,
+                                 m_defaultWhiteTexture.memory,
+                                 m_defaultWhiteTexture.view)) {
+        std::cerr << "[ScenePass] default-white texture creation failed\n";
+        return false;
+    }
+    m_defaultWhiteTexture.width = 1U;
+    m_defaultWhiteTexture.height = 1U;
+
+    // Allocate + write the descriptor set for the default texture. Doing
+    // this once at Setup means the entity loop never has to special-case
+    // the model==nullptr path — it just falls through EnsureModelTexture
+    // which returns this set.
+    VkDescriptorSetAllocateInfo dsAlloc{};
+    dsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorPool = m_textureDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &m_textureDescriptorSetLayout;
+    if (vkAllocateDescriptorSets(dev, &dsAlloc,
+                                 &m_defaultWhiteTexture.descriptorSet) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] default-white descriptor set alloc failed\n";
+        return false;
+    }
+
+    VkDescriptorImageInfo defaultImgInfo{};
+    defaultImgInfo.sampler = m_baseColorSampler;
+    defaultImgInfo.imageView = m_defaultWhiteTexture.view;
+    defaultImgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet defaultWrite{};
+    defaultWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    defaultWrite.dstSet = m_defaultWhiteTexture.descriptorSet;
+    defaultWrite.dstBinding = 0;
+    defaultWrite.descriptorCount = 1;
+    defaultWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    defaultWrite.pImageInfo = &defaultImgInfo;
+    vkUpdateDescriptorSets(dev, 1, &defaultWrite, 0, nullptr);
+
+    std::cout << "[ScenePass] baseColor pipeline ready "
+              << "(pool=" << kMaxBaseColorDescriptorSets
+              << ", anisotropy=" << (sampInfo.anisotropyEnable ? "on" : "off")
+              << ", default=1x1 white)\n";
+    return true;
+}
+
+void ScenePass::DestroyTextureResources() {
+    if (m_device == nullptr) return;
+    VkDevice dev = m_device->GetDevice();
+
+    // Per-Model textures: free image / memory / view (descriptor sets are
+    // freed in one shot by destroying the pool below). Iterating clears
+    // the map values cleanly even if a future iteration grows the struct.
+    for (auto& kv : m_modelTextureCache) {
+        ModelTexture& tex = kv.second;
+        if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(dev, tex.view, nullptr);
+        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
+        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+    }
+    m_modelTextureCache.clear();
+
+    // Default-white texture (allocated separately, not in the cache).
+    if (m_defaultWhiteTexture.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev, m_defaultWhiteTexture.view, nullptr);
+        m_defaultWhiteTexture.view = VK_NULL_HANDLE;
+    }
+    if (m_defaultWhiteTexture.image != VK_NULL_HANDLE) {
+        vkDestroyImage(dev, m_defaultWhiteTexture.image, nullptr);
+        m_defaultWhiteTexture.image = VK_NULL_HANDLE;
+    }
+    if (m_defaultWhiteTexture.memory != VK_NULL_HANDLE) {
+        vkFreeMemory(dev, m_defaultWhiteTexture.memory, nullptr);
+        m_defaultWhiteTexture.memory = VK_NULL_HANDLE;
+    }
+    m_defaultWhiteTexture.descriptorSet = VK_NULL_HANDLE;
+
+    if (m_textureDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(dev, m_textureDescriptorPool, nullptr);
+        m_textureDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (m_textureDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev, m_textureDescriptorSetLayout, nullptr);
+        m_textureDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_baseColorSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(dev, m_baseColorSampler, nullptr);
+        m_baseColorSampler = VK_NULL_HANDLE;
+    }
+}
+
+bool ScenePass::Create2DTextureFromRGBA(uint32_t width, uint32_t height,
+                                        const uint8_t* rgbaBytes,
+                                        const char* debugName,
+                                        VkImage& outImage,
+                                        VkDeviceMemory& outMemory,
+                                        VkImageView& outView) {
+    if (width == 0U || height == 0U || rgbaBytes == nullptr) {
+        std::cerr << "[ScenePass] Create2DTextureFromRGBA: bad inputs ("
+                  << width << "x" << height << ", data="
+                  << (rgbaBytes != nullptr ? "ok" : "null") << ")\n";
+        return false;
+    }
+
+    VkDevice dev = m_device->GetDevice();
+    const VkDeviceSize imageBytes = static_cast<VkDeviceSize>(width)
+                                  * static_cast<VkDeviceSize>(height) * 4ULL;
+
+    // Mip-pyramid depth: floor(log2(max(w,h))) + 1.
+    //
+    // Why this formula: a 2D image collapses to 1×1 after exactly
+    // ceil(log2(max(w,h))) successive halvings, and "the texture itself"
+    // is the +1. Examples in the assets shipping today:
+    //   1×1   → 1 mip   (default-white fallback — no chain to generate)
+    //   2k×2k → 12 mips (Meshy baseColor JPEGs after stb_image decode)
+    //   1024² → 11 mips
+    //   4k×4k → 13 mips (future hi-res asset variants)
+    //
+    // We use std::max(width,height) so non-square sources (which
+    // shouldn't appear from Meshy but might from future imports) still
+    // get every mip down to 1×1 along whichever axis is longest. The
+    // shorter axis clamps to 1 inside GenerateMipmapChain's blit loop.
+    //
+    // We don't cap the chain depth here even though >12 mips is
+    // overkill in practice — the GPU cost of the deepest mips is
+    // sub-microsecond and the sampler will pick the appropriate
+    // level naturally based on screen-space derivatives. A future
+    // iteration could expose maxMipLevel as a tuning knob, but
+    // there's no observed cost at the levels we're actually shipping.
+    uint32_t maxDim = (width > height) ? width : height;
+    uint32_t mipLevels = 1U;
+    while (maxDim > 1U) {
+        maxDim >>= 1U;
+        ++mipLevels;
+    }
+
+    // ---- Step 1: device-local VkImage --------------------------------
+    // VK_FORMAT_R8G8B8A8_UNORM (NOT _SRGB): Meshy textures are already
+    // in linear-ish space (the JPEG bakes lighting into the colour map
+    // and treats the result as albedo). Sampling as UNORM and letting
+    // the swapchain's sRGB encode handle the gamma curve avoids the
+    // double-decode washout that _SRGB sampling would produce on this
+    // asset pipeline. See entity.frag's matching comment.
+    //
+    // TRANSFER_SRC_BIT in usage: vkCmdBlitImage in GenerateMipmapChain
+    // reads from mip(i-1) to write into mip(i). Vulkan validation rejects
+    // a blit-source image that wasn't created with this usage bit even if
+    // the per-frame layout is TRANSFER_SRC_OPTIMAL. Adding the bit costs
+    // nothing — a single image creation flag — and unlocks the entire
+    // GPU mip generation path. Leaving it off would require the alternative
+    // CPU mip-down approach (decode each level on host, vkCmdCopyBufferToImage
+    // each level individually), which is ~6x more memory + ~10x more
+    // staging traffic for the same result.
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = { width, height, 1U };
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                    | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(dev, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] vkCreateImage failed for " << debugName << "\n";
+        return false;
+    }
+
+    VkMemoryRequirements memReq{};
+    vkGetImageMemoryRequirements(dev, outImage, &memReq);
+
+    uint32_t memTypeIdx = m_device->FindMemoryType(memReq.memoryTypeBits,
+                                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memTypeIdx == UINT32_MAX) {
+        std::cerr << "[ScenePass] no device-local memory for " << debugName << "\n";
+        vkDestroyImage(dev, outImage, nullptr);
+        outImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkMemoryAllocateInfo memAlloc{};
+    memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memAlloc.allocationSize = memReq.size;
+    memAlloc.memoryTypeIndex = memTypeIdx;
+    if (vkAllocateMemory(dev, &memAlloc, nullptr, &outMemory) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] vkAllocateMemory failed for " << debugName << "\n";
+        vkDestroyImage(dev, outImage, nullptr);
+        outImage = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindImageMemory(dev, outImage, outMemory, 0);
+
+    // ---- Step 2: staging buffer + copy -------------------------------
+    // Host-coherent staging path: allocate a transient VulkanBuffer with
+    // HostVisible|HostCoherent, UpdateData() the RGBA8 bytes, transition
+    // the image to TRANSFER_DST, CopyBufferToImage, transition to
+    // SHADER_READ_ONLY_OPTIMAL. The staging buffer drops out of scope at
+    // function exit so its memory frees immediately. For a 2k texture
+    // this is ~16 MB peak — paid once per Model on first encounter.
+    RHI::BufferDesc stagingDesc{};
+    stagingDesc.size = imageBytes;
+    stagingDesc.usage = RHI::BufferUsage::TransferSrc | RHI::BufferUsage::Staging;
+    stagingDesc.memoryProperties = RHI::MemoryProperty::HostVisible
+                                 | RHI::MemoryProperty::HostCoherent;
+    stagingDesc.debugName = debugName;
+    auto stagingBuffer = std::make_unique<RHI::VulkanBuffer>(m_device, stagingDesc);
+    stagingBuffer->UpdateData(rgbaBytes, imageBytes, 0);
+
+    // Transition all mip levels (not just mip 0) from UNDEFINED to
+    // TRANSFER_DST_OPTIMAL up front. This single barrier covers both:
+    //   * mip 0, which is about to receive the staging-buffer copy below;
+    //   * mips 1..N-1, whose contents are still undefined but whose layout
+    //     must be TRANSFER_DST_OPTIMAL because GenerateMipmapChain's
+    //     blit loop writes into them.
+    // Using the multi-mip overload of TransitionImageLayout (the one
+    // that takes baseMipLevel + levelCount) is the cheap one-shot way
+    // to express "every level transitions from UNDEFINED to DST" without
+    // running N separate command-buffer submits.
+    m_device->TransitionImageLayout(outImage,
+                                    VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                    /*baseMipLevel*/ 0U,
+                                    /*levelCount*/ mipLevels,
+                                    /*baseArrayLayer*/ 0U,
+                                    /*layerCount*/ 1U);
+    m_device->CopyBufferToImage(stagingBuffer->GetVkBuffer(), outImage,
+                                width, height);
+    // Generate the rest of the mip chain on the GPU (vkCmdBlitImage with
+    // VK_FILTER_LINEAR), then leave every level in SHADER_READ_ONLY_OPTIMAL.
+    // For mipLevels==1 (the 1×1 default-white fallback), this collapses
+    // to the same single transition the legacy code did — the loop body
+    // runs zero iterations and only the final per-level barrier fires.
+    if (!GenerateMipmapChain(outImage, width, height, mipLevels)) {
+        std::cerr << "[ScenePass] mipmap chain generation failed for "
+                  << debugName << "\n";
+        vkFreeMemory(dev, outMemory, nullptr);
+        outMemory = VK_NULL_HANDLE;
+        vkDestroyImage(dev, outImage, nullptr);
+        outImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // ---- Step 3: image view -----------------------------------------
+    // levelCount = mipLevels (not 1) so the sampler — combined with the
+    // VK_LOD_CLAMP_NONE maxLod set on m_baseColorSampler in
+    // CreateTextureResources — has every level available for trilinear
+    // mip selection. If we left levelCount=1 here, the view would only
+    // expose mip 0 to the sampler regardless of how many mips the image
+    // actually owns, defeating the entire mipmap chain.
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = outImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = mipLevels;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(dev, &viewInfo, nullptr, &outView) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] vkCreateImageView failed for " << debugName << "\n";
+        vkFreeMemory(dev, outMemory, nullptr);
+        outMemory = VK_NULL_HANDLE;
+        vkDestroyImage(dev, outImage, nullptr);
+        outImage = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+bool ScenePass::GenerateMipmapChain(VkImage image,
+                                    uint32_t baseWidth,
+                                    uint32_t baseHeight,
+                                    uint32_t mipLevels) const {
+    // Single-time command buffer allocated from the device's shared
+    // short-lived pool. Mirrors the pattern in
+    // VulkanDevice::TransitionImageLayout / CopyBufferToImage so we hit the
+    // same already-validated path: alloc → begin → record → end → submit
+    // → waitIdle → free. We don't reuse those helpers because mip chain
+    // generation needs N-1 blits + 2N-1 barriers in ONE submit (so the
+    // GPU can pipeline blit i+1 against the barrier transition for i),
+    // not N separate one-shot submits which would serialise everything
+    // and cost ~10x in CPU+driver overhead per upload. The total wallclock
+    // win matters because EnsureModelTexture currently stalls the main
+    // thread on every first-encounter Model — collapsing the chain into
+    // one submit keeps that stall under a millisecond per texture instead
+    // of dozens.
+    VkDevice dev = m_device->GetDevice();
+    VkCommandPool pool = m_device->GetCommandPool();
+    if (pool == VK_NULL_HANDLE) {
+        std::cerr << "[ScenePass] GenerateMipmapChain: no command pool\n";
+        return false;
+    }
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = pool;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(dev, &allocInfo, &cmd) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] GenerateMipmapChain: vkAllocateCommandBuffers failed\n";
+        return false;
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] GenerateMipmapChain: vkBeginCommandBuffer failed\n";
+        vkFreeCommandBuffers(dev, pool, 1, &cmd);
+        return false;
+    }
+
+    // Per-level mip extents are tracked locally because vkCmdBlitImage
+    // takes raw integer coordinates per VkImageBlit::srcOffsets /
+    // dstOffsets, not a "auto-halve" flag. We start from the base size
+    // and divide by 2 at the bottom of each iteration, clamping at 1
+    // so non-square or odd-pixel-edge images keep producing valid
+    // 1-pixel-wide / 1-pixel-tall mip levels until the longer axis
+    // also collapses.
+    int32_t mipWidth = static_cast<int32_t>(baseWidth);
+    int32_t mipHeight = static_cast<int32_t>(baseHeight);
+
+    // The shared barrier object is reused across all transitions for one
+    // image — only oldLayout/newLayout/access masks/subresource.baseMipLevel
+    // differ between calls. Initialising the constant fields once here
+    // keeps the per-iteration code below to the bare minimum diff.
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = image;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.levelCount = 1;
+
+    for (uint32_t i = 1U; i < mipLevels; ++i) {
+        // Step A: transition mip(i-1) from TRANSFER_DST → TRANSFER_SRC.
+        // The level was either freshly-uploaded mip 0 (first iteration)
+        // or freshly-blitted mip(i-1) (subsequent iterations); either
+        // way it ended its prior step in TRANSFER_DST_OPTIMAL. Now we
+        // need to read it as the blit source for level i. The per-level
+        // src=TRANSFER_WRITE → dst=TRANSFER_READ access masks express
+        // "wait for the prior write to be visible before this read",
+        // which is the actual hazard the blit creates.
+        barrier.subresourceRange.baseMipLevel = i - 1U;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        // Step B: blit mip(i-1) → mip(i) at half the resolution along
+        // each axis. The src/dst offsets define the rectangle being
+        // copied; we use the entire mip(i-1) as source and the entire
+        // (half-sized) mip(i) as destination. VK_FILTER_LINEAR gives
+        // bilinear box-style downsampling — the standard "good enough"
+        // filter for game-asset mip generation. Box (4-tap average) and
+        // Lanczos (multi-tap) would produce slightly cleaner mips but
+        // require a compute shader; the visual delta against linear at
+        // these texture sizes is hard to see without zooming in,
+        // and Lanczos costs ~5x the GPU work per mip.
+        VkImageBlit blit{};
+        blit.srcOffsets[0] = { 0, 0, 0 };
+        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel = i - 1U;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+        const int32_t nextWidth  = (mipWidth  > 1) ? (mipWidth  / 2) : 1;
+        const int32_t nextHeight = (mipHeight > 1) ? (mipHeight / 2) : 1;
+        blit.dstOffsets[0] = { 0, 0, 0 };
+        blit.dstOffsets[1] = { nextWidth, nextHeight, 1 };
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+        vkCmdBlitImage(cmd,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blit,
+                       VK_FILTER_LINEAR);
+
+        // Step C: transition mip(i-1) from TRANSFER_SRC → SHADER_READ_ONLY.
+        // After this barrier, mip(i-1) is fully baked: nothing else in
+        // this command buffer reads from it (i+1's blit reads mip(i),
+        // not i-1), and the fragment shader is the next consumer. The
+        // dst access mask is SHADER_READ — paired with FRAGMENT_SHADER
+        // stage so the wait is exactly "the next sampler-bound draw at
+        // the fragment stage waits for our transfer-stage write". That's
+        // the tightest legal sync; broader (e.g. ALL_GRAPHICS) would also
+        // work but introduce false-positive stalls on unrelated draws.
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        mipWidth = nextWidth;
+        mipHeight = nextHeight;
+    }
+
+    // Final transition: the deepest mip (mipLevels-1) was the destination
+    // of the last blit (or, when mipLevels==1, the destination of the
+    // initial CopyBufferToImage). Either way it sits in TRANSFER_DST_OPTIMAL.
+    // Push it to SHADER_READ_ONLY_OPTIMAL so every level — base through
+    // bottom — is now in a sample-ready layout, no per-frame fix-ups
+    // required. The src access mask is TRANSFER_WRITE (we just wrote it
+    // via blit / copy), the dst is SHADER_READ (fragment sampler).
+    barrier.subresourceRange.baseMipLevel = mipLevels - 1U;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] GenerateMipmapChain: vkEndCommandBuffer failed\n";
+        vkFreeCommandBuffers(dev, pool, 1, &cmd);
+        return false;
+    }
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    VkQueue gfxQueue = m_device->GetGraphicsQueue();
+    if (vkQueueSubmit(gfxQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] GenerateMipmapChain: vkQueueSubmit failed\n";
+        vkFreeCommandBuffers(dev, pool, 1, &cmd);
+        return false;
+    }
+    // QueueWaitIdle (vs a fence-based wait): matches the synchronisation
+    // pattern of every other Create2DTextureFromRGBA helper on this path
+    // (TransitionImageLayout, CopyBufferToImage). Per-texture stall is the
+    // intent — EnsureModelTexture is called from the entity submission
+    // loop on first-encounter, so callers expect a hard sync before the
+    // returned descriptor set is bound. Switching to fences would just
+    // move the wait to the caller's first draw, costing complexity for
+    // identical wall-clock behaviour.
+    vkQueueWaitIdle(gfxQueue);
+    vkFreeCommandBuffers(dev, pool, 1, &cmd);
+    return true;
+}
+
+VkDescriptorSet ScenePass::EnsureModelTexture(const CatEngine::Model* model) {
+    // Null model → cube proxy / pure marker entity. Bind the default
+    // white texture so the sampler reads valid data and the pixel
+    // collapses to (1,1,1) × tint = flat tint.
+    if (model == nullptr) {
+        return m_defaultWhiteTexture.descriptorSet;
+    }
+
+    // Cache hit — steady state after first encounter.
+    auto cacheIt = m_modelTextureCache.find(model);
+    if (cacheIt != m_modelTextureCache.end()) {
+        // Empty cached entry (descriptorSet stayed at the default's set
+        // because the model lacked usable image data) still returns the
+        // valid default descriptor — subsequent draws skip the upload
+        // path entirely.
+        return (cacheIt->second.descriptorSet != VK_NULL_HANDLE)
+                   ? cacheIt->second.descriptorSet
+                   : m_defaultWhiteTexture.descriptorSet;
+    }
+
+    // Decide whether this Model has usable baseColor pixels. Walk the
+    // material list and pick the FIRST material with a populated CPU
+    // image — Meshy GLBs typically ship a single material per cat / dog,
+    // so this matches the asset shape exactly. A future iteration that
+    // splits a model into multiple materials (e.g. armour pieces) needs
+    // a per-mesh material binding, which is out of scope here.
+    const CatEngine::BaseColorImage* sourceImage = nullptr;
+    for (const auto& mat : model->materials) {
+        if (mat.baseColorImageCpu != nullptr
+            && !mat.baseColorImageCpu->rgba.empty()
+            && mat.baseColorImageCpu->width > 0
+            && mat.baseColorImageCpu->height > 0) {
+            sourceImage = mat.baseColorImageCpu.get();
+            break;
+        }
+    }
+
+    // No usable image → cache an empty bundle so the next frame skips
+    // the search, and route the draw at the default texture's set.
+    if (sourceImage == nullptr) {
+        m_modelTextureCache[model] = ModelTexture{};
+        return m_defaultWhiteTexture.descriptorSet;
+    }
+
+    // Upload the texture.
+    ModelTexture bundle{};
+    bundle.width = static_cast<uint32_t>(sourceImage->width);
+    bundle.height = static_cast<uint32_t>(sourceImage->height);
+
+    if (!Create2DTextureFromRGBA(bundle.width, bundle.height,
+                                 sourceImage->rgba.data(),
+                                 sourceImage->sourceLabel.c_str(),
+                                 bundle.image, bundle.memory, bundle.view)) {
+        // Upload failure → cache empty bundle, route to default. The
+        // diagnostic was already printed inside Create2D...; no spam.
+        m_modelTextureCache[model] = ModelTexture{};
+        return m_defaultWhiteTexture.descriptorSet;
+    }
+
+    // Allocate + write the per-Model descriptor set.
+    VkDescriptorSetAllocateInfo dsAlloc{};
+    dsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorPool = m_textureDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &m_textureDescriptorSetLayout;
+
+    VkDevice dev = m_device->GetDevice();
+    if (vkAllocateDescriptorSets(dev, &dsAlloc, &bundle.descriptorSet) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] descriptor set alloc failed for "
+                  << sourceImage->sourceLabel
+                  << " (pool exhausted? bumping kMaxBaseColorDescriptorSets may help)\n";
+        // Free the just-uploaded image so we don't leak; cache empty bundle.
+        if (bundle.view != VK_NULL_HANDLE) vkDestroyImageView(dev, bundle.view, nullptr);
+        if (bundle.image != VK_NULL_HANDLE) vkDestroyImage(dev, bundle.image, nullptr);
+        if (bundle.memory != VK_NULL_HANDLE) vkFreeMemory(dev, bundle.memory, nullptr);
+        m_modelTextureCache[model] = ModelTexture{};
+        return m_defaultWhiteTexture.descriptorSet;
+    }
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = m_baseColorSampler;
+    imgInfo.imageView = bundle.view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = bundle.descriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+
+    // Recompute the same mipLevels formula Create2DTextureFromRGBA used so
+    // the log line reports the actual chain depth without needing to plumb
+    // the value back from the helper. Cheap (a tiny while-loop on uint32) and
+    // keeps the log self-describing — a reviewer reading the playtest log can
+    // confirm the chain landed by spotting "mips=12" on a 2k texture instead
+    // of having to grep the source for the formula.
+    uint32_t logMaxDim = (bundle.width > bundle.height) ? bundle.width : bundle.height;
+    uint32_t logMipLevels = 1U;
+    while (logMaxDim > 1U) {
+        logMaxDim >>= 1U;
+        ++logMipLevels;
+    }
+    std::cout << "[ScenePass] uploaded baseColor "
+              << bundle.width << "x" << bundle.height
+              << " (" << sourceImage->sourceLabel << ", "
+              << (bundle.width * bundle.height * 4U / 1024U) << " KB, mips="
+              << logMipLevels << ")\n";
+
+    m_modelTextureCache.emplace(model, std::move(bundle));
+    return m_modelTextureCache[model].descriptorSet;
 }
 
 } // namespace CatEngine::Renderer

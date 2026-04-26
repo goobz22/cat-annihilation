@@ -52,7 +52,30 @@ public:
     uint32_t GetCurrentImageIndex() const { return m_currentImageIndex; }
 
     VkSemaphore GetImageAvailableSemaphore() const { return m_imageAvailableSemaphores[m_currentFrame]; }
-    VkSemaphore GetRenderFinishedSemaphore() const { return m_renderFinishedSemaphores[m_currentFrame]; }
+    // Render-finished semaphore is indexed by the *acquired image index*, NOT
+    // the frame-in-flight slot. Vulkan's present operation associates the
+    // wait-semaphore lifetime with the image being presented: a present on
+    // image N may still be in flight on the swapchain when frame-in-flight
+    // slot N+1 is signaled — even though the GPU work for slot N+1 has
+    // finished. Reusing one semaphore per frame-slot means the same
+    // semaphore handle gets re-signaled while the previous present still
+    // observes it as the wait, violating
+    // VUID-vkQueueSubmit-pSignalSemaphores-00067 ("each binary semaphore
+    // element of pSignalSemaphores must be unsignaled when the semaphore
+    // signal operation it defines is executed on the device"). One
+    // semaphore per image index is the canonical fix recommended by
+    // https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html.
+    // Pre-2026-04-25 this aliasing manifested as a silent SIGSEGV ~150 ms
+    // post-first-frame whenever per-frame work increased enough to widen
+    // the present-vs-resignal race window (the canonical repro: enable the
+    // idle-variant cycler, which adds per-entity work in
+    // CatAnnihilation::update for 17 animator-bearing entities). With
+    // validation layers ON, the validation-mutex latency masked the race
+    // by serializing the resignal — so the bug was invisible in
+    // --validation playtests but reproducible the moment validation came
+    // off, exactly the failure mode the prior iteration's progress notes
+    // described.
+    VkSemaphore GetRenderFinishedSemaphore() const { return m_renderFinishedSemaphores[m_currentImageIndex]; }
     VkFence GetInFlightFence() const { return m_inFlightFences[m_currentFrame]; }
 
     uint32_t GetCurrentFrameIndex() const { return m_currentFrame; }

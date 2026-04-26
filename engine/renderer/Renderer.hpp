@@ -6,6 +6,7 @@
 #include "../rhi/RHI.hpp"
 #include <memory>
 #include <cstdint>
+#include <string>
 
 namespace CatEngine::Renderer {
 
@@ -223,6 +224,37 @@ public:
     [[nodiscard]] uint32_t GetCurrentSwapchainImageIndex() const {
         return currentSwapchainImageIndex;
     }
+
+    // ========================================================================
+    // Offline capture (headless render golden-image CI)
+    // ========================================================================
+
+    /**
+     * Capture the most-recently-presented swapchain image to an on-disk
+     * binary PPM (P6) file. Intended to be called AFTER the main loop has
+     * exited (i.e. after the last Renderer::EndFrame + Present pair) — at
+     * that point the swapchain image handle at currentSwapchainImageIndex
+     * is still valid, is in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, and its
+     * contents are stable as soon as vkDeviceWaitIdle returns.
+     *
+     * The write is byte-for-byte compatible with CatEngine::Renderer::
+     * ImageCompare::ReadPPM (and therefore SSIMFromFiles), so a golden
+     * image produced once can be checked in to tests/golden/ and used as
+     * a regression reference in a Catch2 integration test.
+     *
+     * Only swapchain formats that map cleanly to 8-bit-per-channel RGB/RGBA
+     * are supported (VK_FORMAT_{B8G8R8A8,R8G8B8A8}_{UNORM,SRGB}); anything
+     * exotic (HDR formats, 10-bit, etc.) causes the function to log and
+     * return false without touching the disk. That's deliberate: silently
+     * dropping channels or gamma-mangling would turn the golden-image CI
+     * into a ticking time bomb the first time a future developer switches
+     * the swapchain to something with a wider color gamut.
+     *
+     * @param path Output file path (directory must exist).
+     * @return true on success, false if the swapchain isn't readable, the
+     *         format isn't supported, or any Vulkan call fails.
+     */
+    bool CaptureSwapchainToPPM(const std::string& path) const;
 
     // ========================================================================
     // Statistics

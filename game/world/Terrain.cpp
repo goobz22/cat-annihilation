@@ -44,6 +44,16 @@ extern void launchGenerateSplatmap(
 // Construction / Destruction
 // ============================================================================
 
+// The no-arg overload delegates to the full overload with a
+// default-constructed `Params{}`. Defining this in the .cpp keeps the
+// `Params()` synthesis out of the Terrain.hpp class body, which is where
+// clang 21 refuses to synthesise default member initializers for the
+// nested struct (see the header comment above the declarations).
+Terrain::Terrain(CatEngine::CUDA::CudaContext& cudaContext)
+    : Terrain(cudaContext, Params{})
+{
+}
+
 Terrain::Terrain(CatEngine::CUDA::CudaContext& cudaContext, const Params& params)
     : m_cudaContext(cudaContext)
     , m_params(params)

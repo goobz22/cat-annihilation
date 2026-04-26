@@ -30,6 +30,15 @@ struct HitInfo {
     bool wasDodged = false;
     bool wasCritical = false;
     int comboStep = 0;
+    // Type of damage the hit delivered (Physical for Sword/Bow melee &
+    // projectile paths, set explicitly by applyDamageWithType() for status-
+    // effect DOTs and elemental spell damage). Read by the game layer's
+    // setOnHitCallback subscriber to dispatch into the per-element hit-burst
+    // particle profile (warm-white for Physical, orange-yellow for Fire,
+    // pale-cyan for Ice, yellow-green for Poison, white-purple for Magic).
+    // Defaults to Physical so an unwired callsite still gets the legacy
+    // warm-white burst — backwards-compatible by construction.
+    DamageType damageType = DamageType::Physical;
 };
 
 /**
@@ -373,12 +382,21 @@ private:
         float hitRadius = 1.0f
     ) const;
 
-    // Damage application
+    // Damage application.
+    // damageType defaults to Physical for the melee + projectile callsites
+    // that don't (yet) tag their damage; future extensions can wire fire-arrow
+    // / staff-bolt damage by passing the matching DamageType. The value is
+    // written to the target's HealthComponent.lastDamageType BEFORE the
+    // health->damage() call so the death path (HealthSystem::handleDeath →
+    // EntityDeathEvent → CatAnnihilation::onEntityDeath) can recover the
+    // killing-blow type for the per-element death-burst dispatcher, and is
+    // also stamped onto HitInfo.damageType for the per-element hit-burst path.
     void applyDamage(
         CatEngine::Entity attacker,
         CatEngine::Entity target,
         float damage,
-        const Engine::vec3& hitPosition
+        const Engine::vec3& hitPosition,
+        DamageType damageType = DamageType::Physical
     );
 
     // Random number generation for crits
@@ -397,6 +415,13 @@ private:
 
     // Game time (for perfect block timing)
     float gameTime_ = 0.0f;
+
+    // Most recent dt, cached in update() so processMeleeAttacks /
+    // processProjectileAttacks can size the "first-frame of swing" detection
+    // window against the real frame delta instead of a hard-coded 60 Hz
+    // assumption. 0 before the first tick — fine, the fallback below the cache
+    // covers the cold-start frame.
+    float lastDt_ = 0.0f;
 };
 
 } // namespace CatGame

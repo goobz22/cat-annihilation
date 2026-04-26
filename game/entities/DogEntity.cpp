@@ -2,6 +2,7 @@
 #include "../components/HealthComponent.hpp"
 #include "../components/MovementComponent.hpp"
 #include "../components/MeshComponent.hpp"
+#include "../components/LocomotionStateMachine.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Quaternion.hpp"
 #include "../../engine/core/Logger.hpp"
@@ -20,13 +21,27 @@ namespace {
 // function so the mapping lives next to the entity factory rather than being
 // threaded through configuration.
 //
-// Meshy-AI produced four rigged variant meshes in `assets/models/meshy_raw_dogs/`:
+// Meshy-AI produced four raw variant meshes in `assets/models/meshy_raw_dogs/`,
+// then `scripts/rig_batch.ps1 -Species dog` re-rigged each one through Blender
+// headless via `rig_quadruped.py`, writing the rigged copies into
+// `assets/models/meshy_raw_dogs/rigged/`. The rigged variants are what we
+// load now because they ship a 34-bone armature + 7 baked clips
+// (idle, walk, run, sitDown, layDown, standUpFromSit, standUpFromLay) — the
+// raw Meshy GLBs were single-node static meshes with `clips=0`, which left
+// every dog frozen in T-pose and identical under the proxy-cube renderer.
+// Loading rigged GLBs gives the Animator real bone hierarchies and clip
+// data to drive (matched at engine-side by a per-frame Animator->update
+// tick added to CatAnnihilation::updateSystems), so when the renderer is
+// upgraded from proxy-cube draws to real skinned-mesh draws, dogs animate
+// out of the box without a second asset migration.
+//
 //   dog_regular.glb — baseline silhouette, ~250k polys, standard proportions
 //   dog_fast.glb    — leaner build, meant for the FastDog speedster
 //   dog_big.glb     — stockier, larger chest — pairs with the +50% scale
 //                      on BigDog for a readable "heavy" enemy
 //   dog_boss.glb    — the boss variant, visually distinct colouring +
 //                      accessories, used at 2.0x scale
+//
 // These are the production art assets that the game ships with; the
 // earlier `assets/models/dog.gltf` hand-authored cube was a placeholder
 // kept in-repo so builds wouldn't break while the rigger baked the real
@@ -36,6 +51,12 @@ namespace {
 // rig AND scaled 1.5x, which keeps the size delta visible without letting
 // enemies look like identical clones with size-only differentiation.
 //
+// The raw (unrigged) GLBs are kept on disk one directory up from the rigged
+// set as the byte-identical Meshy export — useful for diffing rig output
+// against the original silhouette and for re-rigging if rig_quadruped.py
+// gains new features. We do NOT load them at runtime; the rigged copies
+// are the canonical game assets.
+//
 // If any variant file is missing, attachMeshAndAnimator catches the
 // "Failed to open file" throw from ModelLoader::Load and leaves the dog
 // without a mesh — AI and combat still work, the dog just renders as an
@@ -44,14 +65,14 @@ namespace {
 const char* modelPathForType(EnemyType type) {
     switch (type) {
         case EnemyType::BigDog:
-            return "assets/models/meshy_raw_dogs/dog_big.glb";
+            return "assets/models/meshy_raw_dogs/rigged/dog_big.glb";
         case EnemyType::FastDog:
-            return "assets/models/meshy_raw_dogs/dog_fast.glb";
+            return "assets/models/meshy_raw_dogs/rigged/dog_fast.glb";
         case EnemyType::BossDog:
-            return "assets/models/meshy_raw_dogs/dog_boss.glb";
+            return "assets/models/meshy_raw_dogs/rigged/dog_boss.glb";
         case EnemyType::Dog:
         default:
-            return "assets/models/meshy_raw_dogs/dog_regular.glb";
+            return "assets/models/meshy_raw_dogs/rigged/dog_regular.glb";
     }
 }
 
@@ -168,7 +189,55 @@ void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyT
         animator->play("idle", 0.0F);
     }
 
+    // Wire idle <-> walk <-> run on the speed parameter; CatAnnihilation::update
+    // injects per-frame `setFloat("speed", v)` from the entity's
+    // MovementComponent. Mirrors the wiring in CatEntity so dogs visibly
+    // switch poses when chasing the player at run speed vs ambling at walk
+    // speed. Without this every dog stayed in idle while sliding across the
+    // map at WaveSystem-spawned chase velocity.
+    wireLocomotionTransitions(*animator);
+
     mesh.animator = animator;
+
+    // Per-variant flat tint so the four dog variants read as visually
+    // distinct silhouettes when a wave drops a mixed pack — without this,
+    // every dog renders flat white because the dog GLBs (like the cat GLBs)
+    // ship a baseColorTexture but no baseColorFactor, so the entity
+    // pipeline's per-draw color fallback collapses to (1,1,1). The
+    // user-directive scoreboard explicitly calls out "Different dog
+    // variants (regular/big/fast/boss) actually render different GLBs in
+    // the same wave so they're visually distinguishable" — different rigs
+    // alone get us most of the way (silhouette differs, scale differs),
+    // but flat white kills the colour cue. Tints chosen against the green-
+    // grass terrain to read at gameplay distance:
+    //   * Regular = dirt-brown — the baseline you fight all wave.
+    //   * Big     = darker, near-black brown — reads as "heavier" enemy
+    //               even before the +50% scale takes effect.
+    //   * Fast    = lean cool grey — reads as "lighter, quicker" enemy,
+    //               the speedster.
+    //   * Boss    = saturated blood-red — reads instantly as "this is
+    //               the dangerous one" the way the game's HUD highlights
+    //               boss waves.
+    // Once the textured PBR pass lands, this same tint becomes a
+    // multiplier against the sampled fur baseColor — same field, same
+    // callers, just multiplied in the fragment shader instead of pushed
+    // straight through.
+    mesh.hasTintOverride = true;
+    switch (type) {
+        case EnemyType::BigDog:
+            mesh.tintOverride = Engine::vec3(0.35F, 0.25F, 0.20F);
+            break;
+        case EnemyType::FastDog:
+            mesh.tintOverride = Engine::vec3(0.55F, 0.55F, 0.62F);
+            break;
+        case EnemyType::BossDog:
+            mesh.tintOverride = Engine::vec3(0.78F, 0.18F, 0.18F);
+            break;
+        case EnemyType::Dog:
+        default:
+            mesh.tintOverride = Engine::vec3(0.55F, 0.40F, 0.25F);
+            break;
+    }
 
     // Mirror the CatEntity info log so per-variant dog loads show up in
     // playtest logs. The nightly openclaw iteration uses this line to

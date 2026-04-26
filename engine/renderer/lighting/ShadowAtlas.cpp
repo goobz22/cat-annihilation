@@ -10,6 +10,7 @@ namespace Engine::Renderer {
 ShadowAtlas::ShadowAtlas(uint32_t atlasWidth, uint32_t atlasHeight)
     : m_atlasWidth(atlasWidth)
     , m_atlasHeight(atlasHeight)
+    , m_packer(atlasWidth, atlasHeight)
 {
     // Reserve space for allocations
     m_allocations.reserve(64);
@@ -36,6 +37,10 @@ bool ShadowAtlas::initialize(CatEngine::RHI::IRHIDevice* device, uint32_t atlasS
     m_device = device;
     m_atlasWidth = atlasSize;
     m_atlasHeight = atlasSize;
+    // Resize resets the packer's free-rect list to a single atlas-wide
+    // free rect, so any allocations made before initialize() (there
+    // shouldn't be any in normal use, but be defensive) are wiped here.
+    m_packer.resize(atlasSize, atlasSize);
 
     // Create the depth atlas texture. It needs DepthStencil (rendered into),
     // Sampled (read by lighting shaders), and TransferDst (so it can be cleared
@@ -107,8 +112,11 @@ void ShadowAtlas::shutdown() {
 ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateCascadedShadowMap(ShadowResolution resolution) {
     uint32_t size = static_cast<uint32_t>(resolution);
 
-    // Allocate 4 cascades (2x2 grid for efficient packing)
-    // Each cascade is a square region
+    // Allocate 4 cascades. The packer picks the best-fit free rect for
+    // each one independently; with a Guillotine packer they usually
+    // end up in a 2x2 grid when the atlas is empty, but on a partially
+    // full atlas they may scatter across surviving free slots — which
+    // is exactly what cascades + spot shadows sharing one atlas needs.
     ShadowMapHandle handle;
     handle.index = static_cast<uint32_t>(m_cascadedMaps.size());
     handle.generation = m_nextGeneration++;
@@ -116,30 +124,45 @@ ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateCascadedShadowMap(ShadowResolu
     CascadedShadowMap cascadedMap;
     cascadedMap.handle = handle;
 
-    // Allocate 4 regions for cascades
+    // Track placements so we can roll them back cleanly on partial
+    // failure. The old code matched by (x, y) against m_allocations,
+    // which was O(N²) and fragile; the packer now owns the pixels so a
+    // direct free() call against the same PackedRect is the right
+    // rollback primitive.
+    std::array<PackedRect, 4> placedRects{};
+    uint32_t placedCount = 0;
+
     for (uint32_t i = 0; i < 4; ++i) {
-        auto regionOpt = findFreeSpace(size, size);
-        if (!regionOpt.has_value()) {
-            // Failed to allocate, free previously allocated cascades
-            for (uint32_t j = 0; j < i; ++j) {
-                // Mark as free
-                for (auto& alloc : m_allocations) {
-                    if (alloc.active && alloc.region.x == cascadedMap.cascades[j].x &&
-                        alloc.region.y == cascadedMap.cascades[j].y) {
-                        alloc.active = false;
-                        m_usedPixels -= alloc.region.width * alloc.region.height;
-                    }
-                }
+        auto packedOpt = m_packer.insert(size, size);
+        if (!packedOpt.has_value()) {
+            // Roll back every cascade slot we successfully placed
+            // before the failure, both in the packer (pixels) and in
+            // m_allocations (active bit). Entries aren't erased from
+            // m_allocations because other live handles still index
+            // into that vector; we leave them as orphan
+            // (active == false) entries the same way freeShadowMap()
+            // would.
+            for (uint32_t j = 0; j < placedCount; ++j) {
+                m_packer.free(placedRects[j]);
+            }
+            const size_t startIdx = m_allocations.size() - placedCount;
+            for (uint32_t j = 0; j < placedCount; ++j) {
+                m_allocations[startIdx + j].active = false;
             }
             return ShadowMapHandle{}; // Invalid handle
         }
 
-        cascadedMap.cascades[i] = regionOpt.value();
+        const PackedRect rect = packedOpt.value();
+        placedRects[placedCount++] = rect;
+
+        cascadedMap.cascades[i].x = rect.x;
+        cascadedMap.cascades[i].y = rect.y;
+        cascadedMap.cascades[i].width = rect.w;
+        cascadedMap.cascades[i].height = rect.h;
         cascadedMap.cascades[i].generation = handle.generation;
         cascadedMap.cascades[i].active = true;
         cascadedMap.cascades[i].updateUVTransform(m_atlasWidth, m_atlasHeight);
 
-        // Create allocation entry
         AllocationEntry entry;
         entry.region = cascadedMap.cascades[i];
         entry.generation = handle.generation;
@@ -148,8 +171,6 @@ ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateCascadedShadowMap(ShadowResolu
         entry.parentIndex = handle.index;
         entry.active = true;
         m_allocations.push_back(entry);
-
-        m_usedPixels += size * size;
     }
 
     m_cascadedMaps.push_back(cascadedMap);
@@ -164,37 +185,49 @@ ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateShadowMap(ShadowResolution res
 ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateCubemapShadowMap(ShadowResolution resolution) {
     uint32_t size = static_cast<uint32_t>(resolution);
 
-    // Allocate 6 faces (can be packed as 3x2 or 2x3 grid)
+    // Allocate 6 faces. The Guillotine packer will greedily find the
+    // best fit for each face independently; unlike the previous shelf
+    // allocator, there is no strong guarantee the 6 faces end up
+    // spatially adjacent. Shadow sampling looks each face up via the
+    // per-face UV transform, so scattered placement is fine.
     ShadowMapHandle handle;
     handle.index = static_cast<uint32_t>(m_allocations.size());
     handle.generation = m_nextGeneration++;
 
-    // Try to allocate 6 regions
-    std::vector<ShadowRegion> faces;
-    faces.reserve(6);
+    std::array<PackedRect, 6> placedRects{};
+    std::array<ShadowRegion, 6> faces{};
+    uint32_t placedCount = 0;
 
     for (uint32_t i = 0; i < 6; ++i) {
-        auto regionOpt = findFreeSpace(size, size);
-        if (!regionOpt.has_value()) {
-            // Failed to allocate, free previously allocated faces
-            for (const auto& face : faces) {
-                for (auto& alloc : m_allocations) {
-                    if (alloc.active && alloc.region.x == face.x && alloc.region.y == face.y) {
-                        alloc.active = false;
-                        m_usedPixels -= alloc.region.width * alloc.region.height;
-                    }
-                }
+        auto packedOpt = m_packer.insert(size, size);
+        if (!packedOpt.has_value()) {
+            // Roll back placed faces — packer frees pixels, m_allocations
+            // entries are left as inactive orphans so later handles keep
+            // their indices (same rationale as allocateCascadedShadowMap).
+            for (uint32_t j = 0; j < placedCount; ++j) {
+                m_packer.free(placedRects[j]);
+            }
+            const size_t startIdx = m_allocations.size() - placedCount;
+            for (uint32_t j = 0; j < placedCount; ++j) {
+                m_allocations[startIdx + j].active = false;
             }
             return ShadowMapHandle{}; // Invalid handle
         }
 
-        ShadowRegion face = regionOpt.value();
+        const PackedRect rect = packedOpt.value();
+        placedRects[placedCount] = rect;
+
+        ShadowRegion face{};
+        face.x = rect.x;
+        face.y = rect.y;
+        face.width = rect.w;
+        face.height = rect.h;
         face.generation = handle.generation;
         face.active = true;
         face.updateUVTransform(m_atlasWidth, m_atlasHeight);
-        faces.push_back(face);
+        faces[placedCount] = face;
+        placedCount++;
 
-        // Create allocation entry
         AllocationEntry entry;
         entry.region = face;
         entry.generation = handle.generation;
@@ -203,11 +236,11 @@ ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateCubemapShadowMap(ShadowResolut
         entry.parentIndex = handle.index;
         entry.active = true;
         m_allocations.push_back(entry);
-
-        m_usedPixels += size * size;
     }
 
-    // Store first face as the main allocation
+    // Point the "main" allocation entry at the first face. This mirrors
+    // the pre-refactor behaviour so callers that look up the cubemap via
+    // getShadowRegion(handle) still see face 0 as the primary rect.
     if (!m_allocations.empty() && handle.index < m_allocations.size()) {
         m_allocations[handle.index].region = faces[0];
     }
@@ -220,13 +253,19 @@ void ShadowAtlas::freeShadowMap(ShadowMapHandle handle) {
         return;
     }
 
-    // Check if it's a cascaded shadow map
+    // Cascaded shadow map path: free every cascade slot owned by this
+    // handle in BOTH the allocation table (flip active) and the packer
+    // (return pixels so a future allocation can land on the same tile).
+    // The old code only flipped the bit; pixels were effectively leaked
+    // until the whole atlas was cleared.
     if (handle.index < m_cascadedMaps.size() &&
         m_cascadedMaps[handle.index].handle == handle) {
-        // Free all cascade allocations
         for (auto& alloc : m_allocations) {
             if (alloc.active && alloc.isCascaded && alloc.parentIndex == handle.index) {
-                m_usedPixels -= alloc.region.width * alloc.region.height;
+                m_packer.free(PackedRect{
+                    alloc.region.x, alloc.region.y,
+                    alloc.region.width, alloc.region.height
+                });
                 alloc.active = false;
             }
         }
@@ -234,23 +273,30 @@ void ShadowAtlas::freeShadowMap(ShadowMapHandle handle) {
         return;
     }
 
-    // Check if it's a regular allocation
+    // Regular or cubemap allocation path.
     if (handle.index < m_allocations.size() &&
         m_allocations[handle.index].generation == handle.generation &&
         m_allocations[handle.index].active) {
 
-        // If it's a cubemap, free all faces
         if (m_allocations[handle.index].isCubemap) {
+            // Cubemap: free all 6 face allocations grouped by parentIndex.
             for (auto& alloc : m_allocations) {
                 if (alloc.active && alloc.isCubemap && alloc.parentIndex == handle.index) {
-                    m_usedPixels -= alloc.region.width * alloc.region.height;
+                    m_packer.free(PackedRect{
+                        alloc.region.x, alloc.region.y,
+                        alloc.region.width, alloc.region.height
+                    });
                     alloc.active = false;
                 }
             }
         } else {
-            m_usedPixels -= m_allocations[handle.index].region.width *
-                           m_allocations[handle.index].region.height;
-            m_allocations[handle.index].active = false;
+            // Single tile.
+            auto& entry = m_allocations[handle.index];
+            m_packer.free(PackedRect{
+                entry.region.x, entry.region.y,
+                entry.region.width, entry.region.height
+            });
+            entry.active = false;
         }
     }
 }
@@ -258,8 +304,9 @@ void ShadowAtlas::freeShadowMap(ShadowMapHandle handle) {
 void ShadowAtlas::clear() {
     m_allocations.clear();
     m_cascadedMaps.clear();
-    m_shelves.clear();
-    m_usedPixels = 0;
+    // Reset the packer so its free-rect list once again covers the full
+    // atlas extent. This implicitly zeroes usedPixels() on the packer.
+    m_packer.reset();
 }
 
 // ============================================================================
@@ -313,13 +360,19 @@ vec4 ShadowAtlas::getUVTransform(ShadowMapHandle handle) const {
 }
 
 float ShadowAtlas::getUsedSpace() const {
-    uint32_t totalPixels = m_atlasWidth * m_atlasHeight;
-    return totalPixels > 0 ? static_cast<float>(m_usedPixels) / static_cast<float>(totalPixels) : 0.0f;
+    // Density is tracked authoritatively by the packer — it increments
+    // on insert() and decrements on free(), so it stays consistent with
+    // the actual free-rect list even if m_allocations diverges.
+    return m_packer.density();
 }
 
-bool ShadowAtlas::hasSpace(ShadowResolution resolution) {
+bool ShadowAtlas::hasSpace(ShadowResolution resolution) const {
+    // Const, non-mutating probe. The previous shelf-packer version of
+    // this function called findFreeSpace(), which could silently grow a
+    // new shelf — turning a harmless "do I have room?" query into a
+    // subtle state change that inflated perceived occupancy.
     uint32_t size = static_cast<uint32_t>(resolution);
-    return findFreeSpace(size, size).has_value();
+    return m_packer.canFit(size, size);
 }
 
 // ============================================================================
@@ -518,50 +571,22 @@ void ShadowAtlas::clearUnusedRegions(CatEngine::RHI::IRHICommandBuffer* cmd) {
 // ============================================================================
 
 std::optional<ShadowAtlas::ShadowRegion> ShadowAtlas::findFreeSpace(uint32_t width, uint32_t height) {
-    // Simple shelf packing algorithm
-    // Try to find a shelf that fits this region
-
-    for (auto& shelf : m_shelves) {
-        // Check if this region fits in the shelf
-        if (shelf.height >= height && shelf.usedWidth + width <= m_atlasWidth) {
-            ShadowRegion region;
-            region.x = shelf.usedWidth;
-            region.y = shelf.y;
-            region.width = width;
-            region.height = height;
-            region.active = true;
-
-            shelf.usedWidth += width;
-            return region;
-        }
+    // Delegate to the Guillotine packer. The packer owns the spatial
+    // state; this helper is a thin translation layer from PackedRect
+    // to ShadowRegion so the rest of ShadowAtlas keeps its existing
+    // vocabulary. active=true is set here because every call site
+    // immediately records the region as live.
+    auto packedOpt = m_packer.insert(width, height);
+    if (!packedOpt.has_value()) {
+        return std::nullopt;
     }
-
-    // Need to create a new shelf
-    uint32_t shelfY = 0;
-    if (!m_shelves.empty()) {
-        const auto& lastShelf = m_shelves.back();
-        shelfY = lastShelf.y + lastShelf.height;
-    }
-
-    // Check if we have vertical space
-    if (shelfY + height > m_atlasHeight) {
-        return std::nullopt; // No space
-    }
-
-    // Create new shelf
-    Shelf newShelf;
-    newShelf.y = shelfY;
-    newShelf.height = height;
-    newShelf.usedWidth = width;
-    m_shelves.push_back(newShelf);
-
-    ShadowRegion region;
-    region.x = 0;
-    region.y = shelfY;
-    region.width = width;
-    region.height = height;
+    const PackedRect rect = packedOpt.value();
+    ShadowRegion region{};
+    region.x = rect.x;
+    region.y = rect.y;
+    region.width = rect.w;
+    region.height = rect.h;
     region.active = true;
-
     return region;
 }
 
@@ -583,8 +608,6 @@ ShadowAtlas::ShadowMapHandle ShadowAtlas::allocateRegion(uint32_t width, uint32_
     entry.active = true;
 
     m_allocations.push_back(entry);
-    m_usedPixels += width * height;
-
     return handle;
 }
 
@@ -595,7 +618,13 @@ void ShadowAtlas::freeRegion(uint32_t index) {
 
     auto& entry = m_allocations[index];
     if (entry.active) {
-        m_usedPixels -= entry.region.width * entry.region.height;
+        // Return the tile to the packer so future allocations can
+        // reuse it. This is the key behavioural upgrade over the
+        // shelf-packer era, where freed tiles were never reclaimed.
+        m_packer.free(PackedRect{
+            entry.region.x, entry.region.y,
+            entry.region.width, entry.region.height
+        });
         entry.active = false;
     }
 }

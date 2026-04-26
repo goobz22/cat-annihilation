@@ -22,6 +22,11 @@ void Window::initGLFW() {
     }
 }
 
+// Delegating ctor for the no-arg overload. Keeps the default-Config payload
+// in one place (Config's in-class initializers) so a future field added to
+// Config doesn't need a parallel update here.
+Window::Window() : Window(Config{}) {}
+
 Window::Window(const Config& config)
     : m_width(config.width)
     , m_height(config.height)

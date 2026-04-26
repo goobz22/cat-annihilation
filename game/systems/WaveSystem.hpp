@@ -76,6 +76,41 @@ public:
     void startWaves();
 
     /**
+     * Override the wave number that startWaves() will spawn first.
+     *
+     * Why this exists: the user-directive scoreboard's "different dog
+     * variants render different GLBs in the same wave" example listed
+     * `dog_boss.glb` as one of the four expected silhouettes. The
+     * round-robin spawn pattern in spawnEnemy() reserves the boss GLB
+     * for boss waves only (every 5th wave by default), and the
+     * `--exit-after-seconds 30` nightly playtest budget runs out before
+     * wave 5 — so the boss path was never visually confirmed despite
+     * the assets being staged at `assets/models/meshy_raw_dogs/rigged/
+     * dog_boss.glb` since iter 04c8339. Letting an autoplay run start
+     * directly at wave 5 (or any later boss wave) makes the boss
+     * silhouette reachable in a 30-45s frame-dump capture WITHOUT
+     * disturbing the careful design choice to keep boss reserved for
+     * its own wave during regular gameplay.
+     *
+     * Why a setter rather than a startWaves(int) overload: a plain
+     * setter keeps the callers in `CatAnnihilation::onEnterPlaying`
+     * untouched (they still call `startWaves()` exactly as before)
+     * while making the override addressable from main.cpp's CLI
+     * parser via `game->getWaveSystem()->setInitialWave(...)`. The
+     * default of 1 means existing nightlies, golden-image PPMs, and
+     * the interactive launch are bit-for-bit unchanged.
+     *
+     * Bounds: a value < 1 is silently clamped to 1 (the only valid
+     * starting wave is "wave 1 or later"). No upper bound — the wave
+     * system handles arbitrarily high wave numbers via the existing
+     * `calculateEnemyCount`/`calculateHealthScaling` formulas, and
+     * boss-wave detection (`isBossWave`) is modular so wave 25 is
+     * just as legitimate as wave 5 if a viewer wants the late-game
+     * difficulty curve.
+     */
+    void setInitialWave(int wave) { initialWave_ = (wave < 1) ? 1 : wave; }
+
+    /**
      * Force start next wave
      */
     void forceNextWave();
@@ -99,6 +134,30 @@ public:
      * Set callback for wave start
      */
     void setOnWaveStart(WaveCallback callback) { onWaveStart_ = callback; }
+
+    /**
+     * Provide a terrain-height sampler so getSpawnPosition() can snap
+     * the spawned dog's Y to the heightfield instead of inheriting the
+     * player's Y verbatim.
+     *
+     * Why this is required: the previous getSpawnPosition() returned
+     * `playerTransform.position + (cosθ·r, 0, sinθ·r)` for r in
+     * [25 m, 40 m]. That places every dog on a flat plane equal to the
+     * player's Y, but the underlying heightfield rolls 5–15 m across
+     * those distances — so dogs spawned uphill are buried under the
+     * terrain (invisible from any practical camera angle) and dogs
+     * downhill float in mid-air. iter 2026-04-25 ~01:50 UTC's playtest
+     * log shows wave 1 spawning 3 dogs that allocate skinned VBs but
+     * the screenshot shows zero dogs visible — same bug as the buried
+     * NPCs, just a different spawn site.
+     *
+     * Same std::function pattern as NPCSystem so WaveSystem keeps no
+     * hard dependency on Terrain/GameWorld.
+     */
+    using TerrainHeightSampler = std::function<float(float, float)>;
+    void setTerrainHeightSampler(TerrainHeightSampler sampler) {
+        heightSampler_ = std::move(sampler);
+    }
 
 private:
     /**
@@ -179,8 +238,22 @@ private:
     WaveCallback onWaveComplete_;
     WaveCallback onWaveStart_;
 
+    // Terrain-height query, optional. When non-empty, getSpawnPosition()
+    // overrides the inherited player-Y with the heightfield value at the
+    // generated x,z so each dog stands on the surface instead of in the
+    // player's Y-plane. See setTerrainHeightSampler() for the rationale.
+    TerrainHeightSampler heightSampler_;
+
     // System state
     bool wavesStarted_ = false;
+
+    // Override seed for `startWaves()`. Defaults to 1 so the
+    // pre-2026-04-25 startWaves() → startWave(1) call site is
+    // unchanged when no setter is invoked. setInitialWave() (above)
+    // bumps this to skip directly to a later wave for portfolio /
+    // CI captures that need the boss GLB on screen without sitting
+    // through four cleared waves.
+    int initialWave_ = 1;
 };
 
 } // namespace CatGame

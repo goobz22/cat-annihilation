@@ -1,4 +1,5 @@
 #include "PhysicsWorld.hpp"
+#include "CCDPrepass.hpp"
 #include "../CudaError.hpp"
 #include <algorithm>
 #include <chrono>
@@ -207,6 +208,25 @@ void PhysicsWorld::stepSimulation(float dt) {
     }
 
     m_params.deltaTime = dt;
+
+    // 0. CCD pre-pass (continuous collision detection for fast bodies).
+    //
+    // Runs BEFORE upload on the CPU-side body list because it mutates
+    // linearVelocity — the integrator will see the clamped velocity and stop
+    // each fast body short of its earliest swept contact. See CCDPrepass.hpp
+    // for the full rationale (why CPU instead of widening the GPU broadphase,
+    // why pre-upload placement, and which shape pairs the analytic kernels
+    // cover vs fall through to the regular narrow phase).
+    //
+    // The pre-pass is a strict velocity REDUCER — it never accelerates a
+    // body — so it can't destabilise the downstream solver. The worst case
+    // it can produce is "body didn't quite reach the wall this frame", which
+    // is exactly the behaviour the acceptance-bar test demands.
+    const CCDRuntime::PrepassStats ccdStats =
+        CCDRuntime::ApplyCCDPrepass(m_bodies, dt);
+    m_stats.ccdFastBodies = ccdStats.fastBodiesConsidered;
+    m_stats.ccdClamps     = ccdStats.bodiesClamped;
+    m_stats.ccdSmallestTOI = ccdStats.smallestTOI;
 
     // 1. Upload body data to GPU
     uploadToGpu();

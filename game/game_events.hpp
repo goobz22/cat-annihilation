@@ -10,11 +10,21 @@
 #include <typeindex>
 #include <any>
 
+// status_effects.hpp owns the DamageType enum (Physical, Fire, Ice, Poison,
+// Magic, True). EntityDeathEvent now carries a DamageType field with a
+// default-initialised value so the per-element death-burst dispatcher in
+// CatAnnihilation::spawnDeathParticles can pick a particle profile matching
+// the killing element. Forward-declaring the enum is not enough for a
+// default-initialised member (the compiler needs the complete type to lay
+// out the struct AND to know what `DamageType::Physical` refers to), so we
+// pull in the full header. The previous `enum class DamageType;` forward
+// declaration on line 17 is now redundant; removed below.
+#include "systems/status_effects.hpp"
+
 namespace CatGame {
 
 // Forward declarations
 struct QuestReward;
-enum class DamageType;
 enum class ElementType;
 
 /**
@@ -105,6 +115,17 @@ struct DamageEvent {
 
 /**
  * Fired when an entity dies
+ *
+ * `damageType` records the element of the killing blow so the per-element
+ * death-burst dispatcher (CatAnnihilation::spawnDeathParticles → per-element
+ * tuning table) can pick the right particle profile. Sourced from
+ * HealthComponent::lastDamageType at the EntityDeathEvent publish site
+ * (CatAnnihilation.cpp setOnEntityDeath lambda) — that field is written by
+ * CombatSystem::applyDamage / applyDamageWithType BEFORE calling damage(),
+ * so it always reflects the type of the damage that drove hp to zero.
+ * Defaults to Physical so an event published outside the combat path (e.g. a
+ * scripted kill via HealthSystem::kill) still produces the original
+ * orange-red death burst.
  */
 struct EntityDeathEvent {
     CatEngine::Entity entity;
@@ -112,6 +133,7 @@ struct EntityDeathEvent {
     std::string causeOfDeath;
     Engine::vec3 deathPosition;
     bool wasPlayer;
+    DamageType damageType = DamageType::Physical;
 
     EntityDeathEvent(CatEngine::Entity ent, CatEngine::Entity kill, const std::string& cause)
         : entity(ent), killer(kill), causeOfDeath(cause),

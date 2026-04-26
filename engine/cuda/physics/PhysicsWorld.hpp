@@ -199,6 +199,14 @@ public:
         int collisionPairCount;
         int contactCount;
         float lastStepTime;     // in milliseconds
+
+        // CCD runtime pre-pass counters — how many fast-moving bodies were
+        // considered this step, how many had their velocities clamped by the
+        // swept-TOI math, and the earliest TOI observed. The profiler plots
+        // these to surface tunneling hotspots. See CCDPrepass.hpp.
+        int ccdFastBodies{0};
+        int ccdClamps{0};
+        float ccdSmallestTOI{1.0f};
     };
 
     Stats getStats() const { return m_stats; }

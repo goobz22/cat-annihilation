@@ -54,12 +54,33 @@ bool VulkanRHI::InitializeDevice(VkSurfaceKHR surface) {
 }
 
 void VulkanRHI::Shutdown() {
-    // Wait for device to finish
+    // Wait for device to finish — nothing must still be in-flight when we
+    // start tearing the device down.
     if (m_device.GetDevice() != VK_NULL_HANDLE) {
         m_device.WaitIdle();
     }
 
-    // Cleanup device
+    // ------------------------------------------------------------------
+    // Ordering note: the RHI-owned command pool MUST be destroyed while
+    // the VkDevice is still live.
+    //
+    // m_commandPool is a std::unique_ptr<VulkanCommandPool>. Its destructor
+    // eventually calls vkDestroyCommandPool(m_device->GetDevice(), ...).
+    // Member destructors in the enclosing VulkanRHI run in reverse
+    // declaration order *after* this Shutdown() returns, which means that
+    // without this explicit reset() the pool would otherwise be torn down
+    // only after m_device.Shutdown() has already set the VkDevice handle
+    // to VK_NULL_HANDLE — producing the "vkDestroyCommandPool: Invalid
+    // device [VUID-vkDestroyCommandPool-device-parameter]" validation
+    // error seen at shutdown. Resetting here keeps the teardown order
+    // pool-before-device, matching VulkanDevice::Shutdown() itself (which
+    // tears down its own internal m_commandPool before destroying the
+    // VkDevice handle on line 39-46 of VulkanDevice.cpp).
+    // ------------------------------------------------------------------
+    m_commandPool.reset();
+
+    // Cleanup device (destroys VkDevice; after this every VkDevice handle
+    // derived from it is invalid).
     m_device.Shutdown();
 
     // Cleanup debug messenger

@@ -1,4 +1,5 @@
 #include "AudioEngine.hpp"
+#include <cstdlib>
 #include <iostream>
 #include <algorithm>
 
@@ -14,6 +15,30 @@ bool AudioEngine::initialize(const char* deviceName) {
     if (m_initialized) {
         std::cerr << "Audio engine already initialized" << std::endl;
         return true;
+    }
+
+    // User directive 2026-04-26: "cat annihilation has sound effects please
+    // remove them we dont need them right now when it crashes the noise goes
+    // crazy." Default to muted: skip OpenAL device-open entirely so a
+    // segfault during render can't leave a buffer queued and screaming
+    // through the speakers. Re-enable explicitly via `set CAT_AUDIO=1` (cmd)
+    // or `$env:CAT_AUDIO='1'` (PowerShell) before launching when we're
+    // ready to bring sound back. Returning false here is the well-known
+    // failure path — Game::GameAudio::initialize() and the
+    // CatAnnihilation::initialize() caller both already handle it by
+    // logging a warning and continuing silently. playSound / playSound2D
+    // also early-return on !m_initialized below, so no other call site
+    // needs to be touched.
+    // Plain split form (no `if (init; cond)`) so this builds cleanly even
+    // when an editor / language-server falls back to a pre-C++20 mode and
+    // would otherwise flag the init-statement as a "C++17 extension". The
+    // CMake build is C++20 (CMakeLists.txt:153) — the constraint is purely
+    // editor-tooling.
+    const char* audioEnableEnv = std::getenv("CAT_AUDIO"); // NOLINT(concurrency-mt-unsafe) — main-thread init only
+    const bool audioEnabled = audioEnableEnv != nullptr && audioEnableEnv[0] != '\0' && audioEnableEnv[0] != '0';
+    if (!audioEnabled) {
+        std::cout << "Audio engine disabled (default off; set CAT_AUDIO=1 to re-enable)" << std::endl;
+        return false;
     }
 
     // Open audio device
@@ -169,6 +194,11 @@ std::shared_ptr<AudioSource> AudioEngine::playSound(const std::string& bufferNam
                                                     const std::array<float, 3>& position,
                                                     float gain,
                                                     AudioMixer::Channel channel) {
+    // Defensive no-op when audio is disabled (CAT_AUDIO unset) or device
+    // open failed. Without this guard, callers that didn't check
+    // isInitialized() would still construct an AudioSource against a null
+    // OpenAL context and crash on the first AL call.
+    if (!m_initialized) return nullptr;
     auto buffer = getBuffer(bufferName);
     if (!buffer) {
         std::cerr << "Buffer not found: " << bufferName << std::endl;
@@ -196,6 +226,10 @@ std::shared_ptr<AudioSource> AudioEngine::playSound(const std::string& bufferNam
 std::shared_ptr<AudioSource> AudioEngine::playSound2D(const std::string& bufferName,
                                                       float gain,
                                                       AudioMixer::Channel channel) {
+    // Mirror of the playSound() guard — same rationale: when audio is
+    // disabled or the device failed to open, this is a no-op rather
+    // than a crash on a null AL context.
+    if (!m_initialized) return nullptr;
     auto buffer = getBuffer(bufferName);
     if (!buffer) {
         std::cerr << "Buffer not found: " << bufferName << std::endl;

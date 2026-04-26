@@ -141,12 +141,32 @@ void Animator::play(const std::string& stateName, float transitionDuration) {
         return;
     }
 
+    // Re-arm playback flags BEFORE we branch on which path to take.
+    //
+    // Without this, a non-looping clip whose `m_currentTime` has reached
+    // its duration (updateAnimation flips `m_playing = false` at that
+    // point — see line 351) would silently swallow the play() request:
+    // startTransition() flips `m_transitioning = true` but never touches
+    // `m_playing`, so the next update() call exits at the `!m_playing`
+    // guard at the top of update() and the requested transition never
+    // advances. Symptom (caught while wiring idle-variant cycling): a
+    // stationary cat that finished the `sitDown` clip would freeze in
+    // the seated pose forever even after game code called
+    // `play("standUpFromSit")` on it.
+    //
+    // Resuming m_playing in the same-state-but-stopped case is also
+    // intentional — callers that want a non-looping clip restarted
+    // from t=0 are expected to invoke `stop()` then `play()`, the
+    // documented restart-from-scratch idiom; setting m_playing here
+    // is a no-op for that path because m_currentTime stays at the
+    // final frame until stop() resets it.
+    m_playing = true;
+    m_paused = false;
+
     if (m_currentStateName.empty()) {
         // First time playing
         m_currentStateName = stateName;
         m_currentTime = 0.0f;
-        m_playing = true;
-        m_paused = false;
         sampleCurrentAnimation();
     } else if (m_currentStateName != stateName) {
         // Transition to new state
@@ -315,9 +335,27 @@ void Animator::updateTransition(float deltaTime) {
         m_currentTime = targetState->animation->normalizeTime(m_currentTime, true);
     }
 
-    // Sample both poses
+    // Sample both poses.
+    //
+    // targetPose seeds with bindPose (not identity) for the same reason
+    // sampleCurrentAnimation does — Animation::sample now merges per
+    // path-component, so any bone the target clip doesn't animate must
+    // start at its bind transform. The previous code initialized to
+    // identity, which collapsed every bone the clip didn't touch onto
+    // the world origin — visible during idle->walk crossfades on rigs
+    // where some bones are only animated by one of the two clips
+    // (a tail bone with translation in walk but identity in idle, or
+    // vice versa) as a brief "snap to root" pop in the unanimated bones.
+    // Bind-seeded crossfades read smoothly because both endpoints
+    // share a common rest baseline.
     std::vector<Transform> previousPose = m_previousPose;
-    std::vector<Transform> targetPose(m_skeleton->getBoneCount(), Transform::identity());
+    const auto& bindPose = m_skeleton->getBindPose();
+    std::vector<Transform> targetPose;
+    if (bindPose.size() == m_skeleton->getBoneCount()) {
+        targetPose = bindPose;
+    } else {
+        targetPose.assign(m_skeleton->getBoneCount(), Transform::identity());
+    }
 
     targetState->animation->sample(m_currentTime, targetPose);
 
@@ -365,6 +403,31 @@ void Animator::sampleCurrentAnimation() {
     // Initialize pose if needed
     if (m_currentPose.size() != m_skeleton->getBoneCount()) {
         initializePose();
+    }
+
+    // Seed m_currentPose with the bind pose BEFORE sampling.
+    //
+    // Animation::sample() now merges per-component (translation /
+    // rotation / scale) into outTransforms in-place rather than
+    // overwriting per-channel — see the long block-comment in
+    // engine/animation/Animation.cpp for the bug it fixes. Per-component
+    // merge is correct only if the input pose holds the bind transforms
+    // for any bone the clip doesn't animate; otherwise an unanimated
+    // bone would inherit whatever was left over from the previous frame
+    // (e.g. a sit-pose translation lingering after the animator switches
+    // back to idle, or — on the very first call after this animator was
+    // constructed — whatever default-init values Transform's constructor
+    // uses).
+    //
+    // The bind pose is the canonical "rest" state of the skeleton
+    // produced by ModelLoader from the glTF node hierarchy. Re-seeding
+    // each frame is O(boneCount) memcpy on a typical ~37-bone Meshy cat
+    // rig — measurable in nanoseconds against the per-vertex CPU
+    // skinning loop that already costs ~150k vertex transforms per
+    // animated entity. Worth it for correctness.
+    const auto& bindPose = m_skeleton->getBindPose();
+    if (bindPose.size() == m_currentPose.size()) {
+        m_currentPose = bindPose;
     }
 
     // Sample the animation

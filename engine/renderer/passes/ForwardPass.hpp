@@ -19,14 +19,42 @@ class GPUScene;
  * - Renders transparent geometry (glass, water, particles, UI)
  * - Depth test against G-Buffer depth (read-only, no writes)
  * - Alpha blending enabled
- * - Back-to-front sorting for correct transparency
+ * - Two interchangeable transparency algorithms, selectable at runtime:
+ *     * SortedBackToFront — the classic "sort every instance by distance
+ *       from the camera and draw far-to-near with SrcAlpha/OneMinusSrcAlpha
+ *       blend." Correct only for non-intersecting geometry; fast for low
+ *       transparent counts.
+ *     * WeightedBlendedOIT — McGuire/Bavoil 2013. Two offscreen targets
+ *       (RGBA16F accum + R8 reveal), a fragment-level weight function, and a
+ *       full-screen composite pass that blends back into the HDR buffer.
+ *       Order-independent, robust to intersecting geometry, no sort cost.
+ *       Math lives in engine/renderer/OITWeight.hpp and is mirrored exactly
+ *       in shaders/forward/transparent_oit_accum.frag + oit_composite.frag.
  * - Can use either full PBR lighting or simplified forward shading
  * - Writes to the same HDR buffer as the lighting pass
  *
- * Blend Mode: SrcAlpha + OneMinusSrcAlpha
+ * Blend Mode (sorted path): SrcAlpha + OneMinusSrcAlpha
+ * Blend Mode (WBOIT accum): additive on accum, multiplicative (Zero,
+ *                          OneMinusSrcColor) on reveal
+ * Blend Mode (WBOIT composite): SrcAlpha + OneMinusSrcAlpha against HDR
  */
 class ForwardPass : public RenderPass {
 public:
+    /**
+     * Transparency algorithm selector.
+     *
+     * Lives here (not in RenderGraph) because the choice is local to the
+     * forward pass — the render-graph flag in the backlog is just the boolean
+     * that maps onto this enum. Keeping the old path available is required
+     * so comparison screenshots ("sort vs WBOIT") can be captured without a
+     * rebuild; a reviewer-facing ImGui toggle will eventually flip this
+     * enum at runtime.
+     */
+    enum class TransparencyMode {
+        SortedBackToFront,
+        WeightedBlendedOIT
+    };
+
     /**
      * Transparent object sorting key
      * Used to sort objects back-to-front for correct alpha blending
@@ -78,6 +106,21 @@ public:
     void SetSimplifiedLighting(bool enabled) { m_UseSimplifiedLighting = enabled; }
 
     /**
+     * Select which transparency algorithm to use at render time.
+     *
+     * Safe to call at any time between frames; the next Execute() picks up
+     * the new mode. Both pipelines are built at Setup() so switching modes
+     * does not trigger a pipeline compile.
+     */
+    void SetTransparencyMode(TransparencyMode mode) { m_TransparencyMode = mode; }
+
+    /**
+     * Read the currently-selected transparency algorithm. Used by the ImGui
+     * debug panel (once it lands) and by tests that black-box the pass.
+     */
+    TransparencyMode GetTransparencyMode() const { return m_TransparencyMode; }
+
+    /**
      * Update the camera world-space position used for back-to-front sorting
      * of transparent objects. Should be called once per frame by the Renderer
      * before Execute().
@@ -111,21 +154,36 @@ private:
     RHI::IRHIRenderPass* m_RenderPass = nullptr;
     void* m_Framebuffer = nullptr;
 
-    // Pipelines
+    // Pipelines — sort path
     RHI::IRHIPipeline* m_TransparentPipeline = nullptr;      // Standard transparent geometry
     RHI::IRHIPipeline* m_TransparentSimplePipeline = nullptr; // Simplified lighting
     RHI::IRHIPipeline* m_ParticlePipeline = nullptr;         // Particle rendering
     RHI::IRHIPipelineLayout* m_PipelineLayout = nullptr;
 
+    // Pipelines — WBOIT path. Both are created at Setup() even if the caller
+    // never flips m_TransparencyMode to WeightedBlendedOIT; the extra GPU
+    // memory is a handful of VkPipeline objects and the ahead-of-time build
+    // avoids a per-frame hitch on the first OIT toggle.
+    RHI::IRHIPipeline* m_OITAccumPipeline = nullptr;         // Accum MRT pipeline
+    RHI::IRHIPipeline* m_OITCompositePipeline = nullptr;     // Full-screen composite
+    RHI::IRHIRenderPass* m_OITAccumRenderPass = nullptr;     // 2 color attachments (accum + reveal)
+    RHI::IRHIRenderPass* m_OITCompositeRenderPass = nullptr; // Writes HDR target
+    RHI::IRHIPipelineLayout* m_OITCompositePipelineLayout = nullptr;
+
     // Descriptor sets (per frame)
     std::vector<RHI::IRHIDescriptorSet*> m_DescriptorSets;
 
-    // Shaders
+    // Shaders — sort path
     RHI::IRHIShader* m_ForwardVertShader = nullptr;
     RHI::IRHIShader* m_TransparentFragShader = nullptr;
     RHI::IRHIShader* m_TransparentSimpleFragShader = nullptr;
     RHI::IRHIShader* m_ParticleVertShader = nullptr;
     RHI::IRHIShader* m_ParticleFragShader = nullptr;
+
+    // Shaders — WBOIT path
+    RHI::IRHIShader* m_OITAccumFragShader = nullptr;
+    RHI::IRHIShader* m_OITCompositeVertShader = nullptr;
+    RHI::IRHIShader* m_OITCompositeFragShader = nullptr;
 
     // Pass references
     GeometryPass* m_GeometryPass = nullptr;   // For depth buffer
@@ -137,6 +195,12 @@ private:
 
     // Settings
     bool m_UseSimplifiedLighting = false;
+
+    // Default is the legacy sort path so behaviour is unchanged for callers
+    // that never touch SetTransparencyMode. Switching to WeightedBlendedOIT
+    // is an opt-in decision, matching the backlog's "keep old path available
+    // for comparison screenshots" requirement.
+    TransparencyMode m_TransparencyMode = TransparencyMode::SortedBackToFront;
 
     // Camera world position (updated per frame by Renderer for back-to-front sort)
     Engine::vec3 m_CameraPosition = Engine::vec3(0.0f);

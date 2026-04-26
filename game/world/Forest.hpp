@@ -76,7 +76,14 @@ public:
 
         uint32_t seed = 67890;          // Random seed
 
-        Params() = default;
+        // WHY no explicit `Params() = default;` here: clang 21 rejects
+        // an in-class-defaulted constructor for a nested struct that
+        // owns default member initializers, because synthesis has to
+        // happen in a complete-class context and the enclosing class
+        // (`Forest`) isn't complete yet. The implicit default ctor
+        // behaves identically and is synthesised lazily at the first
+        // call site (in Forest.cpp's delegating constructor), which
+        // is legal. See Terrain.hpp for the full analysis.
     };
 
     /**
@@ -84,8 +91,17 @@ public:
      *
      * @param terrain Reference to terrain (for height and slope queries)
      * @param params Generation parameters
+     *
+     * WHY two overloads instead of `= Params()` as a default argument:
+     * clang 21 refuses to synthesise the nested `Params()` default
+     * constructor inside `Forest`'s class body, because doing so would
+     * require using `Params`'s default member initializers in a
+     * non-complete-class context. Moving the `Params{}` construction
+     * out of the header (into the delegating body in Forest.cpp) puts
+     * the synthesis at a call site where `Forest` is already complete.
      */
-    Forest(const Terrain* terrain, const Params& params = Params());
+    explicit Forest(const Terrain* terrain);
+    Forest(const Terrain* terrain, const Params& params);
 
     /**
      * @brief Destructor

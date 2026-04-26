@@ -3,6 +3,15 @@
 #include <functional>
 #include <algorithm>
 
+// status_effects.hpp owns DamageType (Physical, Fire, Ice, Poison, Magic, True).
+// We pull it in here so HealthComponent can record the *type* of the damage
+// that brought the entity to zero hp — that field is read back by the game
+// layer's setOnEntityDeath subscriber when constructing EntityDeathEvent so the
+// per-element death-burst dispatcher can pick the right particle profile. The
+// components→systems direction is unusual but already established in this
+// codebase (game/components/combat_components.hpp:4 includes the same header).
+#include "../systems/status_effects.hpp"
+
 namespace CatGame {
 
 /**
@@ -35,6 +44,19 @@ struct HealthComponent {
     bool isDead = false;               // Whether entity has died
     float deathTimer = 0.0f;           // Time since death
     float deathAnimationDuration = 1.0f; // How long death animation lasts
+
+    // Most recent damage type applied to this entity. CombatSystem::applyDamage
+    // and applyDamageWithType both write this BEFORE calling damage() so the
+    // value reflects the killing-blow type if the same call also reduces hp to
+    // zero. The game layer's setOnEntityDeath subscriber reads it when
+    // populating EntityDeathEvent.damageType so the per-element death-burst
+    // dispatcher (CatAnnihilation::spawnDeathParticles) picks the right
+    // visual profile (orange-red for Physical, orange-yellow rising for Fire,
+    // pale-cyan drifting for Ice, yellow-green lingering for Poison,
+    // white-purple radial for Magic, white-yellow for True). Defaults to
+    // Physical so an unwired damage path still produces the original
+    // orange-red death burst — backwards-compatible by construction.
+    DamageType lastDamageType = DamageType::Physical;
 
     // Callbacks
     std::function<void(float)> onDamage = nullptr;     // Called when damage is taken (amount)

@@ -3,6 +3,7 @@
 
 #include "Light.hpp"
 #include "LightManager.hpp"
+#include "ShadowAtlasPacker.hpp"
 #include "../../math/Vector.hpp"
 #include "../../math/Matrix.hpp"
 #include "../../rhi/RHI.hpp"
@@ -202,10 +203,13 @@ public:
     float getUsedSpace() const;
 
     /**
-     * Check if atlas has space for a given resolution
-     * Note: This may modify internal tracking state
+     * Non-mutating query: does the atlas currently have a free region
+     * big enough to hold a shadow map at @p resolution? Delegates to
+     * GuillotinePacker::canFit, which scans the free-rect list without
+     * modifying it (the previous shelf-packer version silently grew a
+     * new shelf on probe, inflating apparent occupancy).
      */
-    bool hasSpace(ShadowResolution resolution);
+    bool hasSpace(ShadowResolution resolution) const;
 
     // ========================================================================
     // Shadow Rendering
@@ -276,9 +280,9 @@ private:
     };
 
     /**
-     * Find free space in atlas for given size
-     * Uses simple shelf packing algorithm
-     * @return Optional region if space found
+     * Find free space in atlas for given size via the Guillotine packer.
+     * @return Optional ShadowRegion with x/y/w/h populated (generation,
+     *         uvTransform, active are set by the caller).
      */
     std::optional<ShadowRegion> findFreeSpace(uint32_t width, uint32_t height);
 
@@ -288,7 +292,9 @@ private:
     ShadowMapHandle allocateRegion(uint32_t width, uint32_t height);
 
     /**
-     * Mark region as free
+     * Mark region as free AND return its pixels to the packer so the
+     * tile can be reused. The shelf-packer era of this function only
+     * flipped the active bit; pixels were lost until clear().
      */
     void freeRegion(uint32_t index);
 
@@ -330,18 +336,15 @@ private:
     std::vector<AllocationEntry> m_allocations;
     std::vector<CascadedShadowMap> m_cascadedMaps;
 
-    // Shelf packing data (simple allocator)
-    struct Shelf {
-        uint32_t y = 0;          // Y position of shelf
-        uint32_t height = 0;     // Height of shelf
-        uint32_t usedWidth = 0;  // Used width in shelf
-    };
-    std::vector<Shelf> m_shelves;
+    // Variable-size region packer. Owns all spatial bookkeeping for the
+    // atlas — m_usedPixels was previously tracked in this class but is
+    // now derived from m_packer.usedPixels(). See ShadowAtlasPacker.hpp
+    // for the algorithm write-up.
+    GuillotinePacker m_packer;
 
     // State
     bool m_initialized = false;
     uint32_t m_nextGeneration = 1;
-    uint32_t m_usedPixels = 0;
 };
 
 } // namespace Engine::Renderer

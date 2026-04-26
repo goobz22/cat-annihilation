@@ -4,7 +4,9 @@
       "Bash(ls:*)",
       "Bash(rm:*)",
       "Bash(find:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(nvcc:*)"
     ],
     "deny": []
   }

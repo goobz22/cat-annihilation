@@ -3,6 +3,14 @@
 #include "../GPUScene.hpp"
 #include "../Mesh.hpp"
 #include "../../math/Frustum.hpp"
+// VulkanShader.hpp is included here so the shader hot-reload registration
+// can dynamic_cast IRHIShader* down to the concrete VulkanShader* and call
+// ReloadFromSPIRV(). The alternative — adding a Reload method to the abstract
+// IRHIShader interface — would force every future backend (D3D12, Metal) to
+// implement a feature that's currently debug-build-only on the Vulkan path.
+// Keeping the cast contained to the single registration site avoids leaking
+// the hot-reload concept across the whole RHI abstraction.
+#include "../../rhi/vulkan/VulkanShader.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -140,6 +148,32 @@ void GeometryPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frame
         return;
     }
 
+    // Shader hot-reload: rebuild pipelines before any draws this frame if a
+    // reload landed since the last Execute. We MUST do this outside a
+    // BeginRenderPass + before any BindPipeline — vkDestroyPipeline can only
+    // run when no recording command buffer references the victim, and
+    // RebuildPipelinesForHotReload()'s internal WaitIdle makes that
+    // guarantee concrete. Clearing m_PipelinesDirty before the rebuild call
+    // means a reload-failure (CreateGraphicsPipeline returning nullptr) is a
+    // one-shot: the null-pipeline null-guard below stops this frame, the
+    // developer fixes the shader, the next successful apply() sets dirty
+    // again, and we retry. Leaving the flag set on failure would retry
+    // every frame against the same broken shader — a spin the log can't
+    // distinguish from a legitimate new save.
+    if (m_PipelinesDirty) {
+        m_PipelinesDirty = false;
+        RebuildPipelinesForHotReload();
+    }
+
+    // Null-guard the pipelines — a failed reload leaves them null, and
+    // BindPipeline(nullptr) is a Vulkan validation error that would crash
+    // the frame. Silent skip keeps the log + ImGui HUD readable while the
+    // developer fixes the shader; the "[hot-reload] FAILED ..." warn line
+    // already told them exactly what to fix.
+    if (!m_OpaquePipeline) {
+        return;
+    }
+
     // Begin render pass
     RHI::Rect2D renderArea{};
     renderArea.x = 0;
@@ -246,6 +280,19 @@ void GeometryPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frame
 void GeometryPass::Cleanup() {
     if (!m_RHI) {
         return;
+    }
+
+    // Unregister hot-reload subscribers BEFORE destroying the shaders they
+    // point into. Unregister is idempotent so the zero-valued sentinel
+    // handles (set when Register never ran, e.g. an early-return from
+    // CreatePipelines) are harmless no-ops. After this call the driver
+    // cannot reach the soon-to-be-destroyed IRHIShader* + `this` pointer.
+    {
+        auto& registry = RHI::ShaderReloadRegistry::Get();
+        for (auto& handle : m_ShaderReloadHandles) {
+            registry.Unregister(handle);
+            handle = {};
+        }
     }
 
     // Destroy pipelines
@@ -432,6 +479,98 @@ bool GeometryPass::CreatePipelines() {
     if (!m_SkinnedVertShader) {
         std::cerr << "[GeometryPass] CreateShader failed for skinned.vert\n";
         return false;
+    }
+
+    // --- Register shaders with the hot-reload registry ---------------------
+    //
+    // Each Register() call binds a watched SOURCE path (what the driver
+    // emits from recursive_directory_iterator under shaders/) to:
+    //   1. an `apply` callback that installs the freshly-compiled SPIR-V
+    //      bytes into the concrete VulkanShader's VkShaderModule via
+    //      ReloadFromSPIRV() — which is safe to call on a live shader
+    //      because pipelines built earlier still reference an internal
+    //      Vulkan-side copy (see VulkanShader.hpp comment on
+    //      ReloadFromSPIRV for the preservation guarantee); and
+    //   2. an `onReloaded` callback that flags m_PipelinesDirty so the
+    //      next Execute() tears down + rebuilds the opaque + skinned
+    //      VkPipelines against the in-place-swapped VkShaderModule
+    //      (the pipeline caches the shader stage create info at
+    //      pipeline-create time, so a module swap alone does NOT
+    //      redirect already-built pipelines).
+    //
+    // We capture `this` in onReloaded for the dirty-flag write. `this` is
+    // safe because Cleanup() calls Unregister() on every handle BEFORE the
+    // pass destructs, so the callback can never fire against a destroyed
+    // GeometryPass. The apply callback captures the shader pointer by
+    // value — also safe because the pointer is only invalidated in
+    // Cleanup() via DestroyShader, which is sequenced AFTER Unregister()
+    // on the same thread.
+    //
+    // Source paths mirror the CMake `compile_shaders` rule in
+    // CMakeLists.txt: shaders/geometry/gbuffer.{vert,frag} and
+    // shaders/geometry/skinned.vert. Those are the exact strings the
+    // driver's recursive enumeration emits via path.generic_string().
+    {
+        auto& registry = RHI::ShaderReloadRegistry::Get();
+
+        auto makeApplyFn = [](RHI::IRHIShader* shader) {
+            return [shader](const std::vector<uint8_t>& bytes) -> bool {
+                // dynamic_cast returns nullptr if the backend isn't
+                // Vulkan (future D3D12 / Metal backends); in that case
+                // we return false so the registry logs the reload as
+                // "0 applied" and the pass's onReloaded hook doesn't
+                // fire — we DON'T want to rebuild pipelines around a
+                // shader that wasn't actually updated.
+                auto* vulkanShader = dynamic_cast<RHI::VulkanShader*>(shader);
+                if (!vulkanShader) return false;
+                return vulkanShader->ReloadFromSPIRV(bytes);
+            };
+        };
+        auto markDirty = [this]() { m_PipelinesDirty = true; };
+
+        m_ShaderReloadHandles[0] = registry.Register(
+            "shaders/geometry/gbuffer.vert",
+            makeApplyFn(m_GeometryVertShader),
+            markDirty);
+        m_ShaderReloadHandles[1] = registry.Register(
+            "shaders/geometry/gbuffer.frag",
+            makeApplyFn(m_GeometryFragShader),
+            markDirty);
+        m_ShaderReloadHandles[2] = registry.Register(
+            "shaders/geometry/skinned.vert",
+            makeApplyFn(m_SkinnedVertShader),
+            markDirty);
+    }
+
+    // All pipeline state + the two CreateGraphicsPipeline calls live in
+    // RebuildPipelinesForHotReload() so the hot-reload path can reuse the
+    // exact same construction sequence without duplicating 80+ lines of
+    // pipeline-state setup (which, if copy-pasted, would drift over time
+    // and produce mysterious "the reloaded pipeline looks wrong" bugs).
+    return RebuildPipelinesForHotReload();
+}
+
+bool GeometryPass::RebuildPipelinesForHotReload() {
+    // Safety: Execute() null-guards both pipelines so it's OK to reach this
+    // method with m_OpaquePipeline / m_SkinnedPipeline already live — we
+    // just need to tear them down before recreating. A WaitIdle is the
+    // minimal-effort proof that no in-flight command buffer is still
+    // recording against them. Hot-reload is an explicit developer
+    // Ctrl+S, so a one-frame GPU stall is fine; production draws don't
+    // hit this method.
+    if (!m_RHI) {
+        return false;
+    }
+    if (m_OpaquePipeline || m_SkinnedPipeline) {
+        m_RHI->WaitIdle();
+        if (m_OpaquePipeline) {
+            m_RHI->DestroyPipeline(m_OpaquePipeline);
+            m_OpaquePipeline = nullptr;
+        }
+        if (m_SkinnedPipeline) {
+            m_RHI->DestroyPipeline(m_SkinnedPipeline);
+            m_SkinnedPipeline = nullptr;
+        }
     }
 
     // Vertex input state for the opaque pipeline. The single source of truth
