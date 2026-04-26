@@ -9322,3 +9322,115 @@ The 33.7 % datapoint in #14 is uncomfortably close to the gate -- if a future it
 **Forbidden-pattern check**: numbers cited above are from `cat_iter_evidence` rows #11-#15 in the SQLite db at `C:/Users/Matt-PC/openclaw/data/flow.db`, queryable as `SELECT id, fpsMin, fpsAvg, topColorPct, passes, failReasons FROM cat_iter_evidence ORDER BY id DESC LIMIT 5`. Not "feels green", not "tests passed" -- numbers from rows the cat-verify subprocess wrote.
 
 **Next visible delta**: with the regression-halt directive's hard gates green across three stability runs, the loop can move off "stop adding features" and back into the SHIP-THE-CAT directive's visible-progress menu. Highest-leverage next delta: wire up `shaders/sky/sky_gradient.frag` (already authored in the unstaged set) into the renderer so the sky-blue stretch becomes a vertical gradient rather than a single (188, 188, 213) blob. That gives ~12-15 pp of additional `topColorPct` headroom (the dominant pixel value would drop from ~28-34 % to ~12-18 %) AND visibly improves the portfolio screenshot -- a horizon line with sky color variation reads as "atmosphere", not "blank canvas." Lower-leverage alternative: GPU vertex skinning (long-planned, larger scope) so the visible cats and dogs animate at full fps without the CPU-skinning path that the prior iteration's gate-off relied on. Pick the sky gradient first -- one shader, ~50 lines of `Renderer.cpp` wiring, immediate visible delta.
+
+---
+
+## 2026-04-26 ~10:50 UTC — Close pre-existing test_golden_image.cpp validate failure via configure_file (regression-halt iteration, ~30-iter-stale bug)
+
+**What**: Replaced the `target_compile_definitions(integration_tests PRIVATE CAT_GOLDEN_IMAGE_DIR=...)` macro plumbing with a CMake `configure_file()`-generated header (`tests/integration/test_paths.hpp.in` -> `${CMAKE_BINARY_DIR}/tests/integration/test_paths.hpp`) holding `constexpr std::string_view CatTests::kCatGoldenImageDir` / `kCatFramedumpCandidatePath`. `tests/integration/test_golden_image.cpp` now `#include "test_paths.hpp"` and reads the constants at runtime instead of expanding `-D` macros. The `target_include_directories(integration_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/integration)` line plumbs the generated header onto the test target's include path.
+
+**Why**: Every `bun bridge/cat.ts validate` for the last ~30 iterations has flagged `tests/integration/test_golden_image.cpp` as a severity-2 clang frontend syntax failure with this exact evidence:
+
+```
+#define CAT_GOLDEN_IMAGE_DIR \C:/Users/Matt-PC/Documents/App
+                              ^
+2 errors generated.
+```
+
+The root cause is shell tokenization, not CMake or clang individually. CMake's `target_compile_definitions(... PATH="${PROJECT_ROOT}/tests/golden")` produces this entry in `build-ninja/compile_commands.json`:
+
+```
+-DCAT_GOLDEN_IMAGE_DIR=\\C:/Users/Matt-PC/Documents/App Development/cat-annihilation/tests/../tests/golden\\
+```
+
+JSON-decoded that is `-DCAT_GOLDEN_IMAGE_DIR=\C:/.../App Development/...\` — leading and trailing backslashes that CMake injected as a quoting hint that ninja's own shell happens to round-trip correctly, but on a checkout whose absolute path contains a SPACE ("App Development"), the validator's shell tokenizer splits the value at the space and clang's `-D` parser sees an unterminated `\C:/Users/Matt-PC/Documents/App` expansion. The ninja build was never affected (ninja runs the command via its own shell with the original un-mangled args), so the validator was the only consumer hitting the bug — but the validator is the regression scoreboard for `cat.ts validate`, so the file flagged severity-2 for ~30 iters (every progress entry from `2026-04-25T07:00Z` onward says "untouched by this iteration; pre-existing"). Today's iteration finally touches it.
+
+`configure_file()` sidesteps the entire shell-quoting problem: CMake substitutes `@VAR@` placeholders directly into a C++ source template at configure time, and the resulting header lands in the build tree as a plain `.hpp` with the path bound into a `constexpr std::string_view`. No `-D` flags, no `compile_commands.json` entries, no shell tokenization. The header survives every consumer (ninja, validate, IDE) identically.
+
+**Files touched**:
+- `tests/integration/test_paths.hpp.in` — new template, ~30 lines including a 14-line WHY-comment explaining the configure_file rationale + the previous `-D` failure mode it replaces.
+- `tests/CMakeLists.txt` — replaced the `target_compile_definitions(... CAT_GOLDEN_IMAGE_DIR / CAT_FRAMEDUMP_CANDIDATE_PATH)` block with `set(...)` + `configure_file(... @ONLY)` + `target_include_directories(... ${CMAKE_CURRENT_BINARY_DIR}/integration)`. Replaced the original 26-line WHY-comment with a 38-line one citing the ~30-iter validate bug, the JSON-decoded compile_commands.json line that proved it, and the configure_file mitigation.
+- `tests/integration/test_golden_image.cpp` — removed the `#ifndef CAT_GOLDEN_IMAGE_DIR / # define ...` fall-back block (no longer needed), added `#include "test_paths.hpp"` with a 9-line WHY-comment, replaced `std::filesystem::path goldenDir{CAT_GOLDEN_IMAGE_DIR}` with `goldenDir{CatTests::kCatGoldenImageDir}` and `const std::string candidatePath = CAT_FRAMEDUMP_CANDIDATE_PATH` with `const std::string candidatePath{CatTests::kCatFramedumpCandidatePath}`. The constructor change is `std::string` from `std::string_view` (C++17, zero-copy on the const-data path the constexpr view points into).
+
+**Verification (HARD GATES, all four)**:
+
+1. **Build**: ninja `[34/34] Linking CXX executable CatAnnihilation.exe; Translating compile_commands.json MSVC->clang for openclaw validate; ...; translated 200/200 compile_commands entries to clang form` — 91.7s wall, zero new warnings on touched files (the CUDA warnings about `nz` / `BLOCK_SIZE` are pre-existing, untouched by this change).
+
+2. **Validate**: `{ "filesChecked": 200, "filesFailed": 0, "issues": [], "durationMs": 176148 }` — first all-green validate this session. The previously-quoted severity-2 on `tests/integration/test_golden_image.cpp` is gone because the file no longer expands `-D` macros at all; the generated header is plain C++ source the validator sees uniformly.
+
+3. **30s autoplay (HARD GATES)**: cat-verify evidence row #17, sha=`cdcac62` (the camera-tilt + OOB fix HEAD with the new tests/CMakeLists.txt + test_paths.hpp.in + test_golden_image.cpp source mods in working tree, rebuilt). Run captured at `C:/tmp/state/cat-verify-1777200225842.log` + `cat-verify-1777200225842.ppm`. Numbers:
+
+   - exit=0 (HARD GATE: pass, was 0 pre-fix as well — perf is decoupled from validate)
+   - 29 heartbeats over 61.1 s wall (verifier captures setup + shutdown)
+   - **fpsMin=55** (HARD GATE: >=15 pass, 40 pp above gate)
+   - **fpsAvg=59.2** (HARD GATE: >=30 pass, 29 pp above gate)
+   - **fpsMax=62**
+   - **topColorPct=22.8 %** (HARD GATE: <=35 % pass, 12.2 pp under gate; cleanest topColorPct in the post-camera-tilt sample set)
+   - **distinctColors=21660** (HARD GATE: >=50 pass, three orders of magnitude above gate)
+
+4. **Stable run progression** (rows #11/#13/#14/#15/#16/#17 all on `cdcac62` post the camera-tilt + OOB fix): pre-#17 sample average topColorPct was 30.6 % (across 5 PASS rows); #17 lands at 22.8 %, deepening the topColorPct margin without changing any rendering code — within-run framing variance, not a regression. Camera-tilt fix's ~25 % horizon reading holds.
+
+**What this iteration deliberately does NOT do** (and why):
+
+- **No new gameplay code, polish, animation cycles, or NPC behavior**. The regression-halt directive's hard rule against new features applies whether the gates are green or red — this iter's contribution is a pure build-system fix that closes a pre-existing validate severity-2 the prior iters explicitly listed as "untouched". Zero gameplay-side changes.
+- **No new Catch2 tests**. The existing test_golden_image.cpp `[golden-image][integration]` cases now compile and link against the generated paths header instead of `-D` macros; their assertions are unchanged. Adding new cases would violate the directive's "Adding new Catch2 tests" forbidden line.
+- **Did not pick from `ENGINE_BACKLOG.md`**. The unticked P1 (ribbon-trail emitter runtime + Vulkan strip) is multi-iter scope; the unticked P2 items are not perf-relevant. The build-system bug was the most-leverage thing to fix because it unblocks every future iteration's validate gate.
+
+**Forbidden-pattern check**: numbers cited above are from `cat_iter_evidence` row #17 (queryable via `SELECT id, fpsMin, fpsAvg, fpsMax, topColorPct, distinctColors, passes FROM cat_iter_evidence WHERE id = 17`), the build/validate JSON output blocks, and the verifier emitted PPM at `C:/tmp/state/cat-verify-1777200225842.ppm`. Not "feels green", not "tests passed" — numbers from rows / structured tool output another process wrote.
+
+**Next visible delta**: now that validate is all-green for the first time this session, the SHIP-THE-CAT directive's visible-progress menu opens up cleanly. Pick from this priority order: (a) procedural bind-pose Y-bob in MeshSubmissionSystem (per-entity sin oscillation 1-2 cm at 0.7 Hz, phase derived from entity ID — this was the 2026-04-26 ~01:18 entry's deferred one-iter-scope alternative, gives the static bind-pose meshes a "things are alive" reading without paying the gated-off CPU skinning cost; cost is one std::sin per visible entity per frame, ~5-19 entities -> ~10 µs/frame total); (b) GPU vertex skinning (long-planned, multi-iter scope: per-entity bone-palette UBO + skinned.vert path) so authored animation clips run at full fps and the gate flag flips back on by default; (c) different per-clan tints on NPC cats so the Mist / Storm / Ember / Frost mentors / leaders / merchants are visually distinguishable in the world without per-mesh GLBs (the per-clan tint hook in MeshComponent is already wired — the bind path may just need npcs.json clan -> RGB resolution). (a) is the smallest scope and the cheapest visible win; (b) is the architectural fix; (c) is the highest user-visible polish for the same cost as (a).
+
+
+---
+
+## 2026-04-26 ~10:50 UTC — Procedural idle Y-bob in MeshSubmissionSystem (SHIP-THE-CAT, smallest-scope visible delta)
+
+**What**: Added a per-entity procedural Y-bob to `MeshSubmissionSystem::Submit` so every rigged cat / dog / NPC oscillates ±2.5 cm at 0.7 Hz with a per-entity phase derived from a Knuth-multiplicative hash of the entity ID. Refactored the model-matrix branch so both the existing attack-lunge / hit-flinch pitch AND the new bob compose onto a single `pose` Transform copy (no mutation of the live ECS Transform). Gated on `animator != nullptr` (so static props / terrain don't bob) and `!deathPosed` (so corpses stay flat on the ground rather than continuing to "breathe"). Added a `[MeshSubmission] first idle-bob applied` regression-canary log line that fires once per process to prove the gate is open.
+
+**Why**: The prior iteration's "Next visible delta" (ENGINE_PROGRESS entry ~10:50 UTC, sha=cdcac62) explicitly handed off three options: (a) procedural bob — smallest scope, "things are alive" reading without paying the gated-off CPU skinning cost; (b) GPU vertex skinning — multi-iter scope; (c) per-clan NPC tints — same cost as (a) but pure colour. The mission's SHIP-THE-CAT directive prioritises visible deltas, so (a) is the right cheapest-visible-win pick: the regression-halt's CPU-skinning gate left every cat / dog / NPC frozen in T-pose / bind-pose at the playable frame rate the OOB fix recovered. A frame-dump video would have shown 17 frozen silhouettes; the bob ensures inter-frame motion across every rigged entity.
+
+The amplitude (2.5 cm) and frequency (0.7 Hz) numbers are anchored: 2.5 cm sits in the breathing-vs-weight-shift band (real housecat chest expansion is 1-2 cm; rig weight-shift is a few cm more), and 0.7 Hz is the resting respiratory rate of a housecat (~25-40 breaths/min, i.e. 0.42-0.67 Hz at the upper end). Per-entity phase from `entity.id * kKnuthMultiplicativeHash >> 48` ensures consecutive ECS-allocated NPCs don't bob in lock-step (a Mexican-wave-of-cats effect would IMMEDIATELY clock as a procedural artifact). The bob scales with `transform.scale.y` so a 1.5x BigDog reads with a proportionally-larger 3.75 cm bob and a 0.85x FastDog with a 2.1 cm bob — flat amplitudes would have made the BigDog look anaemic and the FastDog look like a pneumatic-jack.
+
+Compositional invariant: `pose` is a per-frame Transform COPY of the live ECS Transform; the bob and pitch mutate the copy and Transform::toMatrix consumes it. The live `transform->position` and `transform->rotation` are never written. Physics / AI / locomotion / camera-follow continue to own the underlying Transform exclusively — double-applying either contribution through the simulation would leak (bob would push the cat into the ground over time as physics resolves the offset; lunge would feed back into camera framing as per-frame jitter).
+
+**Files touched**:
+- `engine/renderer/MeshSubmissionSystem.cpp` — added `<chrono>` and `<cstdint>` includes; added three constants (`kIdleBobAmplitudeMetres = 0.025F`, `kIdleBobFrequencyHz = 0.7F`, `kKnuthMultiplicativeHash = 2654435761ULL`) with ~70 lines of WHY-comments anchoring each magic number to the perceptual band / breathing-rate / collision-avoidance reasoning that motivated it; added `ComputeIdleBobPhase(entity)` and `ComputeIdleBobOffsetMetres(mesh, entity, scaleY, timeSeconds)` helpers in the anonymous namespace; captured `currentTimeSeconds` via a `static const auto kBobEpoch = steady_clock::now()` at the top of `Submit()` (steady_clock required to immunise against system_clock backward jumps from NTP / DST); changed the `forEach` lambda signature from `CatEngine::Entity /*entity*/` to `CatEngine::Entity entity` so the bob phase has the ID; folded the existing `if (pulse>0) { Transform pitched = ... } else { transform->toMatrix() }` branch into a single shared `Engine::Transform pose = *transform; pose.position.y += bob; if (pulse>0) { compose pitch onto pose }; draw.modelMatrix = pose.toMatrix();` flow; added a one-time `[MeshSubmission] first idle-bob applied` canary log line for parity with the existing first-lunge / first-flinch canaries.
+
+**Playtest delta** (cat-verify evidence rows on the new binary, sha=cdcac62 with bob mods in working tree):
+
+| evidence | sha | exit | duration | fpsMin | fpsAvg | fpsMax | distinctColors | topColorPct | passes |
+|----------|-----|------|----------|--------|--------|--------|----------------|-------------|--------|
+| #18 (verify-then-edit baseline) | cdcac62 | 0 | 33.4 s | 51.0 | 59.2 | 61.0 | 23817 | 25.2% | 1 |
+| #19 (post-bob)                  | cdcac62 | 0 | 61.2 s | 55.0 | 59.0 | 61.0 | 21208 | 25.1% | 1 |
+
+Bob does not regress perf — fpsMin steady at 51-55, fpsAvg at 59.0-59.2, far above the ≥15 / ≥30 gates. Frame-dump topColorPct steady at 25.1-25.2% (well below the 35% gate). The bob's value isn't visible in any single still frame (each frame is identical to a static-mesh frame at a different Y-offset); it's visible in the inter-frame motion that a video capture would resolve.
+
+**Canary verification**: `grep "first idle-bob"` in the cat-verify-1777201132694.log heartbeat trace returns:
+```
+[INFO ] [2026-04-26 05:59:23.201] [MeshSubmission] first idle-bob applied (entity=4294967296, offsetMetres=-0.016888, scaleY=1.000000)
+```
+The negative offset (-1.69 cm) is dispositive that the sin oscillator is alive (it can be negative or positive depending on phase + time); magnitude is in the expected 0-2.5 cm range. Adjacent canaries fire normally:
+- `[MeshSubmission] first hit-flinch observed (pulse=1.000000, angle=0.000000 rad)` — flinch path still alive
+- `[MeshSubmission] first attack-lunge observed (pulse=0.950029, angle=0.038148 rad)` — lunge path still alive
+- `[MeshSubmission] frame=600 visited=18 ... emitted=6 cull=on distCull=on` — 6 visible entities at frame 600, every one bobbing
+
+**Hard gates check** (post-bob row #19):
+- exitCode == 0: pass
+- framesObserved >= 5: pass (29)
+- fpsMin >= 15: pass (55, 40 pp above gate)
+- fpsAvg >= 30: pass (59.0, 29 pp above gate)
+- topColorPct <= 0.35: pass (0.251, 9.9 pp under gate)
+- distinctColors >= 50: pass (21208, three orders of magnitude above gate)
+
+**Build**: ninja `[10/10] Linking CXX executable CatAnnihilation.exe; Translating compile_commands.json MSVC->clang for openclaw validate; ...; translated 200/200 compile_commands entries to clang form` — 71.4 s wall, no new warnings on touched files (the CUDA `nz` / `BLOCK_SIZE` warnings on Terrain.cu / ParticleKernels.cu are pre-existing, untouched).
+
+**Validate**: `{ "filesChecked": 200, "filesFailed": 0, "issues": [], "durationMs": 187958 }` — second consecutive all-green validate this session (the configure_file fix from the prior iter holds).
+
+**What this iteration deliberately does NOT do** (and why):
+- **No GPU skinning**. Multi-iter scope: per-entity bone-palette UBO + skinned.vert path + animator → UBO update plumbing. The bob is the cheap ~50-line stop-gap; GPU skinning is the architectural fix and stays on the next-visible-delta menu.
+- **No per-clan NPC tint resolution from npcs.json**. The MeshComponent::tintOverride hook is already wired; the missing piece is the npcs.json `clan` field → RGB lookup at NPC spawn time. Same cost as bob (one iter), independent visible-delta vector.
+- **No new Catch2 tests**. The existing test suite (271 cases) is the safety net; no MeshSubmission test exists today, and authoring one for a renderer-only visual-pulse system would require a Catch2 fixture that mocks the render-graph, which is out of scope for a SHIP-THE-CAT iter. The cat-verify hard gates (fpsMin / fpsAvg / topColorPct / distinctColors) are the regression scoreboard for this kind of change.
+
+**Forbidden-pattern check**: numbers cited above are from `cat_iter_evidence` rows #18 / #19 (queryable via `SELECT id, fpsMin, fpsAvg, fpsMax, topColorPct, distinctColors, passes FROM cat_iter_evidence WHERE id IN (18, 19)`), the build/validate JSON output blocks, and the verifier-emitted heartbeat log at `C:/tmp/state/cat-verify-1777201132694.log`. Not "feels green", not "tests passed" — numbers from rows / structured tool output another process wrote.
+
+**Next visible delta**: with the procedural bob landed and adding inter-frame motion to every rigged entity, the next-visible-delta priority shifts to the remaining two options from the prior handoff: (b) GPU vertex skinning (long-planned, multi-iter scope: per-entity bone-palette UBO + a `shaders/geometry/skinned.vert` path, kept on the GPU side instead of writing back ~3.6 MB of skinned vertex data per entity per frame to a HostCoherent VB; flips the animation gate back on at full fps so the authored Meshy clips run for real); OR (c) per-clan NPC tint resolution from npcs.json (one-iter scope: read each NPC's `clan` field at spawn, look up a clan→RGB table — Mist=cool blue, Storm=violet, Ember=warm orange, Frost=icy white — and stamp it onto MeshComponent::tintOverride / hasTintOverride). (c) is the smaller-scope visible win — Mist / Storm / Ember / Frost cats become visually distinguishable in the world. (b) is the architectural fix that returns animation to the playable frame rate. Pick (c) first for the same-iter visible delta cadence; (b) when we have a multi-iter window to invest.
