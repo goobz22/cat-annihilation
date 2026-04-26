@@ -720,26 +720,80 @@ void ElementalMagicSystem::applySpellDamage(const ActiveSpell& spell,
 // ============================================================================
 
 void ElementalMagicSystem::addElementalXP(Entity entity, ElementType element, int xp) {
-    // Get or create skill entry
-    auto& skills = entitySkills_[entity];
-    auto& skill = skills[static_cast<int>(element)];
+    // Reject element values that don't address a real skill slot. The map
+    // value is sized to ElementType::COUNT, so the only valid input range is
+    // [Water, Fire]. Without this guard, callers passing None (the
+    // unset/sentinel value) wrote XP into the None=0 slot — which then
+    // never produced a "leveled up" event since None has no spell list,
+    // but still consumed the bucket. Callers passing COUNT or any future
+    // out-of-range value would alias straight into the array's end-bound
+    // and corrupt heap memory the same way the old 4-slot bug did. Better
+    // to silently drop the request than to UB-aliasing into the next bucket.
+    if (element == ElementType::None || element >= ElementType::COUNT) {
+        return;
+    }
+    if (xp <= 0) {
+        // Non-positive XP is a no-op — saves an unordered_map insert and
+        // keeps the level-up loop from running with stale state. Negative
+        // XP could also drive `skill.xp` below zero and break the loop's
+        // termination assumption (`skill.xp >= skill.xpToNextLevel`).
+        return;
+    }
 
-    // Initialize if needed
+    // Get or create skill entry. operator[] default-constructs the array
+    // (ElementalSkill is aggregate with default member initializers, so
+    // level=1, xp=0, xpToNextLevel=100 fall out automatically).
+    auto& skills = entitySkills_[entity];
+    auto& skill = skills[static_cast<size_t>(element)];
+
+    // Initialize if needed. The default-constructed ElementalSkill arrives
+    // with level=1, but we still set element here so getAvailableSpells()
+    // and friends can identify the slot from the struct alone.
     if (skill.level == 0) {
         skill.element = element;
         skill.level = 1;
         skill.xp = 0;
         skill.xpToNextLevel = 100;
+    } else if (skill.element == ElementType::None) {
+        // Slot was lazily created by a write that didn't pass through this
+        // path (legacy code paths or future direct-mutation tests). Stamp
+        // the element so subsequent queries find a coherent value, but
+        // leave the existing level/xp alone.
+        skill.element = element;
     }
 
     // Add XP
     skill.xp += xp;
 
-    // Check for level up
+    // Defensive iteration cap. The intended loop runs at most MAX_LEVEL
+    // times (you can't level past the cap), but the previous shape would
+    // run unbounded if `skill.level` was ever fed corrupted data — it
+    // overflowed signed-int wraparound while still satisfying
+    // `skill.level < MAX_LEVEL`. Even with the OOB indexing fixed above,
+    // a hard ceiling here means a future regression in level/xp
+    // accounting can never lock the main thread again. MAX_LEVEL is
+    // currently 10, so 16 iterations is a comfortable upper bound that
+    // would only ever be reached by a bug.
+    int iterationGuard = 0;
     while (skill.xp >= skill.xpToNextLevel && skill.level < MAX_LEVEL) {
+        if (++iterationGuard > MAX_LEVEL + 6) {
+            // Hit the guard. Reset the skill to a coherent end-state so
+            // the bug doesn't keep re-firing every spell cast: cap at
+            // MAX_LEVEL with zero pending XP. Log once at warn so the
+            // condition is visible if it ever does trigger in playtest.
+            Engine::Logger::warn(std::string("ElementalMagic: level-up loop guard triggered for element ") +
+                                 getElementName(element) + " — capping at MAX_LEVEL");
+            skill.level = MAX_LEVEL;
+            skill.xp = 0;
+            skill.xpToNextLevel = MAX_LEVEL * 100;
+            break;
+        }
         skill.xp -= skill.xpToNextLevel;
         skill.level++;
-        skill.xpToNextLevel = skill.level * 100;  // Scaling XP requirement
+        // xpToNextLevel scales linearly with level. Multiplied through int —
+        // at MAX_LEVEL=10 the worst-case product is 1000, well clear of
+        // overflow risk, but we also clamp on increment via MAX_LEVEL above.
+        skill.xpToNextLevel = skill.level * 100;
 
         LOG_INFO("Entity {} leveled up {} to level {}!",
                 entity.id, getElementName(element), skill.level);
@@ -756,12 +810,19 @@ void ElementalMagicSystem::addElementalXP(Entity entity, ElementType element, in
 }
 
 int ElementalMagicSystem::getElementalLevel(Entity entity, ElementType element) const {
+    // Same range guard the writer uses — the underlying array is sized to
+    // ElementType::COUNT so None=0 is a legal index but isn't a real skill.
+    // Out-of-range or COUNT yields the default-level fallback rather than
+    // reading garbage past the array.
+    if (element == ElementType::None || element >= ElementType::COUNT) {
+        return 1;
+    }
     auto it = entitySkills_.find(entity);
     if (it == entitySkills_.end()) {
         return 1;  // Default level
     }
 
-    const auto& skill = it->second[static_cast<int>(element)];
+    const auto& skill = it->second[static_cast<size_t>(element)];
     return skill.level > 0 ? skill.level : 1;
 }
 

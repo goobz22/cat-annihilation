@@ -16,6 +16,7 @@
 #include "../engine/rhi/vulkan/VulkanSwapchain.hpp"
 #include "../engine/rhi/vulkan/VulkanDevice.hpp"
 #include "../engine/renderer/Renderer.hpp"
+#include "../engine/renderer/MeshSubmissionSystem.hpp"
 #include "../engine/renderer/passes/UIPass.hpp"
 #include "../engine/renderer/passes/ScenePass.hpp"
 #include "../engine/audio/AudioEngine.hpp"
@@ -126,6 +127,36 @@ struct CommandLineArgs {
     // ImGui GraphicsSettingsPanel instead (planned follow-up — this CLI
     // flag is the CI / smoke-test hook, not the runtime UX hook).
     bool enableRibbonTrails = false;
+
+    // --enable-cpu-skinning: opt into the per-frame CPU vertex-skinning hot
+    // path inside MeshSubmissionSystem + ScenePass::EnsureSkinnedMesh.
+    //
+    // 2026-04-26 perf halt: a 30-second autoplay heartbeat trace measured
+    // fps=2-5 with ~17-20 visible skinned NPCs/dogs vs fps=37-46 the moment
+    // frustum culling drops the count to <=2. The bottleneck is the
+    // ~150k-vertex weighted-mat4 sum + transform + normalise loop that runs
+    // on a single CPU thread for EVERY visible skinned entity EVERY frame.
+    // With ~3-5M per-frame transforms required to keep all entities animated,
+    // there is no CPU-side optimisation that recovers playable fps short of
+    // moving skinning to the GPU (a UBO/SSBO bone-palette + a vertex-shader
+    // skin path) — which is multi-iteration work.
+    //
+    // Default OFF therefore renders entities in bind-pose (T-pose / authored
+    // rest pose) at full frame rate. Bind-pose is strictly better than 2-5
+    // fps for a portfolio playtest: every cat / dog / NPC is visible, the
+    // tint / texture / per-clan colour signal is preserved, and combat /
+    // particles / camera-shake all still read correctly. The only thing
+    // missing is the per-bone deformation that animation clips would have
+    // produced — which mostly nobody can see anyway when the camera is
+    // 12 m above the player and entities are <1.5 m tall on screen.
+    //
+    // Opt in (set this flag) for hero shots / portfolio screenshots where
+    // a low-NPC-count scene fits in the CPU budget and authored animation
+    // clips matter more than fps. The flag is propagated to
+    // MeshSubmissionSystem::SetEnableCpuSkinning at startup; the
+    // [MeshSubmission] gate state is logged so the playtest log shows
+    // unambiguously which path is live.
+    bool enableCpuSkinning = false;
 
     // --starting-wave <N>: bypass wave 1 and seed the WaveSystem to spawn
     // wave N as the first wave in autoplay mode. Default 1 = unchanged
@@ -345,6 +376,13 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             // keep their pre-ribbon pixel output bit-for-bit until a caller
             // opts in.
             args.enableRibbonTrails = true;
+        } else if (arg == "--enable-cpu-skinning") {
+            // Same shape as --enable-ribbon-trails: presence flips it on,
+            // absence preserves the struct default (false). Forwarded after
+            // the renderer is up via
+            // `MeshSubmissionSystem::SetEnableCpuSkinning(true)` — see the
+            // setter docblock in MeshSubmissionSystem.hpp for the WHY.
+            args.enableCpuSkinning = true;
         } else if (arg == "--day-night-rate") {
             // Space-separated form: --day-night-rate <seconds>.
             // Plumbed straight into ScenePass::SetDayCycleSeconds() after
@@ -432,6 +470,9 @@ void printHelp() {
     std::cout << "  --log-file <path>          Mirror Logger output to <path> (in addition to console)\n";
     std::cout << "  --frame-dump <path>        After loop exits, write final swapchain image to <path> (.ppm)\n";
     std::cout << "  --enable-ribbon-trails     Render CUDA-produced ribbon trails for particle systems\n";
+    std::cout << "  --enable-cpu-skinning      Run per-frame CPU vertex skinning for animated entities\n";
+    std::cout << "                             (default OFF: entities render in bind-pose at full fps;\n";
+    std::cout << "                              ON: animated but expect 2-5 fps with full waves until GPU skinning lands)\n";
     std::cout << "  --starting-wave <N>        In autoplay mode, spawn wave N first instead of wave 1 (default 1)\n";
     std::cout << "  --day-night-rate <S>       Sky cycle period in seconds (default 30; 0 freezes at midday for golden-image CI)\n";
     std::cout << "  --cinematic-orbit-camera [<rad/s>]  Slowly orbit the camera around the player so portfolio captures show multiple angles\n";
@@ -627,11 +668,24 @@ int main(int argc, char* argv[]) {
     // Create Audio System
     // ========================================================================
     auto audioEngine = std::make_unique<CatEngine::AudioEngine>();
+    // Audio is non-critical: continuing without it (silent build) is always
+    // a valid run. The AudioEngine::initialize() path in
+    // engine/audio/AudioEngine.cpp:37-42 deliberately returns false by
+    // default per user directive 2026-04-26 ("cat annihilation has sound
+    // effects please remove them we dont need them right now when it
+    // crashes the noise goes crazy") — the game must NOT exit when that
+    // happens or every CAT_AUDIO-unset launch would die at startup before
+    // ever reaching the main loop. AudioEngine::isInitialized() guards the
+    // playSound / playSound2D paths, and Game::GameAudio::initialize()
+    // (CatAnnihilation.cpp:423) tolerates a no-op AudioEngine, so silent
+    // mode is end-to-end safe. Logging the failure as warn (not error)
+    // keeps it in the playtest log for diagnosis without false-flagging
+    // it as a fatal condition.
     if (!audioEngine->initialize()) {
-        Engine::Logger::error("Failed to initialize audio engine");
-        return 1;
+        Engine::Logger::warn("Audio engine disabled (running silent); set CAT_AUDIO=1 to enable");
+    } else {
+        Engine::Logger::info("Audio engine initialized");
     }
-    Engine::Logger::info("Audio engine initialized");
 
     // Apply audio settings from config
     audioEngine->getMixer().setMasterVolume(gameConfig.audio.masterVolume);
@@ -740,6 +794,23 @@ int main(int argc, char* argv[]) {
     // "--enable-ribbon-trails: gate=" — that line is preserved.
     Engine::Logger::info(std::string("[cli] --enable-ribbon-trails: gate=") +
                          (cmdArgs.enableRibbonTrails ? "on" : "off"));
+
+    // --enable-cpu-skinning: same parse-only-then-forward shape as
+    // --enable-ribbon-trails. The flag drives the per-frame CPU vertex skin
+    // path inside MeshSubmissionSystem. Default OFF (entities draw bind-pose)
+    // is the only path that meets a playable frame budget when the wave is
+    // active (~17-20 visible skinned entities collapse fps to 2-5 on the CPU
+    // skin loop — see the setter docblock in MeshSubmissionSystem.hpp for
+    // the heartbeat trace). Logging the resolved gate value at startup so a
+    // reviewer reading the playtest log can see which skinning path is live
+    // without grepping for downstream evidence.
+    CatEngine::Renderer::MeshSubmissionSystem::SetEnableCpuSkinning(
+        cmdArgs.enableCpuSkinning);
+    Engine::Logger::info(std::string("[cli] --enable-cpu-skinning: gate=") +
+                         (cmdArgs.enableCpuSkinning
+                              ? "on (per-frame CPU vertex skinning, expect 2-5 fps with full waves)"
+                              : "off (entities render in bind-pose at full fps; default)"));
+
     if (auto* scenePass = renderer->GetScenePass()) {
         scenePass->SetRibbonsEnabled(cmdArgs.enableRibbonTrails);
         // 2026-04-25 SHIP-THE-CAT iter (time-of-day cycling): forward the

@@ -67,7 +67,9 @@ public:
     void Submit(CatEngine::ECS& ecs,
                 std::size_t frameIndex,
                 std::vector<ScenePass::EntityDraw>& out,
-                const Engine::Frustum* frustum = nullptr);
+                const Engine::Frustum* frustum = nullptr,
+                const Engine::vec3* cameraPosition = nullptr,
+                float maxDrawDistance = 0.0F);
 
     /**
      * Clear retained refs for all frames. Call on renderer shutdown before
@@ -76,6 +78,41 @@ public:
     void Reset();
 
     std::size_t GetFramesInFlight() const { return m_retained.size(); }
+
+    /**
+     * Toggle the per-frame CPU-skinning hot path that runs inside ScenePass
+     * (EnsureSkinnedMesh transforms every vertex of every visible skinned
+     * entity by the entity's bone palette on the host every frame).
+     *
+     * WHY this is OFF by default (2026-04-26 regression halt):
+     * --------------------------------------------------------
+     * Each rigged cat/dog Meshy GLB carries 100k-250k vertices. With ~17-20
+     * skinned NPCs + dogs visible at once during a wave, that is ~3-5 M
+     * weighted-mat4 sums + transforms + normalises per frame on a single
+     * CPU thread — measured ~3-5 fps in the running game (heartbeat trace
+     * 2026-04-26 01:02-01:03 UTC: fps=2-5 with enemies present, recovers
+     * to fps=37-46 the moment frustum culling drops the count to <=2).
+     *
+     * Until GPU-skinning lands (skinning matrices uploaded as a UBO/SSBO
+     * and applied in a vertex shader), the only path that meets a
+     * playable frame budget is to skip the CPU loop entirely and draw the
+     * static bind-pose mesh via ScenePass Path (b). Every entity is still
+     * visible, just frozen in T-pose / bind-pose; that is strictly better
+     * than the 2 fps "cinematic" the per-frame CPU skinning gives us.
+     *
+     * When set to true (e.g. via a future `--enable-cpu-skinning` CLI
+     * flag for hero shots / portfolio screenshots where animation matters
+     * more than fps), the legacy bone-palette population code path is
+     * re-enabled and ScenePass falls back to the per-vertex CPU skin.
+     *
+     * Static intentionally: there's only ever one MeshSubmissionSystem
+     * instance (a function-static in CatAnnihilation::renderFrame), and
+     * the flag is queried in the inner forEach lambda for ~20 entities
+     * per frame, so a single static cache-line read is ideal. The setter
+     * is callable from main.cpp's CLI parser before the game-loop starts.
+     */
+    static void SetEnableCpuSkinning(bool enabled);
+    static bool IsCpuSkinningEnabled();
 
 private:
     // One retention slot per frame index. Each slot holds the strong refs

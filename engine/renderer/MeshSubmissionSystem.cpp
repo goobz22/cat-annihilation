@@ -106,13 +106,32 @@ Engine::vec3 ComputeWorldCenter(const Engine::Transform& transform,
 
 } // namespace
 
+// Module-scope flag for the per-frame CPU-skinning hot path. Initialised to
+// false (skinning OFF) so a fresh process renders entities in bind-pose at
+// full frame rate; main.cpp's CLI parser flips this on via SetEnableCpuSkinning
+// when the user opts in with `--enable-cpu-skinning`. See the docblock on the
+// setter in MeshSubmissionSystem.hpp for the full WHY (2026-04-26 perf halt:
+// ~17-20 skinned entities * ~150k verts each = 2-3 M per-frame transforms on
+// a single CPU thread, observed fps collapse 2-5).
+static bool s_enableCpuSkinning = false;
+
+void MeshSubmissionSystem::SetEnableCpuSkinning(bool enabled) {
+    s_enableCpuSkinning = enabled;
+}
+
+bool MeshSubmissionSystem::IsCpuSkinningEnabled() {
+    return s_enableCpuSkinning;
+}
+
 MeshSubmissionSystem::MeshSubmissionSystem(std::size_t maxFramesInFlight)
     : m_retained(std::max<std::size_t>(1, maxFramesInFlight)) {}
 
 void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
                                   std::size_t frameIndex,
                                   std::vector<ScenePass::EntityDraw>& out,
-                                  const Engine::Frustum* frustum) {
+                                  const Engine::Frustum* frustum,
+                                  const Engine::vec3* cameraPosition,
+                                  float maxDrawDistance) {
     // Wrap frameIndex into the retention ring. The caller passes the
     // renderer's current frame index which may exceed the frames-in-flight
     // count; modulo keeps us inside the ring.
@@ -140,8 +159,45 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
     int visitedTotal = 0;
     int rejectedNullOrInvisible = 0;
     int culledFrustum = 0;
+    int culledDistance = 0;
     int withAnimator = 0;
     int withPalette = 0;
+
+    // Pre-compute squared distance threshold so we can compare against the
+    // squared world-space distance and avoid the sqrt per-entity. Zero
+    // (or negative) maxDrawDistance disables the distance cull (caller opt-in).
+    //
+    // WHY a distance cull on top of the frustum cull (2026-04-26 evidence row #8):
+    // ---------------------------------------------------------------------
+    // The frustum cull catches entities behind / above / below / past the
+    // camera. It does NOT catch entities that are inside the camera's view
+    // volume but very far away — e.g., a cat NPC scattered across the world
+    // map at a far-clan position 200 m away. With 16 cat NPCs spread across
+    // four clans + a couple of wave-spawned dogs, the camera's wide-angle
+    // frustum CAN contain ~15 of them at certain angles (notably during
+    // wave-cleared "Transition" state when the camera widens). Each one
+    // costs a Meshy-rigged GLB worth of GPU vertex / fragment work; emitting
+    // 15 of them simultaneously was the dominant cause of the sustained
+    // 10 fps stall measured during wave-1 cleared in evidence row #8
+    // (frame=600 visited=17 culledFrustum=2 emitted=15).
+    //
+    // A distance cull at maxDrawDistance metres caps the visible NPC budget
+    // by physical proximity to the camera. Within the 60-80 m radius the
+    // player is realistically engaged with, every entity still draws — the
+    // wave's active dogs, the player cat, any same-clan NPC adjacent to the
+    // arena. Anything past the threshold (the other-clan-mentor sitting
+    // 200 m away that produces a sub-pixel silhouette) is dropped without
+    // even costing a frame's worth of vertex pipeline work.
+    //
+    // The threshold is a parameter rather than a constant so the gameplay
+    // layer can tune it per camera mode (third-person tight follow vs wide
+    // panorama vs zoomed-out cinematic). 0.0F means "no cull" so the
+    // existing single-arg Submit() call sites (test fixtures, debug viewers)
+    // keep their old behaviour of always-draw-all.
+    const bool distanceCullEnabled =
+        cameraPosition != nullptr && maxDrawDistance > 0.0F;
+    const float maxDrawDistanceSq =
+        distanceCullEnabled ? maxDrawDistance * maxDrawDistance : 0.0F;
 
     // Periodic per-frame culling counter for ongoing visibility into how
     // much work the cull saves. Reported at the same low cadence as
@@ -196,6 +252,38 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
                     hExt.x * hExt.x + hExt.y * hExt.y + hExt.z * hExt.z);
                 if (!frustum->intersectsSphere(worldCenter, radius)) {
                     ++culledFrustum;
+                    return;
+                }
+            }
+
+            // Distance cull: drop entities whose bounding-sphere centre is
+            // farther than `maxDrawDistance` metres from the camera. The
+            // frustum cull already handled "behind / above / past the camera";
+            // this step handles "in-frustum but irrelevantly far". With both
+            // active we keep only the entities the player can plausibly
+            // perceive as part of the active gameplay frame.
+            //
+            // Why test the world-space CENTER and not the nearest point on
+            // the sphere: the half-extents of even the largest GLB (the
+            // BigDog at 1.5x scale) is on the order of 1-2 m. A
+            // centre-to-centre 80 m cut means the worst-case "I culled an
+            // entity whose nearest face was actually only 78 m from the
+            // camera" still drops a pixel that's barely a few hairs wide
+            // on screen. Adding the bounding-sphere radius back in would
+            // be a wash and double the per-entity work.
+            //
+            // We use squared distance to avoid the per-entity sqrt — same
+            // ordering, half the math. With 16+ NPCs visited per frame this
+            // saves enough cycles to be worth the minor readability cost.
+            if (distanceCullEnabled) {
+                const Engine::vec3 toCamera =
+                    worldCenter - *cameraPosition;
+                const float distSq =
+                    toCamera.x * toCamera.x +
+                    toCamera.y * toCamera.y +
+                    toCamera.z * toCamera.z;
+                if (distSq > maxDrawDistanceSq) {
+                    ++culledDistance;
                     return;
                 }
             }
@@ -416,7 +504,41 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             // expensive part (CPU vertex skinning over ~150k verts) lives
             // in ScenePass::EnsureSkinnedMesh, gated to actually-skinned
             // entities only.
-            if (meshComponent->animator != nullptr) {
+            //
+            // 2026-04-26 perf halt: the "expensive part" turned out to be the
+            // ENTIRE frame budget for a wave-active scene. With ~17-20 skinned
+            // NPCs + dogs visible during wave 1, the per-vertex weighted-mat4
+            // sum + transform + normalise loop in ScenePass::EnsureSkinnedMesh
+            // drops fps from 46 (steady state, 0-2 visible skinned entities)
+            // to 2-5 (steady state, 17-20 visible skinned entities). The
+            // smoking-gun heartbeat trace (perf-repro.log 2026-04-26 01:02-01:03)
+            // shows fps recovery from 5 -> 46 the instant wave 1 clears and
+            // frustum culling drops the count back to 2. The CPU loop is the
+            // bottleneck regardless of which authored animation clip plays.
+            //
+            // Until GPU-skinning lands (skin matrices uploaded as a UBO/SSBO
+            // and applied in a vertex shader, kept on the GPU side per
+            // entity instead of writing back ~3.6 MB of skinned vertex data
+            // per entity per frame to a HostCoherent VB), we DO NOT populate
+            // skinningKey/bonePalette by default. ScenePass then naturally
+            // falls through to its bind-pose Path (b) — every entity still
+            // draws as the static GLB at its current world transform; the
+            // mesh is frozen in T-pose / authored bind-pose, but the frame
+            // rate is playable.
+            //
+            // Opt-in via `MeshSubmissionSystem::SetEnableCpuSkinning(true)`
+            // (CLI: `--enable-cpu-skinning`) for screenshot / portfolio runs
+            // where the visual cost of bind-pose outweighs the fps cost of
+            // CPU skinning (e.g. low-NPC-count "hero" scenes).
+            //
+            // We still call getCurrentSkinningMatrices when CPU skinning is
+            // off only when the flag is on; the bone-palette compute itself
+            // (~37 bones * a few mat4 mults per bone) is microseconds, but
+            // when we're not going to use the result there's no point
+            // generating it — and skipping the call also avoids the std::vector
+            // resize/zero that would otherwise allocate ~37*64 = 2.4 KB of
+            // per-frame zeroed memory per entity.
+            if (s_enableCpuSkinning && meshComponent->animator != nullptr) {
                 ++withAnimator;
                 meshComponent->animator->getCurrentSkinningMatrices(draw.bonePalette);
                 if (!draw.bonePalette.empty()) {
@@ -451,6 +573,7 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             "[MeshSubmission] first-frame survey: visited=" + std::to_string(visitedTotal) +
             " rejected=" + std::to_string(rejectedNullOrInvisible) +
             " culledFrustum=" + std::to_string(culledFrustum) +
+            " culledDistance=" + std::to_string(culledDistance) +
             " withAnimator=" + std::to_string(withAnimator) +
             " withPalette=" + std::to_string(withPalette) +
             " emitted=" + std::to_string(out.size()));
@@ -468,8 +591,10 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             " visited=" + std::to_string(visitedTotal) +
             " rejected=" + std::to_string(rejectedNullOrInvisible) +
             " culledFrustum=" + std::to_string(culledFrustum) +
+            " culledDistance=" + std::to_string(culledDistance) +
             " emitted=" + std::to_string(out.size()) +
-            (frustum == nullptr ? " cull=off" : " cull=on"));
+            (frustum == nullptr ? " cull=off" : " cull=on") +
+            (distanceCullEnabled ? " distCull=on" : " distCull=off"));
     }
 }
 

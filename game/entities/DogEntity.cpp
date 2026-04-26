@@ -255,6 +255,58 @@ void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyT
 
 } // namespace
 
+void DogEntity::PreloadAllVariants() {
+    // Walk every EnemyType the wave system can spawn and warm the
+    // AssetManager model cache for each variant's GLB. Mirrors the
+    // implicit cat pre-load that NPCSystem::loadNPCsFromFile triggers
+    // by walking every entry in npcs.json — this is the dog-side
+    // equivalent, called explicitly because there is no "wave-spawn-list"
+    // file the engine could walk to drive the same pre-load.
+    //
+    // The path table here intentionally re-uses the same `modelPathForType`
+    // resolver the per-spawn factory uses, so adding a new variant in one
+    // place (e.g., `EnemyType::EliteDog` with a new `dog_elite.glb`) keeps
+    // the pre-load and per-spawn paths trivially in sync — bug class
+    // "added a new dog variant but forgot to pre-load it" can't exist.
+    constexpr EnemyType kVariants[] = {
+        EnemyType::Dog,
+        EnemyType::FastDog,
+        EnemyType::BigDog,
+        EnemyType::BossDog,
+    };
+
+    auto& assets = CatEngine::AssetManager::GetInstance();
+    for (EnemyType variant : kVariants) {
+        const char* modelPath = modelPathForType(variant);
+        try {
+            // We deliberately ignore the returned shared_ptr: the cache
+            // is the only thing we care about. The next call to
+            // attachMeshAndAnimator(...) for this variant will hit the
+            // cache and return the same Model instance we just loaded
+            // here — without paying the disk-read + glTF-parse cost
+            // that was driving the BigDog wave-1 fps=14 dip.
+            assets.LoadModel(modelPath);
+        } catch (const std::exception& ex) {
+            // A missing or malformed variant file should not abort the
+            // boot — the per-spawn path already has the same try/catch
+            // and falls back to a meshless dog (AI + combat still work).
+            // Log a warn so a regression that drops or corrupts a
+            // variant GLB is visible in the same playtest log a
+            // reviewer reads, and continue pre-loading the rest.
+            Engine::Logger::warn(std::string("DogEntity::PreloadAllVariants: '") +
+                                 modelPath + "' failed: " + ex.what());
+        }
+    }
+
+    // One-line confirmation that pre-load actually fired, mirroring the
+    // "Loaded 16 NPCs from npcs.json" line the cat path emits. A future
+    // regression that disconnects this call (e.g., refactoring
+    // CatAnnihilation::loadAssets and dropping the call site) would show
+    // up as the pre-load line going missing while wave-1 spawn fps drops
+    // again — a clean "this stopped happening" signal in the log.
+    Engine::Logger::info("DogEntity: pre-loaded 4 dog variant GLBs into AssetManager cache");
+}
+
 CatEngine::Entity DogEntity::createDog(CatEngine::ECS* ecs,
                                        const Engine::vec3& position,
                                        CatEngine::Entity target) {

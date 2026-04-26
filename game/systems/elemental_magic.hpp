@@ -362,8 +362,28 @@ private:
     // Entity elemental effects
     std::unordered_map<CatEngine::Entity, std::vector<ElementalEffect>> elementalEffects_;
 
-    // Entity skills
-    std::unordered_map<CatEngine::Entity, std::array<ElementalSkill, 4>> entitySkills_;
+    // Entity skills, indexed by ElementType enum value.
+    //
+    // Why ElementType::COUNT instead of a hard-coded 4: the enum is
+    //   None=0, Water=1, Air=2, Earth=3, Fire=4, COUNT=5
+    // so casting `Fire` to int yields 4, which a 4-slot array does NOT cover
+    // (valid indices 0..3). Indexing with Fire on a 4-slot array reads/writes
+    // past the end of the std::array — i.e. into the next member of the
+    // unordered_map node, the bucket's color-bits, or the heap arena's
+    // bookkeeping, depending on layout. That OOB stomps both the neighbour
+    // skill's `level` AND adjacent entity-id memory, and the corrupted level
+    // values fed back into addElementalXP's `while (skill.xp >=
+    // skill.xpToNextLevel && skill.level < MAX_LEVEL)` loop made the loop
+    // run effectively unbounded — recorded in cat-verify run #4 as a
+    // ~3-second main-thread stall at the start of wave 2 (frames=782 ->
+    // 800 in 3.6s, fps=0/0/1) right when Fire spells started landing
+    // damage. Sizing by COUNT (currently 5 slots) reserves a None slot
+    // at index 0 that the lookup paths never touch and keeps the Fire
+    // index in-range. Adding a new element to the enum just requires the
+    // new ElementType value to live before COUNT and the array auto-sizes.
+    std::unordered_map<CatEngine::Entity,
+                       std::array<ElementalSkill, static_cast<size_t>(ElementType::COUNT)>>
+        entitySkills_;
 
     // Particle system
     std::shared_ptr<CatEngine::CUDA::ParticleSystem> particleSystem_;

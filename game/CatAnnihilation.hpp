@@ -377,8 +377,20 @@ private:
      * (per-element colour, velocity arc, lifetime) lives in the tuning table,
      * not in distinct emitters.
      */
+    /**
+     * `burstMultiplier` scales the per-element profile's burst count for
+     * per-enemy-type weight (Dog/FastDog = 1.0x, BigDog = 1.5x,
+     * BossDog = 2.5x). Defaults to 1.0 so non-enemy callers (player death,
+     * scripted kills, future test hooks without an EnemyComponent) get the
+     * unchanged baseline burst. The caller (onEntityDeath) probes the dying
+     * entity's EnemyComponent to compute the multiplier; the dispatcher inside
+     * spawnDeathParticles applies it to emitter->burstCount with a floor of 1
+     * so a future tuning misstep can't silently produce a no-op burst that
+     * swallows the kill cue.
+     */
     void spawnDeathParticles(const Engine::vec3& position,
-                             DamageType damageType = DamageType::Physical);
+                             DamageType damageType = DamageType::Physical,
+                             float burstMultiplier = 1.0F);
 
     /**
      * Create and configure the non-killing-hit particle emitter.

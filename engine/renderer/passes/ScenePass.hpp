@@ -227,6 +227,41 @@ public:
     }
     const CUDA::ParticleSystem* GetParticleSystem() const { return m_particleSystem; }
 
+    // Public prewarm wrapper around the lazy-on-first-encounter
+    // `EnsureModelGpuMesh` path. Callers (e.g. `CatAnnihilation::loadAssets`)
+    // can push a Model through the GPU upload path BEFORE the first frame so
+    // the synchronous (vertex-pack + VkBuffer alloc + memcpy + Flush) cost
+    // amortises into engine init instead of the first frame on which an
+    // entity using that Model becomes visible.
+    //
+    // WHY this exists (2026-04-26 cat-verify evidence row #10, sha=57c6b95):
+    // The runaway-level-up OOB fix lifted the steady-state floor from fpsAvg
+    // ~10 to ~40 (HARD GATE >=30 ✅), but the wave-1 fpsMin gate stayed broken
+    // at fpsMin=8 because `BigDog` first spawns at frame ~155 and that single
+    // frame stalls for ~3 s while ScenePass's lazy uploader re-packs the
+    // ~250k-vertex Meshy GLB and pushes it through `UpdateData`. The wave-2
+    // BigDog spawn at frame ~960 reads fps=18 (no ~3 s stall) because the
+    // Model* cache is now warm — proving the cost is the upload, not the
+    // GLB parse (CPU-side cache was already warmed by
+    // `DogEntity::PreloadAllVariants`). Calling this from
+    // `CatAnnihilation::loadAssets` after `PreloadAllVariants` folds the
+    // upload into init and the wave-1 first-of-each-variant frame becomes a
+    // cache-hit no-op. Strictly better than spending 3 s of mid-wave-1 time
+    // at <10 fps.
+    //
+    // Idempotent: returns the cache-hit branch on subsequent calls so a
+    // future "Restart game" handler that re-runs `loadAssets` doesn't
+    // re-allocate or re-upload.
+    //
+    // Safe to call between frames: model VBs are HostVisible+HostCoherent
+    // (see `EnsureModelGpuMesh`), so `UpdateData` is just memcpy + flush —
+    // it doesn't need an active command buffer or a queue submission. The
+    // function only fails (returns false) on null model / empty meshes /
+    // Vulkan allocation failure, all of which the caller can ignore.
+    bool PrewarmModel(const CatEngine::Model* model) {
+        return EnsureModelGpuMesh(model);
+    }
+
 private:
     bool CreateRenderPass(VkFormat colorFormat);
     bool CreateDepthResources(uint32_t width, uint32_t height);

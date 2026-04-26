@@ -1,5 +1,6 @@
 #include "CatAnnihilation.hpp"
 #include "entities/CatEntity.hpp"
+#include "entities/DogEntity.hpp"
 #include "components/GameComponents.hpp"
 #include "components/EnemyComponent.hpp"
 #include "config/GameplayConfig.hpp"
@@ -630,6 +631,31 @@ void CatAnnihilation::loadAssets() {
 
     // Load world assets
     // Note: GameWorld loads assets internally during initialize() - no separate loadAssets() call needed
+
+    // Pre-load dog GLB variants so wave-1's first-of-each-variant spawn
+    // doesn't synchronously block the game thread on disk-I/O + glTF parse.
+    //
+    // Why this is here and not in DogEntity itself:
+    //   The cat NPCs are pre-loaded as a side effect of NPCSystem reading
+    //   npcs.json — every NPC entry triggers a CatEntity attach which goes
+    //   through AssetManager::LoadModel. There is no equivalent file for
+    //   dog variants (the wave system just calls DogEntity::create<type>
+    //   on demand), so the explicit pre-load lives at the same scope as
+    //   other "warm caches before the main loop starts" work.
+    //
+    // Empirical motivation (2026-04-26 cat-verify evidence row #6):
+    //   Without this call, BigDog spawns at ~frame 150 and the next
+    //   heartbeat reads fps=14 (vs the wave-2 BigDog respawn at frame
+    //   ~960 which reads fps=56 because the model is cached by then).
+    //   The 4× delta is the disk-read + glTF parse for dog_big.glb's
+    //   ~250k-vertex Meshy export. Pre-loading folds that cost into
+    //   engine init, where 200 ms is invisible alongside the 2.4 s the
+    //   16-cat NPC pre-load already spends.
+    //
+    // Cost: four LoadModel calls during init. Idempotent — see the
+    //   docblock on DogEntity::PreloadAllVariants for why calling this
+    //   twice (e.g., from a future restart-to-main-menu flow) is safe.
+    DogEntity::PreloadAllVariants();
 
     Engine::Logger::info("Assets loaded");
 }
@@ -1487,10 +1513,41 @@ void CatAnnihilation::render() {
             // skip it for a normal in-game frame.
             Engine::Frustum cullFrustum = Engine::Frustum::fromMatrix(viewProj);
             static CatEngine::Renderer::MeshSubmissionSystem meshSubmission;
+
+            // Distance cull radius (metres). Sized to comfortably cover the
+            // gameplay arena around the player — wave-spawn radius is ~50 m
+            // (game/systems/wave_system.cpp picks spawn positions on a ring),
+            // and a typical engagement happens within 30 m. 80 m gives a
+            // generous buffer for: (1) the player chasing or being chased
+            // toward the edge of the arena; (2) any same-clan NPC sitting
+            // on the rim of the spawn ring; (3) a few metres of slop so
+            // entities crossing the threshold don't pop in/out frame-by-frame.
+            //
+            // Empirical motivation (cat-verify evidence row #8, frame=600):
+            // during wave-1 cleared the camera widens enough that 15 of 17
+            // visited entities pass the frustum cull, all 15 emit, and the
+            // GPU pipeline collapses to 10 fps for ~5 s. A distance cull
+            // at 80 m drops the same scene to ~3-5 emitted (player + nearby
+            // dogs + adjacent same-clan mentor) — well within budget.
+            //
+            // Why 80 m and not 50 m: 50 m would cut some of the spawn-ring
+            // dogs at the very moment they spawn (the wave system places
+            // them on a 50 m ring centred on the player), which would make
+            // dogs literally pop into existence as they cross the radius
+            // toward the player. Picking 80 m means the spawn ring is
+            // always inside the cull distance and dogs are visible from
+            // the moment they spawn. The 30 m buffer also covers the case
+            // where the autoplay AI moves the player toward the edge of
+            // the arena — the player is always at the centre of the cull
+            // sphere by construction (it's anchored to camPos which is
+            // playerPos + camera offset).
+            constexpr float kMeshDistanceCullMetres = 80.0F;
             meshSubmission.Submit(ecs_,
                                   static_cast<std::size_t>(renderer_->GetFrameIndex()),
                                   entityDraws,
-                                  &cullFrustum);
+                                  &cullFrustum,
+                                  &camPos,
+                                  kMeshDistanceCullMetres);
 
             auto* sceneCmdBuffer = renderer_->GetCommandBuffer();
             // DIAG: log per-frame whether the scene Execute path is reached.
@@ -2378,6 +2435,70 @@ inline const KillShakeProfile& selectKillShakeProfile(CatGame::DamageType type) 
     return kKillShakeProfiles[idx];
 }
 
+// Per-enemy-type death-burst AND kill-shake scaling.
+//
+// The per-element table (kHitProfiles / kDeathProfiles / kKillShakeProfiles)
+// answers "what KIND of kill was this?". This function answers a complementary
+// question: "how BIG was the enemy that died?". A regular Dog kill should feel
+// like a single kinetic beat; a BossDog kill should feel like a finishing
+// move. The multiplier scales BOTH the death-burst particle count AND the
+// kill-shake amplitude so the size delta hits the eye AND the camera at the
+// same moment, giving each tier of enemy its own kinetic signature.
+//
+// Tuning rationale:
+//   - Dog (1.0x)     — baseline. 50-particle burst + per-element shake.
+//                      The bread-and-butter wave-1 enemy; the kill cadence is
+//                      "frequent and quick" so it must NOT feel oppressive.
+//   - FastDog (1.0x) — same kinetic weight as Dog. FastDog is differentiated
+//                      by mobility (1.5x speed, 0.75x damage), not by death
+//                      weight; scaling its burst would mis-cue the player
+//                      that it was tougher than it was.
+//   - BigDog (1.5x)  — 75-particle burst + 1.5x shake. Visibly heavier than
+//                      a Dog kill but well inside the per-frame particle
+//                      budget. Reads as "that took more to put down".
+//   - BossDog (2.5x) — 125-particle burst + 2.5x shake. The shake multiplier
+//                      blows past triggerCameraShake's 0.25 m hard ceiling
+//                      for any element — that's intentional. BossDog kills
+//                      saturate the framing-anchor ceiling regardless of
+//                      element so they all read as "weighty finisher" while
+//                      still preserving per-element envelope-duration character
+//                      (Fire BossDog still has the longest envelope etc.).
+//                      Burst count 125 is well under the 1M particle pool.
+//
+// Pairs naturally with the per-element tables: a BossDog Fire kill produces
+// 125 orange-yellow upward sparks AND a 0.25 m / 0.20 s explosion-clamp shake;
+// a regular Dog Physical kill produces the unchanged 50 orange-red sphere
+// burst AND the unchanged 0.12 m / 0.18 s baseline thump. Four-quadrant
+// tactile delta (element × enemy-tier) from one playtest.
+//
+// Why not switch on AIState too: AIState::Dead transitions on the same frame
+// the kill fires, so it adds zero diagnostic value over EnemyType. EnemyType
+// is the stable identity for tier-scaling.
+inline float enemyTypeMultiplier(CatGame::EnemyType type) {
+    switch (type) {
+        case CatGame::EnemyType::Dog:     return 1.0F;
+        case CatGame::EnemyType::FastDog: return 1.0F;
+        case CatGame::EnemyType::BigDog:  return 1.5F;
+        case CatGame::EnemyType::BossDog: return 2.5F;
+    }
+    // Defensive fallback for a future EnemyType addition that wasn't reflected
+    // here. Returning 1.0 falls back to baseline Dog tuning, which is always a
+    // valid burst — same fallback contract as selectDeathProfile / selectHitProfile.
+    return 1.0F;
+}
+
+// Human-readable name for log lines. Mirrors damageTypeName() so the per-tier
+// canary log lines have the same naming convention as the per-element ones.
+inline const char* enemyTypeName(CatGame::EnemyType type) {
+    switch (type) {
+        case CatGame::EnemyType::Dog:     return "Dog";
+        case CatGame::EnemyType::FastDog: return "FastDog";
+        case CatGame::EnemyType::BigDog:  return "BigDog";
+        case CatGame::EnemyType::BossDog: return "BossDog";
+    }
+    return "UnknownEnemy";
+}
+
 // Helper: clamp a DamageType to a valid index for the profile tables.
 // Defends against a future enum addition that wasn't reflected in the
 // tables — a missing entry would silently read past the end and produce
@@ -2416,7 +2537,8 @@ inline const char* damageTypeName(CatGame::DamageType type) {
 } // namespace
 
 void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
-                                          DamageType damageType) {
+                                          DamageType damageType,
+                                          float burstMultiplier) {
     if (particleSystem_ == nullptr) {
         return;
     }
@@ -2426,6 +2548,28 @@ void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
     // in selectDeathProfile guarantees we always get a valid struct even if
     // a future DamageType is added without being added to the table.
     const ParticleProfile& profile = selectDeathProfile(damageType);
+
+    // Per-enemy-type burst scaling. The multiplier comes from
+    // enemyTypeMultiplier(EnemyComponent.type) at the caller (onEntityDeath
+    // probes the dying entity's EnemyComponent before calling this). Defaults
+    // to 1.0 so non-enemy callers (player death, scripted kills, future test
+    // hooks that don't have an EnemyComponent) get the unchanged baseline
+    // burst count.
+    //
+    // Floor at 1 so a future tuning misstep (multiplier of 0 / negative)
+    // can't silently produce a no-op burst that swallows the kill cue.
+    // Round-half-up via +0.5F so a 1.5x on 50 lands at 75 not 74. Cast to
+    // uint32_t after the floor so the assignment to emitter->burstCount
+    // (also uint32_t) is type-safe.
+    //
+    // Burst count headroom: even the largest combination (BossDog 2.5x on the
+    // 60-particle Ice profile = 150) is six orders of magnitude under the
+    // 1M particle pool ceiling (ParticleSystem.hpp:38), so no clamp is
+    // needed against the GPU buffer size.
+    const float scaledFloat =
+        static_cast<float>(profile.burstCount) * burstMultiplier;
+    const uint32_t scaledBurstCount =
+        static_cast<uint32_t>(scaledFloat < 1.0F ? 1.0F : scaledFloat + 0.5F);
 
     // Get the death emitter, move it to the kill site, OVERWRITE its tunings
     // with the per-element profile, re-enable it for a single burst, and
@@ -2468,7 +2612,7 @@ void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
     if (emitter != nullptr) {
         emitter->position = position;
         emitter->enabled = true;
-        emitter->burstCount = profile.burstCount;
+        emitter->burstCount = scaledBurstCount;
         emitter->shapeParams.sphereRadius = profile.sphereRadius;
         emitter->initialProperties.colorBase = profile.colorBase;
         emitter->initialProperties.colorVariation = profile.colorVariation;
@@ -2492,7 +2636,10 @@ void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
         // distinct profiles — without the per-element log, an Ice kill
         // followed by a Fire kill would both produce only the global
         // "first death-burst triggered" line and the per-element delta
-        // would be invisible in the log.
+        // would be invisible in the log. The multiplier is also surfaced
+        // in the log so a per-tier scaling regression (multiplier always
+        // 1.0 → all bosses look like regular dogs) is visible without
+        // re-instrumenting.
         static bool firstDeathBurstLogged = false;
         static bool firstPerElementLogged[6] = {false, false, false, false, false, false};
         if (!firstDeathBurstLogged) {
@@ -2501,6 +2648,7 @@ void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
                 "[ParticleSystem] first death-burst triggered (count="
                 + std::to_string(emitter->burstCount)
                 + ", element=" + damageTypeName(damageType)
+                + ", multiplier=" + std::to_string(burstMultiplier)
                 + ", pos=" + std::to_string(position.x)
                 + "," + std::to_string(position.y)
                 + "," + std::to_string(position.z) + ")");
@@ -2513,7 +2661,8 @@ void CatAnnihilation::spawnDeathParticles(const Engine::vec3& position,
                 + " death-burst triggered (count=" + std::to_string(emitter->burstCount)
                 + ", radius=" + std::to_string(profile.sphereRadius)
                 + ", lifetime=" + std::to_string(profile.lifetimeMin)
-                + "-" + std::to_string(profile.lifetimeMax) + " s)");
+                + "-" + std::to_string(profile.lifetimeMax) + " s"
+                + ", multiplier=" + std::to_string(burstMultiplier) + ")");
         }
     }
 }
@@ -2846,6 +2995,38 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
         setState(GameState::GameOver);
     }
 
+    // Per-enemy-type kinetic scaling. EnemyComponent is still alive at this
+    // point (HealthSystem::handleDeath fires onEntityDeath_ INSIDE the
+    // updateHealth pass, and the matching ecs_->destroyEntity only fires
+    // once health->deathTimer crosses health->deathAnimationDuration on a
+    // LATER tick — see HealthSystem.cpp:74-82). The probe is therefore safe
+    // and deterministic. Player death falls through with the default 1.0x
+    // (player has no EnemyComponent), so the player path is byte-exact
+    // identical to before this iteration.
+    //
+    // The multiplier feeds BOTH spawnDeathParticles' burst count AND
+    // triggerCameraShake's amplitude so the per-tier delta hits the eye AND
+    // the camera at the same moment. The shake amplitude clamp inside
+    // triggerCameraShake (≤0.25 m hard ceiling) saturates BossDog-tier
+    // kills regardless of element — that's intentional: BossDog shakes pin
+    // at the framing-anchor ceiling so they all feel "weighty finisher"
+    // while the per-element envelope DURATION (Fire 0.20 s vs Ice 0.30 s
+    // etc.) preserves elemental character even at the saturation point.
+    //
+    // Why we read EnemyType once and reuse it for both calls: a future
+    // refactor that splits onEntityDeath into per-tier sub-handlers would
+    // re-probe the component twice. The single read AT THIS LEVEL keeps
+    // both consumers (burst + shake) in lockstep — a per-tier multiplier
+    // change in enemyTypeMultiplier() touches both calls atomically.
+    float perTierMultiplier = 1.0F;
+    CatGame::EnemyType perTierType = CatGame::EnemyType::Dog;
+    bool isEnemy = false;
+    if (auto* enemyComp = ecs_.getComponent<EnemyComponent>(event.entity)) {
+        isEnemy = true;
+        perTierType = enemyComp->type;
+        perTierMultiplier = enemyTypeMultiplier(perTierType);
+    }
+
     // Spawn death particles at entity position. Forward the killing-blow's
     // damage type from EntityDeathEvent so the dispatcher inside
     // spawnDeathParticles picks the right per-element profile (orange-red
@@ -2855,8 +3036,9 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
     // HealthComponent.lastDamageType (see the construct site above) so the
     // chain CombatSystem::applyDamage → HealthComponent.lastDamageType →
     // EntityDeathEvent.damageType → spawnDeathParticles is end-to-end
-    // type-typed.
-    spawnDeathParticles(deathPosition, event.damageType);
+    // type-typed. burstMultiplier scales the burst count by enemy tier;
+    // see enemyTypeMultiplier() for the per-tier rationale.
+    spawnDeathParticles(deathPosition, event.damageType, perTierMultiplier);
 
     // Camera shake: a small punchy jitter on the kill moment to give the
     // attack-lunge → hit-flinch → death-burst sequence a tactile beat.
@@ -2888,8 +3070,22 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
     if (event.entity != playerEntity_) {
         const KillShakeProfile& shakeProfile =
             selectKillShakeProfile(event.damageType);
-        triggerCameraShake(shakeProfile.amplitudeMeters,
-                           shakeProfile.durationSeconds);
+
+        // Per-enemy-type amplitude scaling. Same multiplier the burst-count
+        // path uses (Dog/FastDog 1.0x, BigDog 1.5x, BossDog 2.5x); the size
+        // delta hits the eye AND the camera at the same moment. The
+        // amplitude clamp inside triggerCameraShake (≤0.25 m hard ceiling)
+        // saturates the BossDog tier across every element — that's
+        // intentional: a BossDog kill should pin at the framing-anchor
+        // ceiling regardless of element. The DURATION is NOT scaled — only
+        // amplitude — so the per-element envelope length (Fire 0.20 s vs
+        // Ice 0.30 s etc.) preserves elemental character even at the
+        // saturation point. A bigger enemy makes the ground shake harder,
+        // not necessarily longer, which matches how impact physics works
+        // in the real world.
+        const float scaledAmplitude =
+            shakeProfile.amplitudeMeters * perTierMultiplier;
+        triggerCameraShake(scaledAmplitude, shakeProfile.durationSeconds);
 
         // Per-element regression canary — mirrors the per-element burst
         // log lines in spawnDeathParticles / spawnHitParticles. Logs the
@@ -2909,6 +3105,12 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
         // call), and the per-element delta would be invisible in the log
         // — exactly the gap the spawnDeathParticles canary closed for
         // bursts, applied here for camera-shake.
+        //
+        // requestedAmplitude is logged BEFORE triggerCameraShake's clamp;
+        // a future regression where BossDog kills no longer pin at the
+        // 0.25 m ceiling shows up as a divergence between the requested
+        // value here and the rendered shake (which the per-tier line
+        // logs separately).
         static bool firstPerElementShakeLogged[6] = {
             false, false, false, false, false, false};
         const int idx = static_cast<int>(event.damageType);
@@ -2917,10 +3119,39 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
             Engine::Logger::info(
                 std::string("[Camera] first ") +
                 damageTypeName(event.damageType) +
-                " kill-shake triggered (amplitude=" +
-                std::to_string(shakeProfile.amplitudeMeters) +
+                " kill-shake triggered (requestedAmplitude=" +
+                std::to_string(scaledAmplitude) +
                 " m, duration=" +
-                std::to_string(shakeProfile.durationSeconds) + " s)");
+                std::to_string(shakeProfile.durationSeconds) +
+                " s, multiplier=" + std::to_string(perTierMultiplier) + ")");
+        }
+
+        // Per-enemy-type regression canary — sister to the per-element
+        // line above. Logs the FIRST kill of each EnemyType so a portfolio
+        // reviewer can verify the per-tier dispatcher actually picks
+        // distinct multipliers. Without this line a "BigDog kill but
+        // multiplier still 1.0" regression would be silent in the log
+        // (the per-element line could fire on the same kill but only
+        // shows multiplier as part of a single per-element value, not
+        // as a confirmation that EnemyType was probed correctly).
+        //
+        // Index by the EnemyType enum (4 values: Dog, BigDog, FastDog,
+        // BossDog at game/components/EnemyComponent.hpp:10-15). Same
+        // out-of-range clamp pattern as the per-element canary.
+        static bool firstPerTierShakeLogged[4] = {false, false, false, false};
+        if (isEnemy) {
+            const int tierIdx = static_cast<int>(perTierType);
+            if (tierIdx >= 0 && tierIdx < 4 && !firstPerTierShakeLogged[tierIdx]) {
+                firstPerTierShakeLogged[tierIdx] = true;
+                Engine::Logger::info(
+                    std::string("[Camera] first ") +
+                    enemyTypeName(perTierType) +
+                    " kill observed (multiplier=" +
+                    std::to_string(perTierMultiplier) +
+                    ", element=" + damageTypeName(event.damageType) +
+                    ", requestedAmplitude=" +
+                    std::to_string(scaledAmplitude) + " m)");
+            }
         }
     }
 }
