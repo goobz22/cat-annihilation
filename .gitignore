@@ -49,6 +49,23 @@ npm-debug.log*
 # Asset intermediates
 /assets/shaders/
 
+# Binary art assets — Meshy GLB exports run 11 MB to 491 MB each (12
+# files exceed GitHub's 100 MB hard limit; total ~4.8 GB). Move to
+# git-lfs in a follow-up; until then keep these out of the main repo.
+/assets/models/
+
+# ImGui runtime layout file (regenerated each session)
+imgui.ini
+
+# Openclaw / runner scratch
+/.runner/
+
+# Test build artifacts
+/tests/build/
+
+# Local render outputs
+/scripts/_render_out/
+
 # Legacy Node.js files (if any remain)
 /node_modules/
 /.next/

@@ -1,0 +1,104 @@
+{
+  "id": "scout_briefing",
+  "name": "Pathfinder Scout Briefing",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Pathfinder",
+      "text": "You move quietly for a house cat. Good. I've been mapping the territories and there's work that needs doing — the kind of work that doesn't get done through bravery alone. Eyes, ears, and careful paws.",
+      "options": [
+        {
+          "text": "What kind of work?",
+          "responseId": "explain_work"
+        },
+        {
+          "text": "Why are you doing this alone?",
+          "responseId": "why_alone"
+        },
+        {
+          "text": "Show me the map.",
+          "responseId": "show_map"
+        },
+        {
+          "text": "I'll come back later.",
+          "responseId": "goodbye"
+        }
+      ]
+    },
+    {
+      "id": "explain_work",
+      "speaker": "Pathfinder",
+      "text": "Reconnaissance, mostly. Something is shifting the borders between the clans — pawprints where none should be, patrols arriving late, scents that don't match any clan I know. If you can walk a few paths for me and report what you see, I'll make it worth your time.",
+      "options": [
+        {
+          "text": "What's my first assignment?",
+          "responseId": "first_quest"
+        },
+        {
+          "text": "How do I know I can trust you?",
+          "responseId": "trust"
+        }
+      ]
+    },
+    {
+      "id": "why_alone",
+      "speaker": "Pathfinder",
+      "text": "Clan scouts only see clan borders. A cat without a clan sees the whole map. I answer to no leader, which means I can tell you things the four leaders wouldn't admit to each other.",
+      "options": [
+        {
+          "text": "Interesting. Tell me more.",
+          "responseId": "explain_work"
+        },
+        {
+          "text": "Sounds dangerous.",
+          "responseId": "goodbye"
+        }
+      ]
+    },
+    {
+      "id": "show_map",
+      "speaker": "Pathfinder",
+      "text": "Here — the four clan territories, the river, the burned woods, the frost ridge. The markings you don't recognize? Those are the problem. Fresh, faint, wrong-shaped. Something doesn't belong.",
+      "options": [
+        {
+          "text": "I'll help you find out what.",
+          "responseId": "first_quest"
+        },
+        {
+          "text": "Not my problem.",
+          "responseId": "goodbye"
+        }
+      ]
+    },
+    {
+      "id": "first_quest",
+      "speaker": "Pathfinder",
+      "text": "Start by checking the markers near the river crossing. Don't engage anyone. Just look, remember, return. Quest accepted — blow the bone whistle if you need me.",
+      "quest": "scout_recon_1",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": "goodbye"
+        }
+      ]
+    },
+    {
+      "id": "trust",
+      "speaker": "Pathfinder",
+      "text": "You don't, and you shouldn't — not fully. But I don't lie about the job. If what I ask you to look at isn't there, I pay you anyway for the walk. Fair?",
+      "options": [
+        {
+          "text": "Fair. What's the job?",
+          "responseId": "first_quest"
+        }
+      ]
+    },
+    {
+      "id": "goodbye",
+      "speaker": "Pathfinder",
+      "text": "The map will be here when you're ready. Keep your ears up.",
+      "options": []
+    }
+  ]
+}

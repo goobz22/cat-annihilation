@@ -1,0 +1,214 @@
+{
+  "id": "clan_leader_welcome_ember",
+  "name": "EmberClan Leader Welcome",
+  "startNode": "first_meeting",
+  "nodes": [
+    {
+      "id": "first_meeting",
+      "speaker": "Blazestar",
+      "text": "Come closer to the fire, traveler. I do not shout across embers. I am Blazestar, and my fur has greyed in service to EmberClan longer than most of my warriors have been alive. Flamefur says you walk like someone who has been burned and has chosen to walk anyway. That is already more than most offer me.",
+      "options": [
+        {
+          "text": "What does EmberClan need?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Tell me about EmberClan.",
+          "responseId": "clan_status"
+        },
+        {
+          "text": "I'm only passing through.",
+          "responseId": "just_visiting"
+        }
+      ]
+    },
+    {
+      "id": "offer_service",
+      "speaker": "Blazestar",
+      "text": "Then I will be direct. A firestorm broke across the eastern woods a quarter-moon ago and did not burn the way fire should. It moved. It chose. When Ashwhisker brought me samples of the ash they did not smell of oak or pine - they smelled of something that walked on four paws. Something is making fire into a weapon, and it is not one of us.",
+      "options": [
+        {
+          "text": "I will find out what. I pledge to EmberClan.",
+          "responseId": "join_clan",
+          "requiredClan": "None"
+        },
+        {
+          "text": "What does EmberClan ask of its warriors?",
+          "responseId": "explain_joining"
+        },
+        {
+          "text": "I can investigate, but I keep my independence.",
+          "responseId": "decline_join"
+        }
+      ]
+    },
+    {
+      "id": "clan_status",
+      "speaker": "Blazestar",
+      "text": "EmberClan was born in the ashes of an older clan that burned itself to nothing. We remember. We teach every kitten that fire can feed a den through winter or take a den to the ground, and the difference is always in who holds the spark. We keep the spark. We do not let it slip.",
+      "options": [
+        {
+          "text": "That wisdom is rare. How can I help keep it?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "What about the other clans?",
+          "responseId": "other_clans"
+        }
+      ]
+    },
+    {
+      "id": "explain_joining",
+      "speaker": "Blazestar",
+      "text": "To be of EmberClan is to accept that fire answers to discipline, never to anger. You will train with Flamefur until a fireball leaves your paws only when you mean it. You will buy from Ashwhisker, bleed beside your clanmates, and one day, when I am ash, you will choose the next one to hold the spark. That is the whole of it.",
+      "options": [
+        {
+          "text": "I'll take the oath.",
+          "responseId": "join_clan"
+        },
+        {
+          "text": "Give me time to decide.",
+          "responseId": "need_time"
+        }
+      ]
+    },
+    {
+      "id": "join_clan",
+      "speaker": "Blazestar",
+      "text": "Then step into the ring of embers and speak your name. Good. The fire accepts you. Flamefur has watched. She will speak for you to the clan when the next moon rises. But the moving fire will not wait for ceremony. I have work for you now.",
+      "autoAdvance": false,
+      "options": [
+        {
+          "text": "Name it.",
+          "responseId": "first_quest"
+        }
+      ]
+    },
+    {
+      "id": "first_quest",
+      "speaker": "Blazestar",
+      "text": "Go to the burn line at the edge of the eastern woods. Find the source of the walking fire. Do not fight it until you have watched it - I need to know what it is before I know how to end it. Bring me one thing I can put my paw on: a print, a tuft of fur, a burned collar. Can you do this?",
+      "options": [
+        {
+          "text": "I'll bring you proof.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if it attacks me first?",
+          "responseId": "quest_details"
+        }
+      ]
+    },
+    {
+      "id": "quest_details",
+      "speaker": "Blazestar",
+      "text": "Then use the fireball Flamefur taught you and retreat. A dead scout brings me nothing. A live scout with a burned whisker and one ember-print brings me everything. Information first, vengeance second. Always in that order.",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if I lose the trail?",
+          "responseId": "contingency"
+        }
+      ]
+    },
+    {
+      "id": "contingency",
+      "speaker": "Blazestar",
+      "text": "Then come back. Tell me what you saw. Even a cold trail teaches me something about what left it. I would rather have a warrior at my fire tonight than a martyr in the eastern woods.",
+      "options": [
+        {
+          "text": "Wise. I'll go carefully.",
+          "responseId": "accept_quest"
+        }
+      ]
+    },
+    {
+      "id": "accept_quest",
+      "speaker": "Blazestar",
+      "text": "Then may the old fires walk with you. Return when the task is done, or when you need ember and rest. This hearth does not close.",
+      "options": [
+        {
+          "text": "For EmberClan.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "other_clans",
+      "speaker": "Blazestar",
+      "text": "Mistheart chooses silence when she should choose fire. Stormstar burns bright and fast and will one day burn out. Winterstar is careful and slow, and I respect her for it even when it frustrates me. We four have fought and we have failed to unite, and every season I grow less certain we have time for more meetings.",
+      "options": [
+        {
+          "text": "Then let's not wait for another meeting.",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Who among them would you trust most?",
+          "responseId": "trust_clan"
+        }
+      ]
+    },
+    {
+      "id": "trust_clan",
+      "speaker": "Blazestar",
+      "text": "Winterstar, if I had to choose. She listens. She remembers what she hears. She has never sent a warrior to die to make a point. If this walking fire turns to flame-shapes no EmberClan cat recognizes, hers is the door I will knock on first.",
+      "options": [
+        {
+          "text": "That's useful to know.",
+          "responseId": "offer_service"
+        }
+      ]
+    },
+    {
+      "id": "just_visiting",
+      "speaker": "Blazestar",
+      "text": "Then warm yourself at the fire before you go. I do not turn travelers away in a season this strange. But know this: something in these woods is no longer content to be warmed. It wants to warm others. Remember that when you reach the tree line.",
+      "options": [
+        {
+          "text": "I'll remember.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Tell me more about the offer to join.",
+          "responseId": "explain_joining"
+        }
+      ]
+    },
+    {
+      "id": "decline_join",
+      "speaker": "Blazestar",
+      "text": "An independent claw is still a claw. If you bring me good information and ask nothing in return but fair pay, I will give it. Some of my best friends never wore this collar.",
+      "options": [
+        {
+          "text": "Thank you for that.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "need_time",
+      "speaker": "Blazestar",
+      "text": "Fire waits a long time inside a banked coal. Take the time you need. But do not come back here in a season and tell me you wish you had chosen sooner - I have heard that speech, and I tire of it.",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Blazestar",
+      "text": "Warm paws and a clear head, traveler. Return when you are ready.",
+      "options": [
+        {
+          "text": "Farewell, Blazestar.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,199 @@
+{
+  "id": "clan_leader_welcome_frost",
+  "name": "FrostClan Leader Welcome",
+  "startNode": "first_meeting",
+  "nodes": [
+    {
+      "id": "first_meeting",
+      "speaker": "Winterstar",
+      "text": "You walked across the ridge in full view. Either brave or very tired. I am Winterstar, leader of FrostClan, and I do not mind either answer - we see both often at this altitude. Sit. The snow makes a poor chair but an honest one.",
+      "options": [
+        {
+          "text": "What can I do for FrostClan?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Tell me about FrostClan.",
+          "responseId": "clan_status"
+        },
+        {
+          "text": "I'm just passing through.",
+          "responseId": "just_visiting"
+        }
+      ]
+    },
+    {
+      "id": "offer_service",
+      "speaker": "Winterstar",
+      "text": "There is a lake two days north that has not frozen this season, and it should have. Snowpaw says the animals around it have stopped drinking from it. Icepelt says the water does not feel right to his paws. Something has changed in this valley, and I need a warrior who can look with fresh eyes. That would be you, if you are willing.",
+      "options": [
+        {
+          "text": "I'll go. I pledge myself to FrostClan.",
+          "responseId": "join_clan",
+          "requiredClan": "None"
+        },
+        {
+          "text": "What does joining FrostClan require?",
+          "responseId": "explain_joining"
+        },
+        {
+          "text": "I'll investigate, but I don't need to join.",
+          "responseId": "decline_join"
+        }
+      ]
+    },
+    {
+      "id": "clan_status",
+      "speaker": "Winterstar",
+      "text": "FrostClan was here before these mountains had a name we could pronounce. We keep our own counsel, we do not rush to battle, and we have outlived three other clans who did both. Icepelt teaches patience. Snowpaw teaches healing. I teach listening. That is most of what we do.",
+      "options": [
+        {
+          "text": "Listening is undervalued. How can I help?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "What about the other clans?",
+          "responseId": "other_clans"
+        }
+      ]
+    },
+    {
+      "id": "explain_joining",
+      "speaker": "Winterstar",
+      "text": "FrostClan asks little and offers much. You will train with Icepelt in our three arts of ice. You will see Snowpaw when you are hurt and not before you are hurt, because we do not accept sacrifices we have not ourselves agreed to. You will keep the old oath: watch, wait, move only when you must. Do that and this ridge is home.",
+      "options": [
+        {
+          "text": "I accept the oath.",
+          "responseId": "join_clan"
+        },
+        {
+          "text": "I'd like to consider it.",
+          "responseId": "need_time"
+        }
+      ]
+    },
+    {
+      "id": "join_clan",
+      "speaker": "Winterstar",
+      "text": "Then let the snow record it. You are of FrostClan. There is no ceremony louder than that - noise alarms predators and attracts attention we do not need. Icepelt will recognize you without being told. That is his way. Now - the lake.",
+      "autoAdvance": false,
+      "options": [
+        {
+          "text": "What do you need me to find?",
+          "responseId": "first_quest"
+        }
+      ]
+    },
+    {
+      "id": "first_quest",
+      "speaker": "Winterstar",
+      "text": "Travel to the north lake. Watch for a full day before you approach. Note what lives there now, what does not, and what has changed in the ice. If there is a source causing the water to resist freezing, find it. Do not disturb it. Come back and tell me exactly what you saw. Can you do that?",
+      "options": [
+        {
+          "text": "A day of watching, then I return. Yes.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if something is already there watching back?",
+          "responseId": "quest_details"
+        }
+      ]
+    },
+    {
+      "id": "quest_details",
+      "speaker": "Winterstar",
+      "text": "Then you have already succeeded. Retreat and tell me. I send warriors to learn, not to die proving things I already suspect. Frozen Armor will buy you time if it comes to that. Ice Shard will buy you distance. Use them, then come home.",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if the trail vanishes?",
+          "responseId": "contingency"
+        }
+      ]
+    },
+    {
+      "id": "contingency",
+      "speaker": "Winterstar",
+      "text": "Then it vanished. Mark where. Mark when. Mark what the wind smelled like. FrostClan has built an entire memory of this valley out of what other clans would call nothing. Trust that your observation matters even when it feels small.",
+      "options": [
+        {
+          "text": "I will.",
+          "responseId": "accept_quest"
+        }
+      ]
+    },
+    {
+      "id": "accept_quest",
+      "speaker": "Winterstar",
+      "text": "Then go quietly. The snow keeps your prints for a while but not forever. Return in three dawns and we will see what has changed.",
+      "options": [
+        {
+          "text": "For FrostClan.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "other_clans",
+      "speaker": "Winterstar",
+      "text": "Mistheart understands patience - we agree on more than either of us admits. Stormstar acts, which I respect even when it is too early. Blazestar holds an old fire carefully, and I hope he is allowed to hold it a long while. We do not meet enough. That is as much my fault as anyone's.",
+      "options": [
+        {
+          "text": "Perhaps a meeting could be arranged.",
+          "responseId": "offer_service"
+        }
+      ]
+    },
+    {
+      "id": "just_visiting",
+      "speaker": "Winterstar",
+      "text": "Then pass well. The ridge is not kind to travelers who do not know its paths - if the weather turns, follow the cairns down, not the streams. Streams in this range end in places that do not welcome visitors.",
+      "options": [
+        {
+          "text": "Thank you for the warning.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Tell me more about joining.",
+          "responseId": "explain_joining"
+        }
+      ]
+    },
+    {
+      "id": "decline_join",
+      "speaker": "Winterstar",
+      "text": "Then go on your own terms. FrostClan has sheltered wanderers who never swore an oath, and the ridge was better for their passing. If you return with useful information I will pay you fairly and ask nothing more.",
+      "options": [
+        {
+          "text": "That's appreciated.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "need_time",
+      "speaker": "Winterstar",
+      "text": "Time is the one thing FrostClan does not ration. Take what you need. The ridge will still be here when you decide.",
+      "options": [
+        {
+          "text": "Thank you.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Winterstar",
+      "text": "Quiet paws, traveler. And warm ones, if you can manage.",
+      "options": [
+        {
+          "text": "Farewell, Winterstar.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

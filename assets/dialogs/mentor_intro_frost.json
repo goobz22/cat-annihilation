@@ -1,0 +1,131 @@
+{
+  "id": "mentor_intro_frost",
+  "name": "FrostClan Mentor Introduction",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Icepelt",
+      "text": "Breathe. Slowly. Feel the cold draw into your chest and out again. That - that rhythm - is the beginning of every ice art. I am Icepelt. I teach FrostClan's three disciplines: Ice Shard, Frozen Armor, and the Blizzard. You came here for one of them, or for all three. Which is it?",
+      "options": [
+        {
+          "text": "I want to learn all of them.",
+          "responseId": "accept_training"
+        },
+        {
+          "text": "Tell me about the three disciplines.",
+          "responseId": "explain_abilities"
+        },
+        {
+          "text": "Not yet - I'm only looking.",
+          "responseId": "decline"
+        }
+      ]
+    },
+    {
+      "id": "accept_training",
+      "speaker": "Icepelt",
+      "text": "Ambitious. Good. But we will not rush. Every FrostClan warrior begins with Ice Shard - a small dart of hardened water shaped by intent and exhaled through the teeth. Master it, and the other two will unfold. Are you prepared to train with the patience of ice?",
+      "options": [
+        {
+          "text": "I'm ready.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "What makes FrostClan's magic different?",
+          "responseId": "clan_philosophy"
+        }
+      ]
+    },
+    {
+      "id": "explain_abilities",
+      "speaker": "Icepelt",
+      "text": "Ice Shard is a dart that slows what it touches. Frozen Armor is a lattice of cold along your fur that turns claws and weakens teeth. Blizzard is the last and loudest - a field of wind and ice that freezes any enemy caught inside. Each takes longer to learn than the one before, and each costs more in focus to hold.",
+      "options": [
+        {
+          "text": "Teach me where to start.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "How long does it take to master them?",
+          "responseId": "training_time"
+        },
+        {
+          "text": "I need to think on it.",
+          "responseId": "decline"
+        }
+      ]
+    },
+    {
+      "id": "clan_philosophy",
+      "speaker": "Icepelt",
+      "text": "StormClan's lightning is quick. EmberClan's fire is hungry. MistClan's shadow is silent. Ours is... deliberate. Ice does not ask to be noticed. It arrives when water has been still too long, and it leaves on its own schedule. We teach patience because that is the shape of cold. A claw in haste melts the frost it was carrying.",
+      "options": [
+        {
+          "text": "I understand. Teach me.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "That resonates with me.",
+          "responseId": "begin_training"
+        }
+      ]
+    },
+    {
+      "id": "training_time",
+      "speaker": "Icepelt",
+      "text": "Ice Shard: days, for an honest student. Frozen Armor: weeks. Blizzard: not until Winterstar herself agrees you are ready, which is measured in seasons. If those numbers frustrate you, FrostClan will frustrate you. If they make sense, you will fit here.",
+      "options": [
+        {
+          "text": "Those numbers make sense. Let's begin.",
+          "responseId": "begin_training"
+        },
+        {
+          "text": "I'll come back when I've thought about it.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "begin_training",
+      "speaker": "Icepelt",
+      "text": "Then sit. Breathe once, fully, until your chest settles. Now shape that breath into a point just past your teeth - no bigger than a claw, no longer than a heartbeat. That is Ice Shard, held. Release it at the rag on the post. Do not aim hard; aim quietly.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "training_complete"
+    },
+    {
+      "id": "training_complete",
+      "speaker": "Icepelt",
+      "text": "You hit the post. You also hit the ground beside it and the air above it, but the post was there when you were done, and it has a neat hole through the rag. That is a beginning. Return when you are ready for Frozen Armor. I will be here, watching the weather.",
+      "options": [
+        {
+          "text": "Thank you, mentor.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "decline",
+      "speaker": "Icepelt",
+      "text": "The ridge will be here when you are ready. So will I. Walk slowly - the paths are slick this time of year.",
+      "options": [
+        {
+          "text": "Farewell.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Icepelt",
+      "text": "Quiet paws, traveler. Breathe slowly. Return when you mean it.",
+      "options": [
+        {
+          "text": "Goodbye.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

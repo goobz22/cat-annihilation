@@ -1,0 +1,218 @@
+{
+  "id": "clan_leader_welcome_storm",
+  "name": "StormClan Leader Welcome",
+  "startNode": "first_meeting",
+  "nodes": [
+    {
+      "id": "first_meeting",
+      "speaker": "Stormstar",
+      "text": "So. Another traveler blown in on the wind. I am Stormstar, and these lands crack with our thunder. Thunderstrike tells me you carry yourself like someone who's already survived a few bad nights. That's more than most warriors I take in.",
+      "options": [
+        {
+          "text": "I've survived worse than storms. What do you need?",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Tell me about StormClan.",
+          "responseId": "clan_status"
+        },
+        {
+          "text": "I'm just passing through.",
+          "responseId": "just_visiting"
+        }
+      ]
+    },
+    {
+      "id": "offer_service",
+      "speaker": "Stormstar",
+      "text": "Good. StormClan does not hold back and neither do its friends. Our scouts report a pack of dogs massing at the old quarry, and the other clans will meet them the way they always do - late, and in pieces. We will not wait. But first: are you prepared to stand under StormClan's banner?",
+      "options": [
+        {
+          "text": "I will fight beside you.",
+          "responseId": "join_clan",
+          "requiredClan": "None"
+        },
+        {
+          "text": "What does joining StormClan mean?",
+          "responseId": "explain_joining"
+        },
+        {
+          "text": "I'll fight, but I keep my independence.",
+          "responseId": "decline_join"
+        }
+      ]
+    },
+    {
+      "id": "clan_status",
+      "speaker": "Stormstar",
+      "text": "The lightning has spoken thrice in three moons - an omen of war. MistClan hides, FrostClan watches, EmberClan rages without aim. Only StormClan still trains every dawn to meet what's coming. We have speed, we have fury, and we have the sky on our side. What we lack is numbers.",
+      "options": [
+        {
+          "text": "Then let me add to them.",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "How many warriors can you field?",
+          "responseId": "clan_numbers"
+        }
+      ]
+    },
+    {
+      "id": "clan_numbers",
+      "speaker": "Stormstar",
+      "text": "Fewer than I'd like to admit and more than our enemies believe. Lightningclaw keeps every one of them sharp, and Thunderstrike teaches the newcomers the first strike. One well-trained StormClan warrior is worth three of any other clan's in open ground. The problem is there is very little open ground left.",
+      "options": [
+        {
+          "text": "Count me among them.",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Do the other clans see this threat?",
+          "responseId": "other_clans"
+        }
+      ]
+    },
+    {
+      "id": "explain_joining",
+      "speaker": "Stormstar",
+      "text": "To wear StormClan's collar is to pledge that when the sky rolls and the fight comes, you run toward it. No hiding, no hesitation. In return you have Lightningclaw's training, Thunderstrike's teachings, and the loyalty of every warrior who lifted their paw the day you did. Some clans offer comfort. We offer each other.",
+      "options": [
+        {
+          "text": "I accept. I'll take the oath.",
+          "responseId": "join_clan"
+        },
+        {
+          "text": "I need to think on it.",
+          "responseId": "need_time"
+        }
+      ]
+    },
+    {
+      "id": "join_clan",
+      "speaker": "Stormstar",
+      "text": "Then by the storm that raised me and the ones still coming, you are StormClan. Lift your head. You will not lower it again while I lead. Now - there is already work that cannot wait.",
+      "autoAdvance": false,
+      "options": [
+        {
+          "text": "What needs doing?",
+          "responseId": "first_quest"
+        }
+      ]
+    },
+    {
+      "id": "first_quest",
+      "speaker": "Stormstar",
+      "text": "The quarry pack I spoke of is being led by a dog the scouts call Rail. He's big, he's clever, and he knows our usual paths. I want you to break their forward line, draw Rail out, and break him. Lightningclaw will brief you on approach routes. Bring back proof. Can you do this?",
+      "options": [
+        {
+          "text": "Consider him broken.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "Tell me more about Rail.",
+          "responseId": "quest_details"
+        }
+      ]
+    },
+    {
+      "id": "quest_details",
+      "speaker": "Stormstar",
+      "text": "He favors ambushes from high ground and always keeps two fast flankers with him. Strike his flankers first or you will never reach him. This is exactly the kind of fight Lightning Dash was made for - close the gap faster than his pack can react, and the fight is yours.",
+      "options": [
+        {
+          "text": "Understood. I'll be ready.",
+          "responseId": "accept_quest"
+        },
+        {
+          "text": "What if he has scouts of his own?",
+          "responseId": "contingency"
+        }
+      ]
+    },
+    {
+      "id": "contingency",
+      "speaker": "Stormstar",
+      "text": "He will. Assume they've already seen you. Fight fast enough that being seen doesn't matter. That is StormClan's answer to almost every problem: be where your enemy thought you'd be later, and be gone before they finish telling anyone.",
+      "options": [
+        {
+          "text": "Good answer.",
+          "responseId": "accept_quest"
+        }
+      ]
+    },
+    {
+      "id": "accept_quest",
+      "speaker": "Stormstar",
+      "text": "Then the sky goes with you. Strike hard, strike first, and return when Rail no longer barks. I will be here - watching, always.",
+      "options": [
+        {
+          "text": "For StormClan.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "other_clans",
+      "speaker": "Stormstar",
+      "text": "Mistheart plays the long game and pretends it's strategy. Blazestar wants a pyre and has not decided yet whose. Winterstar sees clearly but acts slowly. I have asked them all for unity. I will not ask again. The storm comes whether they march or not.",
+      "options": [
+        {
+          "text": "Perhaps I can bring them to the table.",
+          "responseId": "offer_service"
+        },
+        {
+          "text": "Then StormClan stands alone.",
+          "responseId": "clan_status"
+        }
+      ]
+    },
+    {
+      "id": "just_visiting",
+      "speaker": "Stormstar",
+      "text": "Passing through. Everyone says that until the sky opens on them. Travel safely, wanderer - and when the hail comes, remember there was a roof here you chose not to stand under.",
+      "options": [
+        {
+          "text": "I'll remember.",
+          "responseId": "farewell"
+        },
+        {
+          "text": "Tell me more about the offer.",
+          "responseId": "explain_joining"
+        }
+      ]
+    },
+    {
+      "id": "decline_join",
+      "speaker": "Stormstar",
+      "text": "Independence is a luxury bought by warriors with a clan at their back. Still - fight well beside us and the offer stays open. I have never yet regretted keeping a door unbarred.",
+      "options": [
+        {
+          "text": "I appreciate that.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "need_time",
+      "speaker": "Stormstar",
+      "text": "Think, then. But think quickly - the quarry will not wait on your decision, and neither will I.",
+      "options": [
+        {
+          "text": "Thank you.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Stormstar",
+      "text": "Walk fast, warrior. The next storm is never far.",
+      "options": [
+        {
+          "text": "Farewell, Stormstar.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

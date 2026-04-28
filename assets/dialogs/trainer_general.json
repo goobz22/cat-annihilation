@@ -1,0 +1,131 @@
+{
+  "id": "trainer_general",
+  "name": "StormClan Trainer Dialog",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Lightningclaw",
+      "text": "You're not out of breath. Good. Start. No - not there, the post on the left, the one Thunderstrike hasn't broken yet. I am Lightningclaw, trainer of everything StormClan warriors learn after they've finished being polite. Did you come to run or to talk?",
+      "options": [
+        {
+          "text": "To run. What are you teaching?",
+          "responseId": "show_training"
+        },
+        {
+          "text": "Why the shoulder wrap?",
+          "responseId": "injury_story"
+        },
+        {
+          "text": "Both, actually.",
+          "responseId": "training_philosophy"
+        },
+        {
+          "text": "Just watching today.",
+          "responseId": "decline"
+        }
+      ]
+    },
+    {
+      "id": "show_training",
+      "speaker": "Lightningclaw",
+      "text": "Two techniques, both practical. Speed Burst - short, explosive acceleration that takes an enemy out of kicking range before their back paws have answered the question. Chain Lightning - for when the enemy brings friends. You strike one, the air takes the rest. Thunderstrike teaches the roar and dash; I teach the ugly, useful middle parts.",
+      "options": [
+        {
+          "text": "Teach me Speed Burst.",
+          "responseId": "speed_burst_intro"
+        },
+        {
+          "text": "Teach me Chain Lightning.",
+          "responseId": "chain_lightning_intro"
+        },
+        {
+          "text": "Which should I learn first?",
+          "responseId": "which_first"
+        }
+      ]
+    },
+    {
+      "id": "which_first",
+      "speaker": "Lightningclaw",
+      "text": "Speed Burst. Always. If you cannot disengage, no other trick matters because you will die before casting it. A warrior who can leave a fight on their own terms is a warrior I can teach anything else. A warrior who cannot is a lesson the enemy finishes for me.",
+      "options": [
+        {
+          "text": "Speed Burst first, then. Show me.",
+          "responseId": "speed_burst_intro"
+        }
+      ]
+    },
+    {
+      "id": "speed_burst_intro",
+      "speaker": "Lightningclaw",
+      "text": "Low stance. Rear paws wide, front paws light. The burst is not in your legs - it is in your ribs. Breathe in sharp, then throw your entire chest forward and let your paws catch up. Yes. Do it again. Faster. Faster. Good. You'll ache tomorrow; that's how you know you did it correctly.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "speed_burst_complete"
+    },
+    {
+      "id": "speed_burst_complete",
+      "speaker": "Lightningclaw",
+      "text": "You've got the basic shape. It will grow faster the more you bleed for it. Come back when you want Chain Lightning - but earn Speed Burst first in an actual fight, or Chain Lightning won't save you.",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "chain_lightning_intro",
+      "speaker": "Lightningclaw",
+      "text": "Have you used Speed Burst in a real fight yet? ... I see. Come back when you have. Chain Lightning is a second-fight technique. The first fight teaches you what a real enemy looks like; then we can talk about hitting three of them at once.",
+      "options": [
+        {
+          "text": "Fair. I'll earn it.",
+          "responseId": "show_training"
+        }
+      ]
+    },
+    {
+      "id": "injury_story",
+      "speaker": "Lightningclaw",
+      "text": "A training accident. I was eight seasons younger and thought I could match a full-grown StormClan warrior at Chain Lightning without having mastered the breath for it. The backlash traveled through my shoulder and stayed. I keep the wrap on to remind students that the sky does not forgive laziness. Are you paying attention?",
+      "options": [
+        {
+          "text": "Yes. What should I learn first?",
+          "responseId": "which_first"
+        },
+        {
+          "text": "Respect. That's a heavy lesson.",
+          "responseId": "show_training"
+        }
+      ]
+    },
+    {
+      "id": "training_philosophy",
+      "speaker": "Lightningclaw",
+      "text": "Good. Training is conversation the body can have with itself when you are too tired to think. Every drill I give you today is a sentence your paws will remember when your mind has quit. That is the only reason training works. Now - what are you here to learn?",
+      "options": [
+        {
+          "text": "Speed Burst.",
+          "responseId": "speed_burst_intro"
+        },
+        {
+          "text": "Chain Lightning.",
+          "responseId": "chain_lightning_intro"
+        }
+      ]
+    },
+    {
+      "id": "decline",
+      "speaker": "Lightningclaw",
+      "text": "Watch then. But stand back from the strike posts - I have hit bystanders I liked more than you, and they still limp. When you're ready to do more than watch, the ground will still be here.",
+      "options": [
+        {
+          "text": "I'll be back.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

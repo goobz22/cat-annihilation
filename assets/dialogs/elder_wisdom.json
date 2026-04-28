@@ -1,0 +1,165 @@
+{
+  "id": "elder_wisdom",
+  "name": "Elder Whiskers Wisdom",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Elder Whiskers",
+      "text": "Come, come. My good eye sees you well enough. I am Elder Whiskers - older than the four leaders combined, and I will be delighted if any of them ever admits it out loud. Sit. At my age, every story I tell is a warning in a costume. What are you after today?",
+      "options": [
+        {
+          "text": "I've heard you can teach Ancient Wisdom.",
+          "responseId": "ask_training"
+        },
+        {
+          "text": "What were you before you were old?",
+          "responseId": "who_were_you"
+        },
+        {
+          "text": "Tell me something a young warrior needs to know.",
+          "responseId": "warrior_wisdom"
+        },
+        {
+          "text": "Just paying respects.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "ask_training",
+      "speaker": "Elder Whiskers",
+      "text": "Ancient Wisdom, yes. That's the name cats use when they are polite. What it really is: a way of paying attention that lets every fight, every errand, every small kindness teach you more than it otherwise would. I can show you the method. But only to warriors who have walked long enough to be worth the lesson. You'll need ten seasons of experience, at least.",
+      "options": [
+        {
+          "text": "I meet that requirement.",
+          "responseId": "check_eligibility",
+          "requiredLevel": 10
+        },
+        {
+          "text": "I'll come back when I'm ready.",
+          "responseId": "not_yet"
+        },
+        {
+          "text": "Why that requirement?",
+          "responseId": "explain_requirement"
+        }
+      ]
+    },
+    {
+      "id": "check_eligibility",
+      "speaker": "Elder Whiskers",
+      "text": "Then sit properly. The lesson is shorter than you expect and longer than you'd prefer. You will not feel different when it is over. That is how you know it worked. We begin.",
+      "autoAdvance": true,
+      "autoAdvanceDelay": 3.0,
+      "nextNode": "training_complete"
+    },
+    {
+      "id": "training_complete",
+      "speaker": "Elder Whiskers",
+      "text": "There. You have the method now. Every experience you have from this day forward will teach you more than it otherwise would - not because the experience is different, but because you are. That is the entire trick. That, and the seven hundred and fifty coins, if you please. Ancient Wisdom was never free and I am not about to set a new precedent.",
+      "options": [
+        {
+          "text": "Worth it. Thank you, Elder.",
+          "responseId": "grateful"
+        }
+      ]
+    },
+    {
+      "id": "explain_requirement",
+      "speaker": "Elder Whiskers",
+      "text": "Because Ancient Wisdom is the method of learning from what you have already lived. A warrior with no scars has nothing yet to learn from. Give me a cat who has lost a friend, won a fight they should have lost, and had at least one long winter without enough food - that cat I can teach. Kits I cannot help. They are busy becoming.",
+      "options": [
+        {
+          "text": "That makes sense. I'll come back.",
+          "responseId": "not_yet"
+        }
+      ]
+    },
+    {
+      "id": "not_yet",
+      "speaker": "Elder Whiskers",
+      "text": "Good. Walk, fight, lose things, find them again. That is the prerequisite. When you return I will still be here, or I will not - either way, Ancient Wisdom waits where the wise cats always leave it.",
+      "options": [
+        {
+          "text": "Farewell, Elder.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "who_were_you",
+      "speaker": "Elder Whiskers",
+      "text": "Many things, in order. A kit in a clan that no longer exists. A hunter for the clan that replaced it. A young warrior who made the usual mistakes and a middle-aged one who repeated some of them. A father, briefly. A healer, poorly. A prisoner, once, of cats I still will not name. And now - this. Older than I ever intended, and still curious. That's the summary. The rest is embroidery.",
+      "options": [
+        {
+          "text": "What clan is yours now?",
+          "responseId": "current_clan"
+        },
+        {
+          "text": "Which mistake taught you the most?",
+          "responseId": "biggest_mistake"
+        }
+      ]
+    },
+    {
+      "id": "current_clan",
+      "speaker": "Elder Whiskers",
+      "text": "None. I outlived two and watched the rest argue. At a certain age you realize clans are families that occasionally forget they are families, and you can love all four from the middle and be useful to each. That is the position I occupy now. Mistheart calls it meddling. She is welcome to the word.",
+      "options": [
+        {
+          "text": "I'd like to learn something from you.",
+          "responseId": "warrior_wisdom"
+        }
+      ]
+    },
+    {
+      "id": "biggest_mistake",
+      "speaker": "Elder Whiskers",
+      "text": "Thinking speed and strength were more useful than patience and observation. Young cats always believe this. Most live long enough to change their minds. Some do not. The ones who do become mentors. The ones who do not become cautionary tales. I was briefly both.",
+      "options": [
+        {
+          "text": "Give me the lesson, then.",
+          "responseId": "warrior_wisdom"
+        }
+      ]
+    },
+    {
+      "id": "warrior_wisdom",
+      "speaker": "Elder Whiskers",
+      "text": "Three things, if you want a free lesson before the paid one. First: the enemy you prepare for is rarely the enemy you meet. Train range, not a single technique. Second: anger burns the claws that hold it more than the cat it's aimed at. Third, and most important: every cat you meet on the road is either your teacher or your student, and which one is your choice, not theirs. That is all of it. The rest is embellishment.",
+      "options": [
+        {
+          "text": "I'll carry that. Thank you.",
+          "responseId": "grateful"
+        },
+        {
+          "text": "Teach me Ancient Wisdom when I'm ready.",
+          "responseId": "ask_training"
+        }
+      ]
+    },
+    {
+      "id": "grateful",
+      "speaker": "Elder Whiskers",
+      "text": "You are welcome. Now go be useful somewhere. An old cat can only repeat himself so many times before he starts to believe he is interesting.",
+      "options": [
+        {
+          "text": "Farewell, Elder.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Elder Whiskers",
+      "text": "Walk well. The road has your paws; you only have to trust them.",
+      "options": [
+        {
+          "text": "Goodbye.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}

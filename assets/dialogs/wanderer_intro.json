@@ -1,0 +1,184 @@
+{
+  "id": "wanderer_intro",
+  "name": "Mysterious Wanderer Introduction",
+  "startNode": "greeting",
+  "nodes": [
+    {
+      "id": "greeting",
+      "speaker": "Mysterious Wanderer",
+      "text": "Ah. Another pair of paws at a crossroads. Sit, if you'd like. I have been to every clan you can name and several you probably can't, and I collect two things for my trouble: stories, and small jobs that the clans would rather pretend they don't need done. Are you the restless type?",
+      "options": [
+        {
+          "text": "Maybe. What kind of jobs?",
+          "responseId": "offer_jobs"
+        },
+        {
+          "text": "Who are you, really?",
+          "responseId": "who_are_you"
+        },
+        {
+          "text": "What's in the parchment?",
+          "responseId": "show_parchment"
+        },
+        {
+          "text": "Not today.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "offer_jobs",
+      "speaker": "Mysterious Wanderer",
+      "text": "The kind a clan leader cannot officially acknowledge exists. A lost kit stranded on the wrong side of a feud. A shipment of spoiled potions that needs quiet burying. A rumour that needs someone to go and check whether it has teeth. Small coin, honest work, and you keep any interesting thing you find along the way.",
+      "options": [
+        {
+          "text": "I'll take one. What's first?",
+          "responseId": "first_job"
+        },
+        {
+          "text": "Why don't the clans handle these themselves?",
+          "responseId": "why_not_clans"
+        }
+      ]
+    },
+    {
+      "id": "why_not_clans",
+      "speaker": "Mysterious Wanderer",
+      "text": "Because the clans have reputations to maintain, and a clan that admits it cannot keep a kit safe is a clan that loses warriors the next recruitment. Pride is the most expensive thing any of them carry. That is where I come in - and now, if you want, where you come in. Discreet work pays better than dignified work, every time.",
+      "options": [
+        {
+          "text": "Fair enough. Give me the first job.",
+          "responseId": "first_job"
+        }
+      ]
+    },
+    {
+      "id": "first_job",
+      "speaker": "Mysterious Wanderer",
+      "text": "A MistClan kit named Reedpaw wandered off two nights ago. Mistheart cannot formally ask another clan for help without looking weak, and her own scouts are spread along the dog borders. I need you to find Reedpaw and bring her home. The last reliable scent was near the old mill. Interested?",
+      "quest": "side_quest_1",
+      "options": [
+        {
+          "text": "I'll find her.",
+          "responseId": "accept_first"
+        },
+        {
+          "text": "What if she's already hurt?",
+          "responseId": "first_contingency"
+        }
+      ]
+    },
+    {
+      "id": "first_contingency",
+      "speaker": "Mysterious Wanderer",
+      "text": "Then carry her. Snowpaw owes me a favor - take the kit to her and I'll square the accounts. No kit goes in the ground on my ledger if there was any way to avoid it.",
+      "options": [
+        {
+          "text": "Understood. I'll go.",
+          "responseId": "accept_first"
+        }
+      ]
+    },
+    {
+      "id": "accept_first",
+      "speaker": "Mysterious Wanderer",
+      "text": "Old mill, fresh prints if you're lucky, river otherwise. Come back when you have her. If you find something else along the way - fragments of old metal, strange paw prints, anything a clan would fight over - bring that too. I pay for oddities.",
+      "options": [
+        {
+          "text": "Got it.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "second_job_offer",
+      "speaker": "Mysterious Wanderer",
+      "text": "You brought Reedpaw home. Mistheart will not say thank you in front of anyone, but a pouch arrived at my pack this morning, which tells me she said it in the only currency she trusts. Which brings me to a larger job. Interested?",
+      "quest": "side_quest_2",
+      "options": [
+        {
+          "text": "What is it?",
+          "responseId": "second_details"
+        },
+        {
+          "text": "Let me rest first.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "second_details",
+      "speaker": "Mysterious Wanderer",
+      "text": "Someone has been mimicking clan marks on the territory posts - bad imitations, but close enough to cause border skirmishes. Three clans have lost warriors already to what they think is the other clan's provocation. Find out who is carving the false marks and bring me their trail. Not the person. The trail. I want to know who is behind them first.",
+      "options": [
+        {
+          "text": "I'll track them.",
+          "responseId": "accept_second"
+        }
+      ]
+    },
+    {
+      "id": "accept_second",
+      "speaker": "Mysterious Wanderer",
+      "text": "Good. Move carefully - whoever is doing this wants a war, which means they will happily add you to it if you get clumsy. Use borders at night; walk centers at day. Come back with a trail, not a body.",
+      "options": [
+        {
+          "text": "Understood.",
+          "responseId": ""
+        }
+      ]
+    },
+    {
+      "id": "who_are_you",
+      "speaker": "Mysterious Wanderer",
+      "text": "Names stick to you like burrs, and I have walked long enough to prefer a clean coat. Call me the Wanderer. I was born in a clan that no longer exists, grew up between three others, and have decided that the spaces between are more honest than any of them. That's the whole story that matters.",
+      "options": [
+        {
+          "text": "That's cryptic, but I respect it.",
+          "responseId": "offer_jobs"
+        },
+        {
+          "text": "What happened to your clan?",
+          "responseId": "lost_clan"
+        }
+      ]
+    },
+    {
+      "id": "lost_clan",
+      "speaker": "Mysterious Wanderer",
+      "text": "They did what a lot of clans do before they end - insisted they were always right, and stopped listening. A bad winter finished what pride had started. I was a kit, and a passing stranger carried me out. I have carried small strangers out ever since. Any other questions, or do you want work?",
+      "options": [
+        {
+          "text": "I'd like work.",
+          "responseId": "offer_jobs"
+        },
+        {
+          "text": "Thank you for telling me.",
+          "responseId": "farewell"
+        }
+      ]
+    },
+    {
+      "id": "show_parchment",
+      "speaker": "Mysterious Wanderer",
+      "text": "A rough map. Not the clan territories - those are easy, everyone draws those. This is every place I have found where something changed and no one noticed. Campfires where no clan burned one. Fresh digs at old grave-ridges. A small burned stone circle in the Whispering Woods that was not there last spring. Things the clans will eventually fight over once they notice them.",
+      "options": [
+        {
+          "text": "That's valuable. I want in.",
+          "responseId": "offer_jobs"
+        }
+      ]
+    },
+    {
+      "id": "farewell",
+      "speaker": "Mysterious Wanderer",
+      "text": "Cross roads usually bring me back here eventually. Find me if you change your mind - or if you need someone to tell you which clan is lying today.",
+      "options": [
+        {
+          "text": "Goodbye.",
+          "responseId": ""
+        }
+      ]
+    }
+  ]
+}
