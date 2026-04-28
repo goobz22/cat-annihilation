@@ -382,35 +382,52 @@ if(NOT WIN32)
     target_link_libraries(integration_tests PRIVATE pthread)
 endif()
 
-# Compile-time path defines for test_golden_image.cpp.
+# Compile-time absolute paths for test_golden_image.cpp, plumbed via a
+# generated header rather than -D macros.
 #
-# The golden image lives at a stable in-repo location (tests/golden/smoke.ppm)
-# but the test binary may be invoked from any working directory — ctest from
-# the build dir, an IDE test-runner from the source dir, or a CI runner from
-# an arbitrary shell path. Injecting absolute paths at configure time means
-# the test never has to guess or probe relative paths.
+# Why a generated header instead of `target_compile_definitions(... PATH="...")`:
+#   The earlier `-D` form was emitted into ninja's compile_commands.json as
+#       -DCAT_GOLDEN_IMAGE_DIR=\C:/Users/Matt-PC/Documents/App Development/...\
+#   The leading and trailing backslashes were CMake's attempt at quoting a
+#   value that already contained quote characters; on a path WITHOUT spaces
+#   the shell tokenizer happily reassembled it back into a single arg, but
+#   on this checkout's path WITH a space ("App Development") the tokenizer
+#   split the value and clang's `-D` parser saw an unterminated
+#   `\C:/Users/Matt-PC/Documents/App` macro expansion. Result: every
+#   `bun bridge/cat.ts validate` for ~30 iterations flagged this file as
+#   a severity-2 syntax failure even though the ninja build was always
+#   green (ninja runs the command via its own shell with the original
+#   un-mangled args, so the validator was the only consumer hitting the
+#   shell-tokenization bug).
 #
-# CAT_FRAMEDUMP_CANDIDATE_PATH must resolve to the directory where the
-# engine's `--frame-dump` CLI writes by convention. That directory is the
-# top-level CMake build dir — e.g. build-ninja/ — because
-# CatAnnihilation.exe lives there and writes its swapchain readback
-# relative to its own working directory. Note: because `tests/` is pulled
-# in by `add_subdirectory(tests)` from the parent project, CMAKE_BINARY_DIR
-# here refers to the PARENT'S binary dir (the main build-ninja/ folder),
-# NOT the tests subdir. An earlier draft used `${CMAKE_BINARY_DIR}/../smoke.ppm`
-# on the incorrect assumption CMAKE_BINARY_DIR was tests/; that walked one
-# directory too high and the candidate was never found. CMAKE_CURRENT_BINARY_DIR
-# here would have been the tests subdir — we deliberately use the parent so
-# the path aligns with where the engine actually writes.
+# `configure_file()` substitutes the path values directly into a C++ source
+# template at CMake configure time. The resulting header lands in the build
+# tree, never needs preprocessor expansion, and contains zero shell-quoted
+# strings — so it round-trips through clang, validate, ninja, and IDEs
+# uniformly regardless of how spaces / backslashes / Unicode appear in the
+# checkout's absolute path.
 #
-# The quoting discipline is deliberate: CMake substitutes ${PATH} as raw
-# text, so the surrounding \" are necessary to keep the path a valid C++
-# string literal after preprocessor expansion. Paths on Windows use forward
-# slashes uniformly (MSVC accepts them in file I/O); no escaping of
-# backslashes required.
-target_compile_definitions(integration_tests PRIVATE
-    CAT_GOLDEN_IMAGE_DIR="${PROJECT_ROOT}/tests/golden"
-    CAT_FRAMEDUMP_CANDIDATE_PATH="${CMAKE_BINARY_DIR}/smoke.ppm"
+# `${PROJECT_ROOT}/tests/golden` is the stable in-repo location for the
+# SSIM reference images; `${CMAKE_BINARY_DIR}/smoke.ppm` is where the
+# engine's `--frame-dump` CLI writes by convention (the top-level CMake
+# build dir, e.g. build-ninja/, because CatAnnihilation.exe lives there).
+# `tests/` is pulled in via `add_subdirectory(tests)` from the parent
+# project, so CMAKE_BINARY_DIR here is the PARENT's binary dir — exactly
+# what the engine writes to.
+#
+# The generated header lands at:
+#   ${CMAKE_BINARY_DIR}/tests/integration/test_paths.hpp
+# We add that prefix to integration_tests's include path so the
+# `#include "test_paths.hpp"` in test_golden_image.cpp resolves.
+set(CAT_GOLDEN_IMAGE_DIR_VALUE "${PROJECT_ROOT}/tests/golden")
+set(CAT_FRAMEDUMP_CANDIDATE_PATH_VALUE "${CMAKE_BINARY_DIR}/smoke.ppm")
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_paths.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/integration/test_paths.hpp
+    @ONLY
+)
+target_include_directories(integration_tests PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/integration
 )
 
 # Add test targets

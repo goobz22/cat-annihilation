@@ -1,0 +1,44 @@
+// AUTO-GENERATED FROM test_paths.hpp.in BY CMake — do NOT edit directly.
+//
+// 2026-04-26 — replaced `target_compile_definitions(... CAT_GOLDEN_IMAGE_DIR=...)`
+// with a CMake `configure_file()` so the absolute paths are baked into a header
+// instead of passed as `-D` macros. Why: the previous `-D` form was emitted into
+// `compile_commands.json` with literal backslashes around the value, like
+// `-DCAT_GOLDEN_IMAGE_DIR=\C:/Users/Matt-PC/Documents/App Development/...\`,
+// which clang's `-D` parser tokenized at the first space ("App Development")
+// and produced an unterminated `\C:/Users/Matt-PC/Documents/App` macro
+// expansion that broke `bun bridge/cat.ts validate` for ~30 iterations. This
+// header sidesteps shell and JSON quoting entirely: configure_file substitutes
+// the value verbatim into a C++ string literal at CMake configure time, no
+// preprocessor macros, no `-D` flags, no compile_commands.json escaping.
+//
+// Why a `.hpp.in` + configure_file rather than a hand-written `.hpp` with
+// hard-coded paths: CI / future contributors will check this repo out at
+// arbitrary on-disk locations (e.g. `~/dev/cat-annihilation` on a Linux CI box)
+// and the goldens still need to resolve. CMake's `${PROJECT_ROOT}` is the
+// per-checkout source dir, so the values are correct at configure time on
+// every machine without anyone having to edit a checked-in absolute path.
+//
+// std::string_view chosen over std::string so the header is constexpr-friendly
+// and zero-allocation; consumers wanting a std::filesystem::path or std::string
+// can construct from the view at the call site (the test does exactly that).
+
+#pragma once
+
+#include <string_view>
+
+namespace CatTests {
+
+// Absolute path to the in-repo `tests/golden/` directory holding the SSIM
+// reference images. Set at CMake configure time from `${PROJECT_ROOT}/tests/golden`.
+inline constexpr std::string_view kCatGoldenImageDir =
+    "@CAT_GOLDEN_IMAGE_DIR_VALUE@";
+
+// Absolute path where the engine's `--frame-dump` CLI writes the candidate
+// frame for the live-vs-golden comparator. Set at CMake configure time from
+// `${CMAKE_BINARY_DIR}/smoke.ppm`. The engine writes to its own cwd by default;
+// our autoplay launches use this exact path so the test always finds it.
+inline constexpr std::string_view kCatFramedumpCandidatePath =
+    "@CAT_FRAMEDUMP_CANDIDATE_PATH_VALUE@";
+
+} // namespace CatTests
