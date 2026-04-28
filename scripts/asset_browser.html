@@ -1,0 +1,2664 @@
+<!DOCTYPE html>
+<!--
+  asset_browser.html - Cat-Annihilation one-stop asset browser.
+
+  Purpose:
+    View every game asset in 3D: characters (cats + dogs), environment props,
+    weapons, projectiles. Toggle skeleton / wireframe / raw-vs-rigged, play
+    procedural animations, see the Meshy prompt used to generate each, and
+    diagnose rigging failures per-cat. Swap the viewer background so dark-fur
+    cats don't disappear against the default dark UI.
+
+  History:
+    Evolved from identify_cats.html (v1 = file-to-slot matcher, v2 = asset
+    viewer with prompts, v3 = browser with animations + rig diagnostics).
+    This is v4: repurposed from cat-only to every asset under assets/models/.
+
+  How to use:
+    1. Launch a static server from the cat-annihilation project root:
+         cd cat-annihilation
+         python -m http.server 8000
+    2. Open http://localhost:8000/scripts/asset_browser.html
+    3. Pick a category tab (Cats / Dogs / Props) in the left panel.
+    4. Click any asset row. 3D model loads in the center, metadata and
+       prompt (when available) appear on the right.
+    5. Viewer toolbar toggles: source (rigged/raw), display (skeleton /
+       wireframe / axes), camera (spin / reset), animation (idle / sit /
+       stand / walk / run), background color.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cat-Annihilation - Asset Browser</title>
+<style>
+  :root {
+    --bg: #15181f;
+    --panel: #1e222c;
+    --panel-hi: #2a303c;
+    --panel-lo: #171a21;
+    --text: #e4e7ee;
+    --muted: #8890a0;
+    --accent: #63b3ed;
+    --mist: #4299e1;
+    --storm: #d4af37;
+    --ember: #dd6b20;
+    --frost: #81e6d9;
+    --neutral: #a0aec0;
+    --ok: #48bb78;
+    --warn: #f6ad55;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 280px 1fr 360px; height: 100vh; }
+  .panel { background: var(--panel); overflow-y: auto; }
+  .panel.left  { border-right: 1px solid #000; }
+  .panel.right { border-left:  1px solid #000; }
+  .panel h2 { font-size: 12px; margin: 0; color: var(--accent); letter-spacing: 0.6px; text-transform: uppercase; }
+
+  /* --- LEFT: category tabs + roster --- */
+  .category-tabs { display: flex; background: var(--panel-lo); border-bottom: 1px solid #000; }
+  .category-tabs button {
+    flex: 1; padding: 10px 4px; background: transparent; color: var(--muted);
+    border: 0; border-bottom: 2px solid transparent; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+  }
+  .category-tabs button:hover { color: var(--text); }
+  .category-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .roster-section { padding: 10px 12px 4px; }
+  .roster-section h3 {
+    font-size: 11px; margin: 12px 0 6px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  }
+  .roster-section h3 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .roster-section h3.MistClan  .dot { background: var(--mist); }
+  .roster-section h3.StormClan .dot { background: var(--storm); }
+  .roster-section h3.EmberClan .dot { background: var(--ember); }
+  .roster-section h3.FrostClan .dot { background: var(--frost); }
+  .roster-section h3.None      .dot { background: var(--neutral); }
+
+  .asset-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; margin-bottom: 3px; border-radius: 4px;
+    cursor: pointer; user-select: none;
+    border-left: 3px solid transparent;
+    background: var(--panel-hi);
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .asset-row:hover { background: #343b48; }
+  .asset-row.active { background: #2b4c6f; border-left-color: var(--accent); }
+  .asset-row.MistClan  { border-left-color: var(--mist); }
+  .asset-row.StormClan { border-left-color: var(--storm); }
+  .asset-row.EmberClan { border-left-color: var(--ember); }
+  .asset-row.FrostClan { border-left-color: var(--frost); }
+  .asset-row .name { font-weight: 600; font-size: 12px; }
+  .asset-row .role { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .header-bar {
+    position: sticky; top: 0; z-index: 2; background: var(--panel);
+    padding: 12px; border-bottom: 1px solid #000;
+  }
+  .header-bar .sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+  /* --- CENTER: 3D viewer --- */
+  #viewer { position: relative; background: #0c0e14; overflow: hidden; }
+  #viewer canvas { display: block; }
+
+  .viewer-toolbar {
+    position: absolute; top: 12px; left: 12px; right: 12px;
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .viewer-toolbar .group {
+    display: flex; gap: 4px; pointer-events: auto;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+    padding: 4px; border-radius: 5px;
+  }
+  .viewer-toolbar button {
+    background: transparent; color: var(--text); border: 1px solid transparent;
+    border-radius: 3px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+  }
+  .viewer-toolbar button:hover { background: rgba(255,255,255,0.08); }
+  .viewer-toolbar button.active {
+    background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600;
+  }
+  .viewer-toolbar button.incomplete { color: var(--warn); border-color: var(--warn); }
+  .viewer-toolbar button.disabled { opacity: 0.35; pointer-events: none; }
+  .viewer-toolbar .label { color: var(--muted); font-size: 10px; padding: 4px 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+
+  /* Background-color swatch buttons use their actual target color so you
+     can see what you're picking at a glance. */
+  .viewer-toolbar .bg-swatch {
+    width: 22px; height: 22px; padding: 0; border: 2px solid transparent;
+    border-radius: 4px; cursor: pointer;
+  }
+  .viewer-toolbar .bg-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 1px #000 inset; }
+
+  .viewer-status {
+    position: absolute; bottom: 12px; left: 12px; right: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    pointer-events: none;
+    color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace;
+  }
+  .viewer-status > div {
+    background: rgba(0,0,0,0.55); padding: 4px 8px; border-radius: 4px;
+    pointer-events: auto;
+  }
+
+  .viewer-empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--muted); pointer-events: none;
+  }
+  .viewer-empty h1 { font-size: 24px; margin: 0 0 8px; color: var(--text); font-weight: 500; }
+
+  /* --- RIGHT: details --- */
+  .details-body { padding: 12px; }
+  .details-body h3 {
+    font-size: 11px; margin: 16px 0 6px; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  }
+  .details-body h3:first-child { margin-top: 0; }
+  .details-body .kv { font-size: 12px; margin-bottom: 4px; }
+  .details-body .kv .k { color: var(--muted); display: inline-block; min-width: 90px; }
+  .details-body .kv .v { color: var(--text); font-family: ui-monospace, monospace; word-break: break-word; }
+
+  .chip { display: inline-block; padding: 2px 8px; font-size: 10px; border-radius: 10px; margin-right: 4px; margin-bottom: 3px; background: var(--panel-hi); color: var(--text); }
+  .chip.MistClan  { background: #2d4e77; }
+  .chip.StormClan { background: #6b5327; }
+  .chip.EmberClan { background: #7a3d1a; }
+  .chip.FrostClan { background: #265e55; }
+  .chip.None      { background: #4a5060; }
+
+  .prompt-editor textarea {
+    width: 100%; min-height: 220px; background: #0a0d13; color: var(--text);
+    border: 1px solid #2a303c; border-radius: 3px; padding: 8px;
+    font: 11px/1.5 ui-monospace, monospace; resize: vertical;
+  }
+  .prompt-editor .row { display: flex; gap: 6px; margin-top: 6px; }
+  .prompt-editor button {
+    flex: 1; padding: 6px 8px; font-size: 11px; font-weight: 600;
+    background: var(--panel-hi); color: var(--text); border: 0; border-radius: 3px; cursor: pointer;
+  }
+  .prompt-editor button.primary { background: var(--accent); color: #000; }
+  .prompt-editor button:hover { filter: brightness(1.2); }
+  .prompt-editor .edited-label { color: var(--warn); font-size: 10px; margin-left: auto; }
+
+  .shop-item, .training-item, .quest-item {
+    background: var(--panel-lo); padding: 6px 8px; margin-bottom: 4px; border-radius: 3px; font-size: 11px;
+  }
+  .shop-item .name, .training-item .name, .quest-item .name { font-weight: 600; }
+  .shop-item .price { float: right; color: var(--accent); font-family: ui-monospace, monospace; }
+  .shop-item .desc, .training-item .desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .training-item .cost { float: right; color: var(--accent); font-family: ui-monospace, monospace; font-size: 11px; }
+
+  /* ---- Rigging report ---- */
+  .rig-report { background: var(--panel-lo); border-radius: 4px; padding: 8px; font-size: 11px; }
+  .rig-report .coverage { font-weight: 600; margin-bottom: 6px; }
+  .rig-report .coverage.ok   { color: var(--ok); }
+  .rig-report .coverage.warn { color: var(--warn); }
+  .rig-report .coverage.bad  { color: #fc8181; }
+  .rig-report .bone-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 8px;
+    font-family: ui-monospace, monospace; font-size: 10.5px;
+    margin-bottom: 6px;
+  }
+  .rig-report .bone.ok      { color: var(--ok); }
+  .rig-report .bone.missing { color: #fc8181; text-decoration: line-through; }
+  .rig-report .extras { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; }
+  .rig-report .note   { color: var(--warn); font-size: 11px; margin-top: 6px; padding: 6px 8px; background: #3a2d18; border-left: 2px solid var(--warn); border-radius: 2px; }
+  .rig-report .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .rig-report .actions button { flex: 1; padding: 5px; font-size: 11px; background: var(--panel-hi); color: var(--text); border: 0; border-radius: 3px; cursor: pointer; }
+  .rig-report .actions button:hover { filter: brightness(1.2); }
+
+  /* ---- Bone sandbox ---- */
+  .bone-sandbox { background: var(--panel-lo); border-radius: 4px; padding: 8px; font-size: 11px; }
+  .bone-sandbox .row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .bone-sandbox select {
+    flex: 1; padding: 4px 6px; background: var(--panel-hi); color: var(--text);
+    border: 1px solid #000; border-radius: 3px; font: 11px ui-monospace, monospace;
+  }
+  .bone-sandbox button {
+    padding: 4px 8px; font-size: 11px; background: var(--panel-hi); color: var(--text);
+    border: 0; border-radius: 3px; cursor: pointer;
+  }
+  .bone-sandbox button:hover { filter: brightness(1.2); }
+  .bone-sandbox button.primary { background: var(--accent); color: #000; font-weight: 600; }
+  .bone-sandbox .slider-row {
+    display: grid; grid-template-columns: 20px 1fr 50px; gap: 6px; align-items: center; margin-top: 4px;
+  }
+  .bone-sandbox .slider-row input[type=range] { width: 100%; }
+  .bone-sandbox .slider-row .axis { font-family: ui-monospace, monospace; font-weight: 600; }
+  .bone-sandbox .slider-row .val { font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted); text-align: right; }
+  .bone-sandbox .preset { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .bone-sandbox .preset button { flex: 1; font-size: 10px; padding: 3px 4px; }
+  .bone-sandbox .hint { color: var(--muted); font-size: 10px; margin-top: 6px; }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--ok); color: #000; padding: 10px 16px; border-radius: 4px;
+    font-weight: 600; z-index: 999; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .toast.show { opacity: 1; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a303c; border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4250; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- LEFT: category tabs + roster -->
+  <div class="panel left">
+    <div class="category-tabs" id="categoryTabs">
+      <button data-category="cats"  class="active">Cats</button>
+      <button data-category="dogs">Dogs</button>
+      <button data-category="props">Props</button>
+      <button data-category="rigs"  title="Canonical anatomically-correct skeletons (no mesh)">Rigs</button>
+    </div>
+    <div class="header-bar">
+      <h2 id="categoryHeader">Cats <span id="rosterCount" style="float:right;color:var(--muted);font-weight:400;"></span></h2>
+      <div class="sub" id="categorySub">17 clan cats + player</div>
+    </div>
+    <div id="roster"></div>
+  </div>
+
+  <!-- CENTER: 3D viewer -->
+  <div id="viewer">
+    <div class="viewer-toolbar">
+      <div class="group" id="sourceGroup">
+        <span class="label">Source</span>
+        <button id="btnRigged" class="active">Rigged</button>
+        <button id="btnRaw">Raw</button>
+      </div>
+      <div class="group">
+        <span class="label">Display</span>
+        <button id="btnSkeleton">Skeleton</button>
+        <button id="btnWireframe">Wireframe</button>
+        <button id="btnWeights" title="Color mesh vertices by dominant bone influence - diagnoses weight leakage">Weights</button>
+        <button id="btnAxes">Axes</button>
+      </div>
+      <div class="group">
+        <span class="label">Camera</span>
+        <button id="btnAutoRotate">Spin</button>
+        <button id="btnReset">Reset</button>
+      </div>
+      <div class="group" id="animGroup">
+        <span class="label">Animate</span>
+        <button data-anim="idle"    class="active">Idle</button>
+        <button data-anim="sitDown">Sit Down</button>
+        <button data-anim="layDown">Lay Down</button>
+        <button data-anim="standUp">Stand Up</button>
+        <button data-anim="walk">Walk</button>
+        <button data-anim="run">Run</button>
+        <button id="btnPauseAnim" title="Pause the animation at the current frame so you can grab a screenshot. Click again to resume.">Pause</button>
+      </div>
+      <div class="group" id="bgGroup">
+        <span class="label">Background</span>
+        <!-- Inline styles on purpose: each swatch must show its own color. -->
+        <button class="bg-swatch active" data-bg="0x0c0e14" style="background:#0c0e14"                    title="Default (dark)"></button>
+        <button class="bg-swatch"        data-bg="0x000000" style="background:#000000"                    title="Black"></button>
+        <button class="bg-swatch"        data-bg="0x2a303c" style="background:#2a303c"                    title="Dark gray"></button>
+        <button class="bg-swatch"        data-bg="0x6b7280" style="background:#6b7280"                    title="Mid gray"></button>
+        <button class="bg-swatch"        data-bg="0xe5e7eb" style="background:#e5e7eb"                    title="Light gray"></button>
+        <button class="bg-swatch"        data-bg="0xffffff" style="background:#ffffff"                    title="White"></button>
+        <button class="bg-swatch"        data-bg="0x1e3a5f" style="background:#1e3a5f"                    title="Studio blue"></button>
+        <button class="bg-swatch"        data-bg="0x3d2418" style="background:#3d2418"                    title="Warm brown"></button>
+      </div>
+    </div>
+    <div class="viewer-empty" id="viewerEmpty">
+      <h1>Asset Browser</h1>
+      <div>Pick an asset on the left to begin.</div>
+    </div>
+    <div class="viewer-status">
+      <div id="statusFile">-</div>
+      <div id="statusMeta">drag to rotate - scroll to zoom - shift-drag to pan</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: details -->
+  <div class="panel right">
+    <div class="header-bar">
+      <h2>Details</h2>
+      <div class="sub" id="detailsSub">Select an asset</div>
+    </div>
+    <div class="details-body" id="details"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ===========================================================================
+// ASSET REGISTRIES
+// ===========================================================================
+//
+// Each category has its own registry. The browser treats them uniformly via
+// a `kind` field ('cat' | 'dog' | 'prop') so the renderer can branch on
+// features (skeleton report only makes sense for characters, etc.).
+
+// --- Cats: canonical 17-slot roster matching assets/models/cats/<id>.glb
+//     and assets/npcs/npcs.json (via npcId).
+const CATS = [
+  { kind: 'cat', id: 'mist_leader',    clan: 'MistClan',  role: 'Leader',    npcId: 'mist_mistheart' },
+  { kind: 'cat', id: 'mist_mentor',    clan: 'MistClan',  role: 'Mentor',    npcId: 'mist_shadowwhisker' },
+  { kind: 'cat', id: 'mist_merchant',  clan: 'MistClan',  role: 'Merchant',  npcId: 'mist_fogpaw' },
+  { kind: 'cat', id: 'storm_leader',   clan: 'StormClan', role: 'Leader',    npcId: 'storm_stormstar' },
+  { kind: 'cat', id: 'storm_mentor',   clan: 'StormClan', role: 'Mentor',    npcId: 'storm_thunderstrike' },
+  { kind: 'cat', id: 'storm_trainer',  clan: 'StormClan', role: 'Trainer',   npcId: 'storm_lightningclaw' },
+  { kind: 'cat', id: 'storm_trader',   clan: 'StormClan', role: 'Merchant',  npcId: 'storm_stormtrader' },
+  { kind: 'cat', id: 'ember_leader',   clan: 'EmberClan', role: 'Leader',    npcId: 'ember_blazestar' },
+  { kind: 'cat', id: 'ember_mentor',   clan: 'EmberClan', role: 'Mentor',    npcId: 'ember_flamefur' },
+  { kind: 'cat', id: 'ember_merchant', clan: 'EmberClan', role: 'Merchant',  npcId: 'ember_ashwhisker' },
+  { kind: 'cat', id: 'frost_leader',   clan: 'FrostClan', role: 'Leader',    npcId: 'frost_winterstar' },
+  { kind: 'cat', id: 'frost_mentor',   clan: 'FrostClan', role: 'Mentor',    npcId: 'frost_icepelt' },
+  { kind: 'cat', id: 'frost_healer',   clan: 'FrostClan', role: 'Healer',    npcId: 'frost_snowpaw' },
+  { kind: 'cat', id: 'wanderer',       clan: 'None',      role: 'QuestGiver', npcId: 'neutral_wanderer' },
+  { kind: 'cat', id: 'elder',          clan: 'None',      role: 'Mentor',     npcId: 'neutral_elder' },
+  { kind: 'cat', id: 'scout',          clan: 'None',      role: 'QuestGiver', npcId: 'neutral_scout' },
+  { kind: 'cat', id: 'player',         clan: 'None',      role: 'Player',     npcId: null }
+];
+
+// --- Dogs: enemy variants. Currently unrigged (live in meshy_raw_dogs/).
+//     The 'raw' source points there; 'rigged' will point to a future
+//     rigged-dogs folder once rig_batch runs with -Species dog.
+const DOGS = [
+  { kind: 'dog', id: 'dog_regular', clan: 'Enemy', role: 'Grunt',   name: 'Mixed-Breed Mutt',   stats: 'HP 40 - Speed normal - Damage low' },
+  { kind: 'dog', id: 'dog_big',     clan: 'Enemy', role: 'Tank',    name: 'English Bulldog',    stats: 'HP 120 - Speed slow - Damage high' },
+  { kind: 'dog', id: 'dog_fast',    clan: 'Enemy', role: 'Scout',   name: 'Italian Greyhound',  stats: 'HP 25 - Speed very fast - Damage low' },
+  { kind: 'dog', id: 'dog_boss',    clan: 'Enemy', role: 'Boss',    name: 'Great Dane Alpha',   stats: 'HP 600 - Speed moderate - Damage massive' }
+];
+
+// --- Props: environment + weapons + projectiles. Grouped by subcategory so
+//     the left panel renders as a structured list rather than 37 rows.
+const PROP_GROUPS = {
+  'Trees':         ['tree_oak', 'tree_oak_autumn', 'tree_pine', 'tree_pine_frost', 'tree_dead_burnt', 'ember_oak_ancient', 'storm_dead_pine'],
+  'Rocks / Stones': ['rock_small', 'rock_boulder', 'rock_cluster', 'rock_river_mossy', 'mist_flat_stone', 'storm_boulder_lichen', 'storm_cairn', 'ember_shrine_stone'],
+  'Vegetation':    ['grass_fern_tuft', 'mist_cattails', 'frost_shrub_hoar', 'log_fallen', 'mist_log_mossy', 'stump'],
+  'Frost / Ice':   ['frost_ice_crystal', 'frost_snow_drift'],
+  'Landmarks':     ['landmark_ancient_oak', 'landmark_ice_spire', 'landmark_moonlit_falls', 'landmark_thunder_peak'],
+  'Other':         ['campfire'],
+  'Weapons':       ['weapon_sword', 'weapon_dagger', 'weapon_bow', 'weapon_staff'],
+  'Projectiles':   ['projectile_arrow', 'projectile_orb_air', 'projectile_orb_earth', 'projectile_orb_fire', 'projectile_orb_water']
+};
+const PROPS = Object.entries(PROP_GROUPS).flatMap(([group, ids]) =>
+  ids.map(id => ({ kind: 'prop', id, group, role: group, clan: 'None' }))
+);
+
+// --- Canonical skeletons: anatomically-correct bone layouts for each species
+//     built programmatically (no GLB). Lets us validate animation quality
+//     BEFORE worrying about mesh binding. If Walk looks like a cat walk on
+//     the standalone skeleton, then any rigging failure downstream is a
+//     mesh-mapping problem, not a bone-motion problem.
+const CANONICAL_RIGS = [
+  { kind: 'rig', id: 'canonical_cat', role: 'Cat skeleton',  clan: 'None', species: 'cat' },
+  { kind: 'rig', id: 'canonical_dog', role: 'Dog skeleton',  clan: 'None', species: 'dog' }
+];
+
+// ===========================================================================
+// MESHY PROMPTS
+// ===========================================================================
+// Prefix/suffix constant across every asset; only the middle chunk varies.
+// Factoring means a global tweak (e.g. poly cap bump) is one edit.
+
+const PROMPT_PREFIX_CAT = 'Small domestic house cat, approximately 10 pounds and 18 inches long, quadruped, standing naturally on all four paws with weight balanced evenly, body parallel to the ground, fully furred short-hair coat, ';
+const PROMPT_SUFFIX_CAT = ', realistic feline proportions matching a normal pet cat - not a lion, not a panther, not a cougar, just a regular house cat. Rigged T-pose, symmetric, full body, no base, game-ready topology under 300,000 polygons, clean quad mesh, PBR textures.';
+
+const PROMPT_PREFIX_DOG = '';
+const PROMPT_SUFFIX_DOG = ', realistic canine proportions matching the real breed, quadruped, standing naturally on all four paws with weight balanced evenly, body parallel to the ground, T-pose, symmetric, full body, no base, game-ready topology under 300,000 polygons, clean quad mesh, PBR textures.';
+
+// Cat prompt details (middle chunk only - PREFIX + this + SUFFIX).
+const CAT_PROMPTS = {
+  mist_leader:    'smoky blue-gray tabby fur with a silver-ticked ruff around the shoulders, pale green eyes with a faint scar line across the left brow, an ornate woven-reed collar with three polished river-stone pendants and a small carved bone clasp',
+  mist_mentor:    'medium gray tabby fur with darker charcoal striping along the back and a soft shadowed ruff around the neck, bright teal-green eyes, a plain braided-hide collar with two small polished river-stone pendants and a short strip of dark cloth wrap around one forepaw suggesting a stealth-training wrap',
+  mist_merchant:  'soft dove-gray fur with a white belly, kind pale green eyes, a worn plain leather collar with a small carved bone charm, a small twig pouch hanging at one side',
+  storm_leader:   'dark slate-gray fur with pronounced silver streaks along the shoulders and a small nick missing from the right ear, amber-gold eyes, an ornate braided-hide collar with three hammered-iron charms and a small bronze disc centered at the throat',
+  storm_mentor:   'deep charcoal-gray fur with a lightning-shaped white blaze down the forehead between the ears, piercing yellow eyes, a plain braided-hide collar with two hammered-iron charms and a small scorched tuft of fur along one shoulder suggesting a past lightning strike',
+  storm_trainer:  'silver-gray tabby fur with darker bands, amber eyes, a plain braided-hide collar with a single hammered-iron pendant, a strip of linen wrap around one shoulder suggesting an old training injury',
+  storm_trader:   'sleek black fur with golden-yellow eyes, a small leather trader\u2019s harness across the back carrying a closed cloth satchel, a plain leather collar with several small jingle-bells',
+  ember_leader:   'deep ginger tabby fur with dark mahogany striping along the back and faint greying around the muzzle indicating age, bright green eyes, an ornate braided-hide collar with three polished amber beads and a carved wooden oak-leaf pendant',
+  ember_mentor:   'rich russet-orange tabby fur with darker flame-shaped striping along the flanks and a faintly singed right whisker from fireball practice, sharp emerald-green eyes, a plain braided-hide collar with two small amber beads and a small carved-ember pendant at the throat',
+  ember_merchant: 'warm cinnamon-brown fur with faint tabby markings, olive-green eyes, a plain braided-hide collar with a single amber bead, a small woven herb pouch hanging at one side',
+  frost_leader:   'pure white fur with pale-blue ticking along the back and a distinct silver-grey mask around the eyes, ice-blue eyes, an ornate braided-hide collar with three polished clear-crystal pendants and a small silver clasp at the throat',
+  frost_mentor:   'soft cream-white fur with faint pale-blue ticking, clear ice-blue eyes, a plain braided-hide collar with a small clear-crystal bead',
+  frost_healer:   'soft cream fur with subtle warm-beige tabby markings and a gentle expression, warm amber eyes, a small woven herb bundle tied to a plain leather collar with dried lavender and yarrow hanging at the throat',
+  wanderer:       'brown-and-white bicolor fur with warm hazel eyes, a small leather merchant\u2019s harness across the back carrying two tied cloth pouches and a rolled parchment, a plain leather collar with a small brass bell',
+  elder:          'mottled tortoiseshell fur of black, rust, and cream with distinct greying around the muzzle and ears indicating advanced age, one milky-white eye and one warm amber eye, a weathered plain leather collar with a small iron bell',
+  scout:          'dark brown tabby fur with a lighter underbelly and a lean athletic build, sharp yellow-green eyes, a small leather harness carrying a rolled parchment map tucked at the shoulder, a plain leather collar with a small carved bone whistle',
+  player:         'calico fur of white, orange, and black patches, friendly hazel eyes, a plain simple leather collar with a small metal identification tag'
+};
+
+// Dog prompts are self-contained (prefix is empty) because the lead noun is
+// the breed itself; Meshy handles proportions better that way than with a
+// generic "dog" prefix.
+const DOG_PROMPTS = {
+  dog_regular: 'Medium-sized mixed-breed dog, approximately 35 pounds and 24 inches long, short tan and white fur with floppy ears, friendly brown eyes, neutral curious expression, plain brown leather collar with a small metal tag',
+  dog_big:     'English bulldog, approximately 50 pounds and 18 inches tall at the shoulder, short brown and white brindle fur, wide muscular chest, wrinkled face, square jaw, stocky powerful build, heavy studded leather collar',
+  dog_fast:    'Italian greyhound, approximately 12 pounds and 15 inches tall at the shoulder, sleek short light-brown fur, lean athletic build, long pointed snout, alert upright ears, slim neck with a thin messenger collar',
+  dog_boss:    'Great Dane, approximately 120 pounds and 32 inches tall at the shoulder, short black brindle fur with a silver chest blaze, massive imposing frame, square jaw, commanding presence, heavy iron-studded leather harness across the shoulders indicating alpha rank'
+};
+
+function fullPromptFor(asset) {
+  const key = asset.id;
+  if (asset.kind === 'cat') {
+    const detail = state.promptEdits?.[key] ?? CAT_PROMPTS[key] ?? '';
+    return PROMPT_PREFIX_CAT + detail + PROMPT_SUFFIX_CAT;
+  }
+  if (asset.kind === 'dog') {
+    const detail = state.promptEdits?.[key] ?? DOG_PROMPTS[key] ?? '';
+    return PROMPT_PREFIX_DOG + detail + PROMPT_SUFFIX_DOG;
+  }
+  // Props don't have prompts stored here (there are 37 of them and they're
+  // already scattered across assets/models/props/). Return empty so the UI
+  // hides the prompt editor for prop assets.
+  return '';
+}
+
+// ===========================================================================
+// PATH RESOLUTION
+// ===========================================================================
+// Each asset kind lives in a different folder. Rigging status also varies:
+// cats have both raw (cats/) and rigged (cats/rigged/); dogs are currently
+// raw-only (meshy_raw_dogs/); props are in props/.
+
+function pathFor(asset, useRigged) {
+  if (asset.kind === 'cat') {
+    return useRigged
+      ? `../assets/models/cats/rigged/${asset.id}.glb`
+      : `../assets/models/cats/${asset.id}.glb`;
+  }
+  if (asset.kind === 'dog') {
+    // Rigged dogs folder doesn't exist yet. Return raw for both options so
+    // the toggle doesn't 404 - we'll toast the user that dogs aren't rigged.
+    return `../assets/models/meshy_raw_dogs/${asset.id}.glb`;
+  }
+  if (asset.kind === 'prop') {
+    return `../assets/models/props/${asset.id}.glb`;
+  }
+  return '';
+}
+
+function assetSupportsRigged(asset) {
+  return asset.kind === 'cat';
+}
+
+// ===========================================================================
+// CANONICAL SKELETON BUILDERS
+// ===========================================================================
+//
+// Build a bone hierarchy for a real cat/dog directly in three.js, anatomy-
+// correct, no mesh involved. Bone names match what rig_quadruped.py produces
+// on the mesh side so the same animation clips drive either. Positions are
+// LOCAL offsets from parent (not world coords); three.js composes them.
+//
+// Reference frame:
+//   +X = forward (head)    +Y = up    +Z = right side (L = +Z, R = -Z)
+//
+// Cat proportions come from real-animal measurements, not Meshy's output:
+//   Total body length (nose to base of tail): ~45cm
+//   Shoulder height: 25cm   Hip height: 22cm
+//   Tail length: 30cm in 4 segments   Leg segments: upper 8cm, lower 8cm,
+//   paw 6cm (stands 22cm ground-to-hip).
+//
+// Why local offsets: bones in three.js inherit their parent's transform.
+// "Rotate the hip +30 on X" should move everything below it. Storing each
+// bone as a LOCAL offset from its parent keeps the math clean and matches
+// how glTF encodes skeletons.
+
+// Real cat/dog anatomy has 7 cervical + 13 thoracic + 7 lumbar + sacrum
+// + 20+ caudal vertebrae, with the LUMBAR region providing the dramatic
+// back-arch you see in a sitting cat. The original rig had only one bone
+// (spine_01) between hips and chest, which rigidified the back and
+// prevented the sit-arch. This revised layout adds lumbar_01/lumbar_02
+// between hips and spine_01 (4 flex joints pelvis->shoulders) and splits
+// the neck into neck_01/neck_02 so the head can curve up during sit.
+//
+// Also: back legs now have a bent-knee rest pose instead of a straight
+// chain. Previous rig had total back-leg length (0.22) exactly equal to
+// hip height, which meant any bend during sit pulled paws off the ground
+// - the leg couldn't reach. Rebalanced: thigh 0.10, shin 0.10, foot 0.04,
+// paw 0.04 = 0.28 total length. Rest pose bends slightly at the knee so
+// paws still touch y=0 when hips at rest height; sit pose can bend much
+// deeper because there's excess leg length to absorb.
+const CAT_BONE_LAYOUT = {
+  // [name]: { parent, localPos [x, y, z] }   x forward, y up, z right
+  root:        { parent: null,     pos: [0,     0,     0] },
+  hips:        { parent: 'root',   pos: [0,     0.22,  0] },
+
+  // Lumbar (flexible lower back). Two bones splitting what was the old
+  // single spine_01. Each one can flex independently during sit to form
+  // the cat's signature arched-back curve.
+  lumbar_01:   { parent: 'hips',      pos: [0.04, 0.005, 0] },
+  lumbar_02:   { parent: 'lumbar_01', pos: [0.04, 0.005, 0] },
+
+  // Thoracic (upper back). spine_01 is the lower thoracic (just ahead
+  // of lumbar); upper_back_01..03 add three more flex joints so the
+  // UPPER back matches the lumbar flex. Previously the chain jumped
+  // straight from spine_01 to chest (rigid front half). The chest
+  // shoulder-mount now sits at the END of the thoracic chain.
+  spine_01:       { parent: 'lumbar_02',     pos: [0.03, 0.004, 0] },
+  upper_back_01:  { parent: 'spine_01',      pos: [0.03, 0.004, 0] },
+  upper_back_02:  { parent: 'upper_back_01', pos: [0.03, 0.004, 0] },
+  upper_back_03:  { parent: 'upper_back_02', pos: [0.03, 0.004, 0] },
+  chest:          { parent: 'upper_back_03', pos: [0.04, 0.014, 0] },
+
+  // Neck: 2 bones. User confirmed 2 is the right count for this rig.
+  neck_01:     { parent: 'chest',   pos: [0.05, 0.02, 0] },
+  neck_02:     { parent: 'neck_01', pos: [0.04, 0.02, 0] },
+  head:        { parent: 'neck_02', pos: [0.08, 0.02, 0] },
+
+  // Face bones: ears + jaw. Give the mesh around ears and mouth their
+  // own weight regions so head rotations don't rigidly smash the face.
+  // Matches rig_quadruped.py's face-bone placement so GLB rigs and the
+  // canonical rig stay in sync.
+  ear_L:       { parent: 'head', pos: [0.02,  0.04,  0.03] },
+  ear_R:       { parent: 'head', pos: [0.02,  0.04, -0.03] },
+  jaw:         { parent: 'head', pos: [0.05, -0.03,  0] },
+
+  // Tail starts at the TOP of the rear hip (where a real cat's tail base
+  // sits) and arcs backward with gentle natural droop.
+  tail_01:     { parent: 'hips',    pos: [-0.05,  0.04, 0] },
+  tail_02:     { parent: 'tail_01', pos: [-0.07,  0.00, 0] },
+  tail_03:     { parent: 'tail_02', pos: [-0.07, -0.01, 0] },
+  tail_04:     { parent: 'tail_03', pos: [-0.06, -0.02, 0] },
+
+  // Front legs: SAME bone lengths as back legs (0.10 / 0.10 / 0.02) for
+  // symmetric fold reach. Previously used 0.08 / 0.08 / 0.06 which made
+  // the front leg's cosine-based reach curve diverge from the back
+  // curve at mid-fold (s=0.5), causing front paws to dip 1cm below
+  // ground during lay down. Now both chains have identical reach at
+  // every fold scale so they stay in sync throughout sit/lay.
+  //   shoulder_local.y = -0.03 keeps rest paw at y=0 (chest_rest = 0.25,
+  //   shoulder = 0.22, leg length 0.22, paw at 0).
+  shoulder_L:  { parent: 'chest',       pos: [0,      -0.04, 0.05] },
+  upper_arm_L: { parent: 'shoulder_L',  pos: [0,      -0.10, 0] },
+  lower_arm_L: { parent: 'upper_arm_L', pos: [0,      -0.10, 0] },
+  paw_front_L: { parent: 'lower_arm_L', pos: [0,      -0.02, 0] },
+  shoulder_R:  { parent: 'chest',       pos: [0,      -0.04, -0.05] },
+  upper_arm_R: { parent: 'shoulder_R',  pos: [0,      -0.10, 0] },
+  lower_arm_R: { parent: 'upper_arm_R', pos: [0,      -0.10, 0] },
+  paw_front_R: { parent: 'lower_arm_R', pos: [0,      -0.02, 0] },
+
+  // Back legs: same segment lengths and ZERO x-offsets so the fold
+  // math exactly mirrors the front legs. Previous rig had +/-0.015 x
+  // offsets on shin/foot simulating a forward-juts knee; those offsets
+  // partially cancel the vertical drop when bones rotate, giving the
+  // back legs a SHORTER effective reach than the front for the same
+  // fold angles. That reach mismatch was what made front paws sink
+  // below ground in lay (4cm drift at end pose). Removing x-offsets
+  // sacrifices anatomical knee detail in exchange for paws-on-ground
+  // symmetry - acceptable trade for our procedural rig.
+  //   thigh 0.10 + shin 0.10 + paw 0.02 = 0.22 rest reach (matches front)
+  thigh_L:     { parent: 'hips',    pos: [-0.02,   0,    0.05] },
+  shin_L:      { parent: 'thigh_L', pos: [0,     -0.10, 0] },
+  foot_L:      { parent: 'shin_L',  pos: [0,     -0.10, 0] },
+  paw_back_L:  { parent: 'foot_L',  pos: [0,     -0.02, 0] },
+  thigh_R:     { parent: 'hips',    pos: [-0.02,   0,   -0.05] },
+  shin_R:      { parent: 'thigh_R', pos: [0,     -0.10, 0] },
+  foot_R:      { parent: 'shin_R',  pos: [0,     -0.10, 0] },
+  paw_back_R:  { parent: 'foot_R',  pos: [0,     -0.02, 0] }
+};
+
+// Dog proportions (grown-adult medium breed):
+//   Body length ~60cm, shoulder height ~50cm. Dogs are proportionally
+//   longer-legged than cats and have shorter relative tail. We scale cat
+//   values and shrink the tail section.
+const DOG_BONE_LAYOUT = (() => {
+  const SCALE = 1.4;      // dog is ~40% larger than the cat in every dimension
+  const TAIL_SCALE = 0.6; // dog tails are shorter relative to body
+  const layout = {};
+  for (const [name, { parent, pos }] of Object.entries(CAT_BONE_LAYOUT)) {
+    const s = name.startsWith('tail_') ? TAIL_SCALE * SCALE : SCALE;
+    layout[name] = { parent, pos: pos.map(v => v * s) };
+  }
+  return layout;
+})();
+
+function buildSkeletonHierarchy(layout) {
+  const bones = {};
+  // First pass: create every Bone with local position set.
+  for (const [name, { pos }] of Object.entries(layout)) {
+    const bone = new THREE.Bone();
+    bone.name = name;
+    bone.position.set(pos[0], pos[1], pos[2]);
+    bones[name] = bone;
+  }
+  // Second pass: wire up parents. The root bone has no parent; everything
+  // else gets added as a child of its named parent. Root gets returned as
+  // the entry point so the caller can scene.add(root).
+  let rootBone = null;
+  for (const [name, { parent }] of Object.entries(layout)) {
+    if (parent) {
+      bones[parent].add(bones[name]);
+    } else {
+      rootBone = bones[name];
+    }
+  }
+  return { rootBone, bones };
+}
+
+// Joint markers: small spheres at each bone's origin so the rig renders as
+// more than just thin lines. Helps when we're inspecting a standalone rig
+// and need to see where each joint actually sits in 3D space.
+function addJointMarkers(bones, scene, tintByDepth = true) {
+  const markers = [];
+  const tmpColor = new THREE.Color();
+  const depthCache = new Map(); // bone -> depth-from-root
+  function depthOf(bone) {
+    if (depthCache.has(bone)) return depthCache.get(bone);
+    let d = 0; let b = bone;
+    while (b.parent && b.parent.isBone) { d++; b = b.parent; }
+    depthCache.set(bone, d); return d;
+  }
+  const geo = new THREE.SphereGeometry(0.015, 8, 6);
+  for (const bone of Object.values(bones)) {
+    // Tint by depth so root is cool-blue, leaf paws are warm. Makes the
+    // hierarchy readable at a glance when the skeleton is on its own.
+    if (tintByDepth) {
+      const hue = 0.55 - (depthOf(bone) * 0.08);
+      tmpColor.setHSL(Math.max(0, Math.min(1, hue)), 0.6, 0.6);
+    } else {
+      tmpColor.setRGB(1, 1, 1);
+    }
+    const mat = new THREE.MeshBasicMaterial({ color: tmpColor.getHex() });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = `joint_${bone.name}`;
+    bone.add(mesh); // parent to bone so joint follows bone transforms
+    markers.push(mesh);
+  }
+  return markers;
+}
+
+// ===========================================================================
+// PERSISTENT STATE
+// ===========================================================================
+// v4 bumps the key again and also migrates prompt edits from v3. Adds
+// `category` (current tab) and `bg` (viewer background color) to remember
+// user preferences across sessions.
+
+const STORAGE_KEY = 'catAnnihilation.assetBrowser.v4';
+const state = loadState();
+
+function loadState() {
+  try {
+    const current = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (current) return current;
+    // Migrate from v3 (identify_cats era): carry over promptEdits at minimum.
+    const v3 = JSON.parse(localStorage.getItem('catAnnihilation.identifier.v3'));
+    if (v3) {
+      return {
+        promptEdits: v3.promptEdits || {},
+        toggles: v3.toggles || { rigged: true, skeleton: false, wireframe: false, axes: false, autoRotate: false },
+        category: 'cats',
+        selectedId: v3.selectedId || null,
+        bg: 0x0c0e14
+      };
+    }
+  } catch { /* fall through */ }
+  return {
+    promptEdits: {},
+    toggles: { rigged: true, skeleton: false, wireframe: false, weights: false, axes: false, autoRotate: false },
+    category: 'cats',
+    selectedId: null,
+    bg: 0x0c0e14
+  };
+}
+function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+// ===========================================================================
+// NPC METADATA (shared by cats only)
+// ===========================================================================
+let npcsIndex = {};
+async function loadNPCs() {
+  try {
+    const res = await fetch('../assets/npcs/npcs.json');
+    const data = await res.json();
+    for (const npc of data.npcs) npcsIndex[npc.id] = npc;
+  } catch (err) {
+    console.warn('Could not load npcs.json:', err);
+  }
+}
+
+// ===========================================================================
+// THREE.JS SCENE
+// ===========================================================================
+const viewer = document.getElementById('viewer');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+viewer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(state.bg);
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 500);
+const DEFAULT_CAMERA = { pos: new THREE.Vector3(2.2, 1.4, 2.2), target: new THREE.Vector3(0, 0.6, 0) };
+camera.position.copy(DEFAULT_CAMERA.pos);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(DEFAULT_CAMERA.target);
+controls.enableDamping = true;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404055, 0.7));
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
+keyLight.position.set(3, 5, 3);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0xaaccff, 0.35);
+fillLight.position.set(-3, 2, -2);
+scene.add(fillLight);
+
+// Ground disc. We also update its color to harmonize with the background
+// when the user picks a very light or very dark BG - otherwise a white
+// background with the default near-black disc looks like a hockey puck.
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a1f28, roughness: 1 });
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1.2, 48), groundMat);
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const axesHelper = new THREE.AxesHelper(0.8);
+axesHelper.visible = state.toggles.axes;
+scene.add(axesHelper);
+
+function setBackground(hex) {
+  state.bg = hex;
+  saveState();
+  scene.background = new THREE.Color(hex);
+  // Pick a ground disc color that contrasts the BG by ~20% luminance so the
+  // cat still has a clear "it's standing on something" shadow catcher.
+  const bgCol = new THREE.Color(hex);
+  const bgL = 0.2126 * bgCol.r + 0.7152 * bgCol.g + 0.0722 * bgCol.b;
+  const groundHex = bgL > 0.5 ? 0x9aa3b0 : 0x1a1f28;
+  groundMat.color.setHex(groundHex);
+  document.querySelectorAll('.bg-swatch').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.bg, 16) === hex);
+  });
+}
+setBackground(state.bg);
+
+// Model state. We hang on to these across loads so clear/rebuild is cheap.
+let currentGltf = null;
+let currentModel = null;
+let currentSkeletonHelper = null;
+let currentReport = null;
+
+function clearModel() {
+  if (activeAction) { activeAction.stop(); activeAction = null; }
+  if (mixer) { mixer.stopAllAction(); if (currentModel) mixer.uncacheRoot(currentModel); mixer = null; }
+  clipCache = null;
+  if (currentSkeletonHelper) { scene.remove(currentSkeletonHelper); currentSkeletonHelper = null; }
+  if (currentModel) { scene.remove(currentModel); currentModel = null; }
+  currentGltf = null;
+  currentReport = null;
+}
+
+function resizeRenderer() {
+  const rect = viewer.getBoundingClientRect();
+  renderer.setSize(rect.width, rect.height, false);
+  camera.aspect = rect.width / rect.height || 1;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resizeRenderer);
+resizeRenderer();
+
+// ===========================================================================
+// RIGGING DIAGNOSTIC (cats only)
+// ===========================================================================
+//
+// Meshy's outputs vary: some cats T-pose, others come out sitting because
+// Meshy's neutral pose is under-constrained. rig_quadruped.py places bones
+// via AABB ratios which only works for horizontal-standing meshes. A sitting
+// cat's AABB is ~cubic, so bones land in anatomically wrong places. Also,
+// Blender's heat-diffusion weighting can fail per-bone without aborting the
+// export, leaving bones with zero influence (or no influence at all if they
+// got pruned).
+//
+// This engine inspects the loaded glTF and surfaces:
+//   * Which expected Blender bones are present / missing
+//   * Unexpected bones (often Meshy's auto-rig surviving the strip)
+//   * Skinned-mesh count + unskinned-vertex count
+//   * BBox aspect ratio -> heuristic pose diagnosis
+//   * Any baked animation clips in the GLB (shouldn't exist)
+// Runs only for kind === 'cat'; dogs and props skip this step.
+
+const EXPECTED_BONES_CAT = [
+  'root', 'hips',
+  'lumbar_01', 'lumbar_02',
+  'spine_01', 'upper_back_01', 'upper_back_02', 'upper_back_03', 'chest',
+  'neck_01', 'neck_02', 'head',
+  'ear_L', 'ear_R', 'jaw',
+  'tail_01', 'tail_02', 'tail_03', 'tail_04',
+  'shoulder_L', 'upper_arm_L', 'lower_arm_L', 'paw_front_L',
+  'shoulder_R', 'upper_arm_R', 'lower_arm_R', 'paw_front_R',
+  'thigh_L', 'shin_L', 'foot_L', 'paw_back_L',
+  'thigh_R', 'shin_R', 'foot_R', 'paw_back_R'
+];
+
+const ANIM_REQUIREMENTS = {
+  idle:    ['hips', 'chest', 'head'],
+  sitDown: ['thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'hips', 'chest'],
+  layDown: ['thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'shoulder_L', 'shoulder_R', 'upper_arm_L', 'upper_arm_R', 'hips', 'chest', 'root'],
+  standUp: ['thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'hips', 'chest'],
+  walk:    ['shoulder_L', 'shoulder_R', 'thigh_L', 'thigh_R'],
+  run:     ['shoulder_L', 'shoulder_R', 'thigh_L', 'thigh_R', 'spine_01']
+};
+
+function diagnoseRig(model, gltf) {
+  const foundBones = [];
+  const skinnedMeshes = [];
+  let skinnedVertexCount = 0;
+  let unskinnedMeshCount = 0;
+  let unskinnedVertexCount = 0;
+
+  model.traverse(n => {
+    if (n.isBone) foundBones.push({ name: n.name, parent: n.parent?.name, pos: n.position.toArray().map(v => +v.toFixed(3)) });
+    if (n.isSkinnedMesh) {
+      skinnedMeshes.push({
+        name: n.name,
+        vertices: n.geometry.attributes.position?.count || 0,
+        skeletonBones: n.skeleton?.bones?.length || 0
+      });
+      skinnedVertexCount += n.geometry.attributes.position?.count || 0;
+    } else if (n.isMesh) {
+      unskinnedMeshCount++;
+      unskinnedVertexCount += n.geometry.attributes.position?.count || 0;
+    }
+  });
+
+  const foundNames = new Set(foundBones.map(b => b.name));
+  const missing = EXPECTED_BONES_CAT.filter(b => !foundNames.has(b));
+  const extras  = foundBones.map(b => b.name).filter(b => !EXPECTED_BONES_CAT.includes(b));
+
+  const bbox = new THREE.Box3().setFromObject(model);
+  const size = bbox.getSize(new THREE.Vector3());
+  const dims = [size.x, size.y, size.z].sort((a, b) => a - b);
+  const longestHorizontal = dims[2];
+  const height = size.y;
+  const poseScore = longestHorizontal > 0 ? height / longestHorizontal : 0;
+  let poseHeuristic;
+  if (poseScore < 0.5) poseHeuristic = 'likely T-pose (horizontal)';
+  else if (poseScore < 0.75) poseHeuristic = 'ambiguous (crouched?)';
+  else poseHeuristic = 'likely sitting or standing-up (vertical)';
+
+  const animCoverage = {};
+  for (const [anim, req] of Object.entries(ANIM_REQUIREMENTS)) {
+    const missingForAnim = req.filter(b => !foundNames.has(b));
+    animCoverage[anim] = {
+      required: req.length,
+      present:  req.length - missingForAnim.length,
+      missing:  missingForAnim,
+      complete: missingForAnim.length === 0
+    };
+  }
+
+  const bakedClips = (gltf?.animations || []).map(c => ({
+    name: c.name, duration: +c.duration.toFixed(3), tracks: c.tracks.length
+  }));
+
+  return {
+    expected: EXPECTED_BONES_CAT.length,
+    found:    foundBones.length,
+    coveredExpected: EXPECTED_BONES_CAT.length - missing.length,
+    missing, extras, bones: foundBones,
+    skinnedMeshes, skinnedVertexCount,
+    unskinnedMeshCount, unskinnedVertexCount,
+    bbox: { x: +size.x.toFixed(3), y: +size.y.toFixed(3), z: +size.z.toFixed(3) },
+    poseScore: +poseScore.toFixed(2),
+    poseHeuristic,
+    bakedClips,
+    animCoverage
+  };
+}
+
+function logDiagnosis(assetId, source, report) {
+  console.groupCollapsed(`[${assetId}] Rigging diagnosis (${source}) - ${report.coveredExpected}/${report.expected} expected bones`);
+  console.log('Source URL:', source);
+  console.log('Bone coverage:', `${report.coveredExpected}/${report.expected}`);
+  console.log('Missing expected bones:', report.missing.length ? report.missing : '(none)');
+  console.log('Unexpected extra bones:', report.extras.length ? report.extras : '(none)');
+  console.log('Total bones found:', report.found);
+  console.log('Skinned meshes:', report.skinnedMeshes);
+  console.log('Unskinned meshes:', `${report.unskinnedMeshCount} mesh / ${report.unskinnedVertexCount} verts`);
+  console.log('BBox (xyz):', report.bbox, '-> pose heuristic:', report.poseHeuristic, `(score ${report.poseScore})`);
+  console.log('Baked animation clips:', report.bakedClips.length ? report.bakedClips : '(none, expected)');
+  console.log('Per-anim coverage:', report.animCoverage);
+  console.groupEnd();
+}
+
+function formatReportMarkdown(assetId, source, report) {
+  const lines = [];
+  const isRaw = report.source === 'raw';
+  lines.push(`# Rigging diagnosis: ${assetId}${isRaw ? ' (RAW source)' : ''}`);
+  lines.push('');
+  lines.push(`- **Source:** \`${source}\` (${isRaw ? 'pre-rig Meshy download - expected to have 0 bones' : 'Blender-rigged via rig_quadruped.py'})`);
+  if (!isRaw) lines.push(`- **Bone coverage:** ${report.coveredExpected} / ${report.expected} expected bones`);
+  lines.push(`- **Total bones in GLB:** ${report.found}`);
+  lines.push(`- **Skinned meshes:** ${report.skinnedMeshes.length} (${report.skinnedVertexCount} skinned verts)`);
+  lines.push(`- **Unskinned meshes:** ${report.unskinnedMeshCount} (${report.unskinnedVertexCount} unskinned verts)`);
+  lines.push(`- **Bounding box (xyz):** ${report.bbox.x} x ${report.bbox.y} x ${report.bbox.z} m`);
+  lines.push(`- **Pose heuristic:** ${report.poseHeuristic} (score ${report.poseScore})`);
+  lines.push(`- **Baked anim clips:** ${report.bakedClips.length ? report.bakedClips.map(c => c.name).join(', ') : 'none'}`);
+
+  if (isRaw) {
+    // Raw sources intentionally have no Blender bones - a missing-bones
+    // table would be a wall of red that misrepresents the actual state.
+    // Instead explain what the user is looking at and what to do next.
+    lines.push('');
+    lines.push('## What you\'re seeing');
+    lines.push('');
+    lines.push('This is the **raw Meshy download** before any rigging. Meshy\'s text-to-3D pipeline does not auto-rig cats (the "Rigged T-pose" phrasing in our prompt is aspirational). To use this cat in-engine, switch the **Source** toggle in the browser to **Rigged** - that loads the Blender-rigged copy from `cats/rigged/`.');
+    if (report.poseScore >= 0.75) {
+      lines.push('');
+      lines.push('## Pose warning');
+      lines.push('');
+      lines.push(`This raw cat's bounding box is taller than it is long (y/longest = ${report.poseScore}) - Meshy exported it sitting or standing-up instead of in T-pose. \`rig_quadruped.py\` places bones using AABB ratios, so on a vertical pose the "shoulders" and "hips" will land in anatomically wrong locations even after rigging. Best fix: regenerate this cat in Meshy with a stronger *"standing naturally on all four paws, body parallel to the ground"* constraint.`);
+    }
+    if (report.found > 0) {
+      // If Meshy's auto-rigger DID ship bones (which we don't expect but
+      // might happen if the user enables it in Meshy settings), list them
+      // so the user can compare against their own rigging plans.
+      lines.push('');
+      lines.push('## Bones unexpectedly present in raw');
+      for (const b of report.bones) lines.push(`- \`${b.name}\` (parent: ${b.parent || '-'})`);
+    }
+    return lines.join('\n');
+  }
+
+  // Rigged source: full bone-audit + animation-coverage breakdown.
+  if (report.missing.length) {
+    lines.push('', '## Missing expected bones');
+    for (const b of report.missing) lines.push(`- ${b}`);
+  }
+  if (report.extras.length) {
+    lines.push('', '## Unexpected extra bones');
+    for (const b of report.extras) lines.push(`- ${b}`);
+  }
+  lines.push('', '## Per-animation coverage');
+  for (const [anim, cov] of Object.entries(report.animCoverage)) {
+    lines.push(`- **${anim}:** ${cov.present}/${cov.required}${cov.missing.length ? ' (missing: ' + cov.missing.join(', ') + ')' : ''}`);
+  }
+  return lines.join('\n');
+}
+
+// ===========================================================================
+// WEIGHT VISUALIZATION
+// ===========================================================================
+//
+// Envelope weights leak between body parts - moving a "thigh" bone can warp
+// the belly if the envelope radius is larger than the anatomical distance.
+// The Weights display toggle colors each vertex by its DOMINANT bone so
+// you can see at a glance which chunk of mesh each bone owns. If the
+// left-back-leg is half blue and half red, weights are broken there.
+//
+// Implementation:
+//   1. Walk skinned meshes, read each vertex's (boneIndex, weight) stream
+//   2. For each vertex, find the bone with the highest weight
+//   3. Assign a distinct hue per bone index, write to a new Color attribute
+//   4. Swap the material's vertex-color flag on/off
+
+// Deterministic hue-per-bone-index: hash the index through the golden ratio
+// so adjacent bones get visually distinct colors (adjacent indices would
+// otherwise map to adjacent hues = hard to tell leg segments apart).
+const GOLDEN_RATIO_CONJUGATE = 0.61803398875;
+function boneColor(index, out) {
+  const hue = ((index * GOLDEN_RATIO_CONJUGATE) % 1);
+  out = out || new THREE.Color();
+  out.setHSL(hue, 0.65, 0.55);
+  return out;
+}
+
+// Cache the mesh's original materials + per-material { vertexColors, color }
+// before we mutate them, so the toggle-off restore is exact.
+const weightVizState = new WeakMap(); // mesh -> { mats: [ { mat, vertexColors, color } ] }
+
+function applyWeightViz(root, on) {
+  root.traverse(node => {
+    if (!node.isSkinnedMesh) return;
+    const geom = node.geometry;
+    const skinIndex = geom.attributes.skinIndex;
+    const skinWeight = geom.attributes.skinWeight;
+    if (!skinIndex || !skinWeight) return;
+
+    const mats = Array.isArray(node.material) ? node.material : [node.material];
+
+    if (on) {
+      // Build a vertex color buffer from the dominant bone per vertex. glTF
+      // stores up to 4 (index, weight) pairs per vertex; we scan all 4 and
+      // pick the max-weight one. Zero-weight verts stay black so broken
+      // regions are visually obvious.
+      const vertCount = skinIndex.count;
+      const colors = new Float32Array(vertCount * 3);
+      const tmp = new THREE.Color();
+      for (let i = 0; i < vertCount; i++) {
+        let bestBone = 0;
+        let bestWeight = 0;
+        for (let c = 0; c < 4; c++) {
+          const w = skinWeight.array[i * 4 + c];
+          if (w > bestWeight) { bestWeight = w; bestBone = skinIndex.array[i * 4 + c]; }
+        }
+        if (bestWeight > 0) {
+          boneColor(bestBone, tmp);
+          colors[i * 3 + 0] = tmp.r;
+          colors[i * 3 + 1] = tmp.g;
+          colors[i * 3 + 2] = tmp.b;
+        } // else leave black
+      }
+      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      // Cache + replace material properties so they can be restored.
+      if (!weightVizState.has(node)) {
+        weightVizState.set(node, mats.map(m => ({ mat: m, vertexColors: m.vertexColors, color: m.color.clone(), map: m.map })));
+      }
+      for (const m of mats) {
+        m.vertexColors = true;
+        m.color.setRGB(1, 1, 1);
+        m.map = null; // suppress texture so the weight color reads clearly
+        m.needsUpdate = true;
+      }
+    } else {
+      // Restore original material properties.
+      const cache = weightVizState.get(node);
+      if (cache) {
+        for (const entry of cache) {
+          entry.mat.vertexColors = entry.vertexColors;
+          entry.mat.color.copy(entry.color);
+          entry.mat.map = entry.map;
+          entry.mat.needsUpdate = true;
+        }
+        weightVizState.delete(node);
+      }
+      geom.deleteAttribute('color');
+    }
+  });
+}
+
+// ===========================================================================
+// BONE SANDBOX
+// ===========================================================================
+//
+// A diagnostic tool for testing what each bone actually moves. Select any
+// bone from a dropdown, get three rotation sliders (X/Y/Z, -180..180 deg).
+// Dragging a slider rotates ONLY that bone so you can see exactly which
+// mesh region it controls. Hitting "Reset all" or switching cats zeroes
+// every bone.
+//
+// Integration with the animation mixer: when the user touches a slider,
+// we stop the currently-playing action so mixer.update() doesn't clobber
+// the manual rotation on the next frame. Clicking an anim button resumes
+// normal playback.
+
+let sandboxSelectedBoneName = null;
+const sandboxRotations = new Map(); // boneName -> THREE.Euler, for UI state restoration across re-renders
+
+function allBonesIn(model) {
+  const out = [];
+  if (!model) return out;
+  model.traverse(n => { if (n.isBone) out.push(n); });
+  return out;
+}
+
+function resetAllBoneRotations() {
+  if (!currentModel) return;
+  allBonesIn(currentModel).forEach(b => b.rotation.set(0, 0, 0));
+  sandboxRotations.clear();
+}
+
+function setBoneRotation(boneName, axis, radians) {
+  if (!currentModel) return;
+  const bone = findBone(currentModel, boneName);
+  if (!bone) return;
+  bone.rotation[axis] = radians;
+  let stored = sandboxRotations.get(boneName);
+  if (!stored) { stored = new THREE.Euler(); sandboxRotations.set(boneName, stored); }
+  stored[axis] = radians;
+  // Stop any running animation so mixer.update() doesn't reset the bone
+  // on the next frame. User resumes by clicking an Anim button.
+  if (activeAction) { activeAction.stop(); activeAction = null; }
+  document.querySelectorAll('#animGroup button').forEach(b => b.classList.remove('active'));
+}
+
+// ===========================================================================
+// ANIMATION SYSTEM (cats only)
+// ===========================================================================
+// Procedural clips built from the Blender rig's bone names. See the v3
+// comments for the design rationale - unchanged here.
+
+let mixer = null;
+let activeAction = null;
+let clipCache = null;
+const animClock = new THREE.Clock();
+let currentAnim = 'idle';
+
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+function quatAxisAngle(axis, angleRad) {
+  return new THREE.Quaternion().setFromAxisAngle(axis, angleRad).toArray();
+}
+
+// ----------------------------------------------------------------------
+// Rig-aware side axis.
+//
+// The leg-swing hinge for walk/run and the thigh-pitch hinge for
+// sit/lay/stand is the cat's SIDE axis (horizontal, perpendicular to
+// body forward). Previously this was hardcoded as world +Z, which only
+// works when the rig's forward happens to be +X.
+//
+// Meshy + rig_quadruped.py export skeletons where body-forward can be
+// any horizontal direction. For example `mist_merchant` has
+// chest-hips = (0, 0, -0.814) — forward is -Z — so rotating around
+// world +Z spins the leg around the forward axis and the paw pendulums
+// side to side. That showed up in test_per_cat_anim.ts as 15/17 cats
+// failing with "paw moves SIDEWAYS".
+//
+// Fix: at clip-build time, find hips + chest in the rig, compute
+// forward = (chest - hips) projected to the horizontal plane, and
+// derive side = cross(forward, up_Y). For the canonical cat rig
+// (forward=+X) this returns +Z, so no regression. For Meshy cats
+// (forward=-Z) it returns +X, so the hinge is now the actual side
+// axis regardless of how the exporter aligned the skeleton.
+function computeRigSideAxis(model) {
+  let hipsBone = null, chestBone = null;
+  model.traverse(n => {
+    if (!n.isBone) return;
+    if (n.name === 'hips') hipsBone = n;
+    else if (n.name === 'chest') chestBone = n;
+  });
+  if (!hipsBone || !chestBone) return Z_AXIS.clone();
+  model.updateMatrixWorld(true);
+  const hipsWorld = new THREE.Vector3(); hipsBone.getWorldPosition(hipsWorld);
+  const chestWorld = new THREE.Vector3(); chestBone.getWorldPosition(chestWorld);
+  const forward = chestWorld.sub(hipsWorld);
+  forward.y = 0;
+  if (forward.lengthSq() < 1e-8) return Z_AXIS.clone();
+  forward.normalize();
+  const side = new THREE.Vector3().crossVectors(forward, Y_AXIS).normalize();
+  return side;
+}
+function findBone(root, name) {
+  let match = null;
+  root.traverse(n => { if (n.isBone && n.name === name) match = n; });
+  return match;
+}
+function buildRotTrack(model, boneName, samples) {
+  const bone = findBone(model, boneName);
+  if (!bone) return null;
+  // The `axis` in samples is a WORLD-SPACE axis that we want the
+  // delta rotation to happen around. To apply it as bone.quaternion
+  // (which is in PARENT-LOCAL space), we transform the axis into the
+  // bone's parent world frame: localAxis = inverse(parentWorldQuat) *
+  // worldAxis. Then pre-multiply with bind:
+  //   keyframe = delta_in_parent * bind
+  //
+  // Why this works on any bind:
+  //   Canonical rig: every bone's parent has identity world quat, so
+  //   localAxis == worldAxis, and delta * identity_bind == delta. Same
+  //   as the original naive code.
+  //   GLB rigs: each bone's parent chain has some accumulated world
+  //   rotation (from Blender's bone orientations). Transforming the
+  //   desired world-axis into that parent frame means "legs swing
+  //   around world Z" produces identical anatomical motion no matter
+  //   how Blender exported the bones. Without this transform, the
+  //   previous post-multiply (bind * delta_local) rotated around the
+  //   bone's OWN local axes - which on GLB cats point in random
+  //   anatomical directions based on bone roll, causing legs to
+  //   swing sideways instead of forward-back. Tests in test_per_cat_anim.ts
+  //   caught this as "lateral/forward ratio > 1" on 15 cats.
+  model.updateMatrixWorld(true);
+  const parentWorldQuat = new THREE.Quaternion();
+  if (bone.parent) {
+    bone.parent.getWorldQuaternion(parentWorldQuat);
+  }
+  const parentWorldQuatInv = parentWorldQuat.clone().invert();
+  const bindQuat = bone.quaternion.clone();
+  const localAxis = new THREE.Vector3();
+  const delta = new THREE.Quaternion();
+  const composed = new THREE.Quaternion();
+  const times = [];
+  const values = [];
+  for (const [t, axis, angle] of samples) {
+    times.push(t);
+    // Transform world-space axis into parent's frame.
+    localAxis.copy(axis).applyQuaternion(parentWorldQuatInv);
+    delta.setFromAxisAngle(localAxis, angle);
+    // Pre-multiply: composed = delta * bind.
+    composed.copy(delta).multiply(bindQuat);
+    values.push(composed.x, composed.y, composed.z, composed.w);
+  }
+  return new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, times, values);
+}
+
+function buildIdleClip(model) {
+  // Idle = hold BIND POSE exactly. Previously I keyframed bones at
+  // identity quaternion (rotation 0 around X), which is only correct
+  // when the bind rotation IS identity (as on the procedural canonical
+  // rig). Blender-rigged GLBs have NON-identity bind rotations (the
+  // glTF exporter bakes bone orientations into each bone's local
+  // quaternion), so setting to identity ROTATES the bone AWAY from
+  // bind and deforms the mesh. User reported this as "the cat looks
+  // totally messed up at rest."
+  //
+  // Fix: read each bone's CURRENT (bind) quaternion at clip-build time
+  // and use that as the keyframe value at both t=0 and t=dur. The mixer
+  // sets bone.quaternion = bind every frame - effectively a no-op -
+  // so the mesh stays at its bind shape (= source Meshy mesh).
+  const tracks = [];
+  for (const b of ['hips', 'chest', 'head', 'tail_01']) {
+    const bone = findBone(model, b);
+    if (!bone) continue;
+    const q = bone.quaternion.toArray();
+    const times = [0, 2];
+    const values = [...q, ...q];
+    tracks.push(new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, times, values));
+  }
+  return tracks.length ? new THREE.AnimationClip('idle', 2.0, tracks) : null;
+}
+// Axis convention for the canonical rig:
+//   +X = forward (head direction)
+//   +Y = up
+//   +Z = right side
+//
+// A leg bone hangs from its shoulder/thigh pointing down (local -Y). To
+// swing it FORWARD/BACK (the visible motion of a walking gait), we rotate
+// around the Z axis - the lateral side-to-side axis. Rotating around X
+// would pivot the leg SIDEWAYS (left/right), which is wrong for walking.
+// (The previous version rotated around X, so every leg looked like it
+// was pedaling a bike sideways.) Tail yaw is still around Y for the
+// side-to-side swish.
+//
+// Walk pattern: lateral gait (same-side legs move together). FL+BL swing
+// forward while FR+BR swing back, then swap. This matches "left leg
+// moves front, right leg back, then right leg front, left leg back" as
+// described. A real cat's preferred gait is diagonal (FL+BR together)
+// but lateral reads more clearly at this fidelity.
+
+function buildWalkClip(model) {
+  const dur = 1.0;
+  const amp = THREE.MathUtils.degToRad(22);
+  const kneeAmp = THREE.MathUtils.degToRad(15);
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+
+  // Lateral gait: left side in phase 0, right side in phase 0.5. Rotating
+  // a down-pointing bone around the rig's side axis swings it forward-back.
+  const legPhases = [
+    ['shoulder_L', 0.00],
+    ['thigh_L',    0.00],
+    ['shoulder_R', 0.50],
+    ['thigh_R',    0.50]
+  ];
+  for (const [bone, phase] of legPhases) {
+    const samples = [];
+    for (let i = 0; i <= 4; i++) {
+      const t = (i / 4) * dur;
+      samples.push([t, sideAxis, Math.sin(2 * Math.PI * (i / 4 + phase)) * amp]);
+    }
+    const track = buildRotTrack(model, bone, samples);
+    if (track) tracks.push(track);
+  }
+  // Knee/elbow bend on the swing upswing so the paw lifts off the ground.
+  const kneePhases = [
+    ['lower_arm_L', 0.00],
+    ['shin_L',      0.00],
+    ['lower_arm_R', 0.50],
+    ['shin_R',      0.50]
+  ];
+  for (const [bone, phase] of kneePhases) {
+    const samples = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      const s = Math.sin(2 * Math.PI * (i / 8 + phase));
+      samples.push([t, sideAxis, -Math.max(0, s) * kneeAmp]);
+    }
+    const track = buildRotTrack(model, bone, samples);
+    if (track) tracks.push(track);
+  }
+  // Tail swishes side-to-side in counter-rhythm. Y-axis rotation = yaw.
+  const tailSamples = [];
+  for (let i = 0; i <= 4; i++) {
+    const t = (i / 4) * dur;
+    tailSamples.push([t, Y_AXIS, Math.sin(2 * Math.PI * i / 4) * THREE.MathUtils.degToRad(10)]);
+  }
+  const tailTrack = buildRotTrack(model, 'tail_01', tailSamples);
+  if (tailTrack) tracks.push(tailTrack);
+
+  // Head + neck bob. Real cats carry their head in subtle rhythm with
+  // the gait - a gentle up-down pitch on each stride and a slight yaw
+  // tracking the shoulders. Without this the face mesh stays dead-still
+  // while the body moves, which reads "broken" visually (user reported
+  // "mouth and eye part just staying there").
+  //
+  // We split the motion to avoid two tracks targeting the same bone's
+  // quaternion (three.js mixer doesn't blend multiple QuaternionKeyframeTracks
+  // on the same bone; last-written wins):
+  //   neck_01 + neck_02 -> pitch (up/down bob) around sideAxis
+  //   head              -> yaw  (left/right turn) around world Y
+  // The two rotations compose cleanly through the skeleton hierarchy so
+  // the face ends up with both motions.
+  const headPitchAmp = THREE.MathUtils.degToRad(4);
+  const headYawAmp   = THREE.MathUtils.degToRad(6);
+  for (const [bone, weight] of [['neck_01', 0.6], ['neck_02', 1.0]]) {
+    const pitchSamples = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      pitchSamples.push([t, sideAxis, Math.sin(2 * Math.PI * i / 8) * headPitchAmp * weight]);
+    }
+    const pitchTrack = buildRotTrack(model, bone, pitchSamples);
+    if (pitchTrack) tracks.push(pitchTrack);
+  }
+  // Head yaw - counter-phase to tail so head turns away from the swinging
+  // rear. Matches real cat gait visual: head tracks forward, body sways,
+  // tail counter-sways.
+  const headYawSamples = [];
+  for (let i = 0; i <= 4; i++) {
+    const t = (i / 4) * dur;
+    headYawSamples.push([t, Y_AXIS, -Math.sin(2 * Math.PI * i / 4) * headYawAmp]);
+  }
+  const headYawTrack = buildRotTrack(model, 'head', headYawSamples);
+  if (headYawTrack) tracks.push(headYawTrack);
+
+  return tracks.length ? new THREE.AnimationClip('walk', dur, tracks) : null;
+}
+
+function buildRunClip(model) {
+  // Gallop - visually readable for an IN-PLACE preview where the cat
+  // doesn't translate forward. Earlier versions used "rotary" phasing
+  // (backs 180 degrees out of phase from fronts) which is anatomically
+  // correct for a real cat, but reads badly without forward motion:
+  // when the front legs are in their stance phase (planted, pushing
+  // body forward) without body translation they literally just look
+  // like they're kicking backward through the air. User saw "galloping
+  // backwards with its front legs" which is exactly this artifact.
+  //
+  // Instead we do a simplified "bound" style where BOTH fronts swing
+  // forward at the same time, BOTH backs swing forward at the same
+  // time, with backs and fronts IN PHASE for the forward reach
+  // (extension). The cat reads clearly as "all four legs reaching
+  // forward then all four pulled back to push off", which is what the
+  // eye expects for a gallop silhouette.
+  //
+  // The spine carries most of the "gallop energy": deep arch when legs
+  // are tucked (gather), flat stretch when legs are extended. Head bobs
+  // with the spine for readability.
+  //
+  // Duration 0.55s = ~2 strides/sec, a housecat sprint.
+  const dur = 0.55;
+  const backLegAmp   = THREE.MathUtils.degToRad(50);
+  const frontLegAmp  = THREE.MathUtils.degToRad(45);
+  const backKneeAmp  = THREE.MathUtils.degToRad(60);
+  const frontKneeAmp = THREE.MathUtils.degToRad(50);
+  const spineAmp     = THREE.MathUtils.degToRad(28);
+  const chestAmp     = THREE.MathUtils.degToRad(18);
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+
+  // Both fronts together, both backs together, L/R SYNCED within each
+  // pair (no stagger). Backs lead fronts by a quarter stride so the
+  // silhouette reads as "fronts reach -> backs reach -> fronts reach"
+  // instead of both pairs doing the same thing at the same time.
+  const legs = [
+    ['thigh_L',    0.00, backLegAmp],
+    ['thigh_R',    0.00, backLegAmp],
+    ['shoulder_L', 0.25, frontLegAmp],
+    ['shoulder_R', 0.25, frontLegAmp],
+  ];
+  for (const [bone, phase, legAmp] of legs) {
+    const samples = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      samples.push([t, sideAxis, Math.sin(2 * Math.PI * (i / 8 + phase)) * legAmp]);
+    }
+    const track = buildRotTrack(model, bone, samples);
+    if (track) tracks.push(track);
+  }
+  // Knees (back) fold rearward: shin rotates toward tail so the heel
+  // comes up toward the buttock. Negative sign.
+  // Elbows (front) fold FORWARD: forearm rotates toward head so the
+  // paw comes up toward the chest. Positive sign. Using the same
+  // negative sign for both folded the front paws INTO the belly, which
+  // is why the user saw "front legs bending into the stomach".
+  const joints = [
+    ['shin_L',      0.00, backKneeAmp,  -1],
+    ['shin_R',      0.00, backKneeAmp,  -1],
+    ['lower_arm_L', 0.25, frontKneeAmp, +1],
+    ['lower_arm_R', 0.25, frontKneeAmp, +1],
+  ];
+  for (const [bone, phase, kneeAmp, sign] of joints) {
+    const samples = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      const s = Math.sin(2 * Math.PI * (i / 8 + phase));
+      samples.push([t, sideAxis, sign * Math.max(0, s) * kneeAmp]);
+    }
+    const track = buildRotTrack(model, bone, samples);
+    if (track) tracks.push(track);
+  }
+  // Spine arches up (gather) when legs tuck, extends (flat) when they
+  // reach. Peak arch is roughly where legs are at their neutral midpoint
+  // so the body silhouette looks "crouched" at mid-stride and stretched
+  // at the start / end.
+  for (const [bone, a] of [['spine_01', spineAmp], ['chest', chestAmp]]) {
+    const s = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      s.push([t, sideAxis, Math.cos(2 * Math.PI * i / 8) * a]);
+    }
+    const tr = buildRotTrack(model, bone, s);
+    if (tr) tracks.push(tr);
+  }
+  // Head stabilization. Real cats (and dogs, and every quadruped with
+  // a working vestibulo-ocular reflex) actively HOLD THEIR HEAD LEVEL
+  // while the body pumps under them - they're looking at the prey /
+  // target they're running toward, and a bobbing head is useless for
+  // aiming a sprint. User reported the earlier version "moves the head
+  // with the front legs, looks dumb".
+  //
+  // Mechanism: the body already pitches spineAmp + chestAmp degrees
+  // down the chain. Counter-rotate the neck by exactly the negative of
+  // that sum (split across neck_01 and neck_02) so the head's world
+  // orientation stays approximately level while spine_01 and chest
+  // still flex under it.
+  const spineSum = spineAmp + chestAmp;
+  for (const [bone, weight] of [['neck_01', 0.5], ['neck_02', 0.5]]) {
+    const s = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = (i / 8) * dur;
+      s.push([t, sideAxis, -Math.cos(2 * Math.PI * i / 8) * spineSum * weight]);
+    }
+    const tr = buildRotTrack(model, bone, s);
+    if (tr) tracks.push(tr);
+  }
+  return tracks.length ? new THREE.AnimationClip('run', dur, tracks) : null;
+}
+// Helper for animating a bone's LOCAL POSITION (as opposed to rotation).
+// Used by layDown to translate the root bone toward the ground and by
+// standUp to lift it back. Without this we can only animate rotations.
+function buildPosTrack(model, boneName, samples /* [[t, [x,y,z]], ...] */) {
+  const bone = findBone(model, boneName);
+  if (!bone) return null;
+  const times = []; const values = [];
+  for (const [t, pos] of samples) { times.push(t); values.push(...pos); }
+  return new THREE.VectorKeyframeTrack(`${bone.name}.position`, times, values);
+}
+
+// Read rest hip y-offset from the model. DROP values scale against this
+// so the same clip works for cat (hips at 0.22) and dog (hips at 0.308)
+// instead of being tuned for one species. If this function returns a
+// default, clip will use cat proportions; best to call on a model that
+// has a `hips` bone.
+function restHipY(model) {
+  const hips = findBone(model, 'hips');
+  return hips ? hips.position.y : 0.22;
+}
+
+// Drop-fraction curve matching fold angles 85/-170/85 (cumulative 85 at
+// thigh, -85 at shin, 0 at foot). With zero-x-offset leg bones of lengths
+// 0.10 + 0.10 + 0.02, the leg reach at fold scale s is:
+//   reach(s) = 0.20 * cos(85*s) + 0.02
+// Drop = hipY - reach. Dividing by hipY gives scale-invariant fractions:
+const DROP_FRAC_BY_SCALE = {
+  0.0:  0.000,
+  0.25: 0.064,
+  0.5:  0.241,
+  0.75: 0.509,
+  1.0:  0.832
+};
+const KEY_SCALES = [0, 0.25, 0.5, 0.75, 1.0];
+// Max-fold angles (reached at s=1.0). 85 instead of 75 gives a deeper
+// sit crouch - hip drops to ~17% of rest height instead of ~27%.
+const SIT_THIGH_DEG = 85;
+const SIT_SHIN_DEG = -170;
+const SIT_FOOT_DEG = 85;
+
+function buildSitDownClip(model) {
+  // Real cat/dog sit pose (anatomically informed):
+  //
+  // 1. Lumbar spine arches backward so the pelvis tips down while the
+  //    thoracic spine stays relatively upright. lumbar_01 + lumbar_02
+  //    each rotate -20 deg around Z (total -40 deg arch at the small-
+  //    of-the-back). This is the SIGNATURE sit-arch: back curves into
+  //    a C-shape with the apex at the lumbar region.
+  //
+  // 2. Back legs fold DEEP into a Z: thigh swings forward-down, shin
+  //    swings backward from the knee, foot lays flat on the ground
+  //    (hock pressed to floor). With 0.10 thigh + 0.10 shin, the fold
+  //    can bring paws to ground when hips are at ~0.10 height.
+  //
+  // 3. Root drops so hips move from rest height (0.22) to sit height
+  //    (~0.10). Spine_01's local position lifts by the same DROP so
+  //    chest + shoulders + front legs stay at rest height - front paws
+  //    stay planted, front legs stay vertical.
+  //
+  // 4. Neck+head tilt up so the cat is alert, not head-down.
+  //
+  // Animation is a one-shot (LoopOnce + clampWhenFinished) so the end
+  // pose holds after the clip completes.
+  // DROP scales with rest hip height so the same clip works for cat
+  // (0.22 rig-units) and dog (0.308 rig-units). 0.80 factor was tuned
+  // against the paw-contact test harness until both species land all
+  // four paws on the ground.
+  const hipY = restHipY(model);
+  const DROP = hipY * 0.80;
+  const dur = 1.3;
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+  const addRot = (bone, axis, endDeg) => {
+    const t = buildRotTrack(model, bone, [[0, axis, 0], [dur, axis, THREE.MathUtils.degToRad(endDeg)]]);
+    if (t) tracks.push(t);
+  };
+
+  // Deep pitch-fold of the back legs around the rig's side axis. Thigh
+  // swings forward, shin folds back, foot rotates to flat. Tuned in
+  // combination with DROP=hipY*0.80 so paws land at y~=0.
+  addRot('thigh_L', sideAxis, SIT_THIGH_DEG); addRot('thigh_R', sideAxis, SIT_THIGH_DEG);
+  addRot('shin_L',  sideAxis, SIT_SHIN_DEG);  addRot('shin_R',  sideAxis, SIT_SHIN_DEG);
+  addRot('foot_L',  sideAxis, SIT_FOOT_DEG);  addRot('foot_R',  sideAxis, SIT_FOOT_DEG);
+
+  addRot('neck_01', sideAxis, 10);
+  addRot('neck_02', sideAxis, 10);
+  addRot('head',    sideAxis, 8);
+
+  // Lumbar arch commented out - it tips chest + front legs in ways that
+  // make paws sink. Re-add once the compensation math is worked out.
+  // TODO(anatomy): the sit-arch is visually important but requires more
+  // careful compensation than a single spine_01 lift can provide.
+
+  // Root drop follows a 5-keyframe non-linear curve that matches the
+  // back-leg fold reach at each time point. Legs unfold linearly (scale
+  // s = t), reach curve is cosine-based so root drop at t must equal
+  // hipY * DROP_FRAC_BY_SCALE[s]. Without these intermediate keyframes
+  // the root would drop linearly while leg reach shrinks non-linearly,
+  // causing back paws to dip below ground at t=0.4 (measured 3-4cm
+  // sink with 2-keyframe approach).
+  const rootBone = findBone(model, 'root');
+  if (rootBone) {
+    const start = rootBone.position.toArray();
+    const times = [];
+    const values = [];
+    for (const s of KEY_SCALES) {
+      times.push(s * dur);
+      values.push(start[0], start[1] - hipY * DROP_FRAC_BY_SCALE[s], start[2]);
+    }
+    const posTrack = new THREE.VectorKeyframeTrack(`${rootBone.name}.position`, times, values);
+    tracks.push(posTrack);
+  }
+  // Spine lift: distribute DROP compensation across spine bones so each
+  // rises progressively (smooth arch instead of a step). Uses matching
+  // 5-keyframe curve so the spine rise syncs with root fall.
+  // Share weights across 8 back bones. Sums to 1.0. Slightly more
+  // weight on the lumbar + lower-thoracic where the sit-arch apex is
+  // anatomically located.
+  const SHARES = {
+    lumbar_01: 0.15, lumbar_02: 0.18,
+    spine_01:  0.18, upper_back_01: 0.14, upper_back_02: 0.12, upper_back_03: 0.10,
+    chest:     0.13
+  };
+  for (const [boneName, share] of Object.entries(SHARES)) {
+    const bone = findBone(model, boneName);
+    if (!bone) continue;
+    const start = bone.position.toArray();
+    const times = [];
+    const values = [];
+    for (const s of KEY_SCALES) {
+      times.push(s * dur);
+      values.push(start[0], start[1] + hipY * DROP_FRAC_BY_SCALE[s] * share, start[2]);
+    }
+    tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, times, values));
+  }
+  return tracks.length ? new THREE.AnimationClip('sitDown', dur, tracks) : null;
+}
+
+function buildLayDownClip(model) {
+  // Sphinx/loaf lay-down: all four legs fold identically under the
+  // body so front and back vertical reach match. Body drops uniformly
+  // (no spine compensation - unlike sit where front stays put).
+  //
+  // Same fold angles as sit legs, applied to BOTH front and back chains:
+  //   upper segment: +75 deg (swings forward)
+  //   middle relative: -150 deg (folds back)
+  //   end relative: +75 deg (paw flat)
+  // This gives both chains equal vertical reach so DROP is the same
+  // for both ends - no tilt.
+  //
+  // DROP same as sit (hipY * 0.80) since the fold-reach is identical.
+  const hipY = restHipY(model);
+  const DROP = hipY * 0.80;
+  const dur = 1.6;
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+  const addRot = (bone, axis, endDeg) => {
+    const t = buildRotTrack(model, bone, [[0, axis, 0], [dur, axis, THREE.MathUtils.degToRad(endDeg)]]);
+    if (t) tracks.push(t);
+  };
+  // Back-leg pitch-fold around the rig's side axis.
+  addRot('thigh_L', sideAxis, SIT_THIGH_DEG); addRot('thigh_R', sideAxis, SIT_THIGH_DEG);
+  addRot('shin_L',  sideAxis, SIT_SHIN_DEG);  addRot('shin_R',  sideAxis, SIT_SHIN_DEG);
+  addRot('foot_L',  sideAxis, SIT_FOOT_DEG);  addRot('foot_R',  sideAxis, SIT_FOOT_DEG);
+  // Front-leg fold identical to back. Front legs share bone lengths with
+  // back (0.10/0.10/0.02), so the reach curves match and front/back paws
+  // stay in sync.
+  addRot('shoulder_L',  sideAxis, SIT_THIGH_DEG); addRot('shoulder_R',  sideAxis, SIT_THIGH_DEG);
+  addRot('upper_arm_L', sideAxis, SIT_SHIN_DEG);  addRot('upper_arm_R', sideAxis, SIT_SHIN_DEG);
+  addRot('lower_arm_L', sideAxis, SIT_FOOT_DEG);  addRot('lower_arm_R', sideAxis, SIT_FOOT_DEG);
+  addRot('neck_01', sideAxis, 25);
+  addRot('neck_02', sideAxis, 20);
+  addRot('head',    sideAxis, 15);
+  // Tail wraps around body (pitch around side axis).
+  addRot('tail_01', sideAxis, -20);
+  addRot('tail_02', sideAxis, -30);
+  // Body drops along a 5-keyframe non-linear curve matching the back
+  // leg-reach progression. No spine compensation - both ends drop
+  // uniformly. Front legs fold identically to back (see rotations
+  // above), so their reach matches and front paws also stay grounded.
+  const rootBone = findBone(model, 'root');
+  if (rootBone) {
+    const start = rootBone.position.toArray();
+    const times = [];
+    const values = [];
+    for (const s of KEY_SCALES) {
+      times.push(s * dur);
+      values.push(start[0], start[1] - hipY * DROP_FRAC_BY_SCALE[s], start[2]);
+    }
+    tracks.push(new THREE.VectorKeyframeTrack(`${rootBone.name}.position`, times, values));
+  }
+  return tracks.length ? new THREE.AnimationClip('layDown', dur, tracks) : null;
+}
+
+// Two stand-up variants: one for when the cat is sitting, one for when
+// it's laying down. Sit-stand un-folds only the back legs (front legs
+// were already planted) and un-lifts the compensating spine. Lay-stand
+// un-folds BOTH front and back legs (both were folded in lay) with no
+// spine compensation (lay had the whole body low, not just hips).
+// Different starting poses, different final motion, shared shape via
+// `fromLay` flag.
+function buildStandUpClipFrom(model, fromLay) {
+  const hipY = restHipY(model);
+  const dur = 1.3;
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+  const rad = (d) => THREE.MathUtils.degToRad(d);
+  const addRot = (bone, axis, keyframes) => {
+    const t = buildRotTrack(model, bone, keyframes.map(([f, a]) => [f * dur, axis, rad(a)]));
+    if (t) tracks.push(t);
+  };
+
+  // Back legs unfold from sit-fold angles to zero. Same for both variants.
+  addRot('thigh_L', sideAxis, [[0, SIT_THIGH_DEG], [1.0, 0]]);
+  addRot('thigh_R', sideAxis, [[0, SIT_THIGH_DEG], [1.0, 0]]);
+  addRot('shin_L',  sideAxis, [[0, SIT_SHIN_DEG],  [1.0, 0]]);
+  addRot('shin_R',  sideAxis, [[0, SIT_SHIN_DEG],  [1.0, 0]]);
+  addRot('foot_L',  sideAxis, [[0, SIT_FOOT_DEG],  [1.0, 0]]);
+  addRot('foot_R',  sideAxis, [[0, SIT_FOOT_DEG],  [1.0, 0]]);
+
+  if (fromLay) {
+    // Front legs unfold too - they were folded in lay down.
+    addRot('shoulder_L',  sideAxis, [[0, SIT_THIGH_DEG], [1.0, 0]]);
+    addRot('shoulder_R',  sideAxis, [[0, SIT_THIGH_DEG], [1.0, 0]]);
+    addRot('upper_arm_L', sideAxis, [[0, SIT_SHIN_DEG],  [1.0, 0]]);
+    addRot('upper_arm_R', sideAxis, [[0, SIT_SHIN_DEG],  [1.0, 0]]);
+    addRot('lower_arm_L', sideAxis, [[0, SIT_FOOT_DEG],  [1.0, 0]]);
+    addRot('lower_arm_R', sideAxis, [[0, SIT_FOOT_DEG],  [1.0, 0]]);
+    // Neck un-curls from lay's deeper bend (25/20/15) not sit's (10/10/8).
+    addRot('neck_01', sideAxis, [[0, 25], [1.0, 0]]);
+    addRot('neck_02', sideAxis, [[0, 20], [1.0, 0]]);
+    addRot('head',    sideAxis, [[0, 15], [1.0, 0]]);
+  } else {
+    // Neck un-curls from sit's alert angles.
+    addRot('neck_01', sideAxis, [[0, 10], [1.0, 0]]);
+    addRot('neck_02', sideAxis, [[0, 10], [1.0, 0]]);
+    addRot('head',    sideAxis, [[0,  8], [1.0, 0]]);
+  }
+
+  // Root rises: 5 keyframes on the same reach curve as sit/lay, reversed.
+  const rootBone = findBone(model, 'root');
+  if (rootBone) {
+    const rest = rootBone.position.toArray();
+    const entries = KEY_SCALES.map(s => ({
+      t: (1 - s) * dur,
+      v: [rest[0], rest[1] - hipY * DROP_FRAC_BY_SCALE[s], rest[2]]
+    })).sort((a, b) => a.t - b.t);
+    tracks.push(new THREE.VectorKeyframeTrack(`${rootBone.name}.position`, entries.map(e => e.t), entries.flatMap(e => e.v)));
+  }
+
+  // Spine un-lift - ONLY for fromSit. In lay there was no spine lift
+  // (whole body dropped uniformly), so stand-from-lay doesn't need to
+  // un-lift anything.
+  if (!fromLay) {
+    const SHARES = {
+      lumbar_01: 0.15, lumbar_02: 0.18,
+      spine_01:  0.18, upper_back_01: 0.14, upper_back_02: 0.12, upper_back_03: 0.10,
+      chest:     0.13
+    };
+    for (const [boneName, share] of Object.entries(SHARES)) {
+      const bone = findBone(model, boneName);
+      if (!bone) continue;
+      const rest = bone.position.toArray();
+      const entries = KEY_SCALES.map(s => ({
+        t: (1 - s) * dur,
+        v: [rest[0], rest[1] + hipY * DROP_FRAC_BY_SCALE[s] * share, rest[2]]
+      })).sort((a, b) => a.t - b.t);
+      tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, entries.map(e => e.t), entries.flatMap(e => e.v)));
+    }
+  }
+  return tracks.length ? new THREE.AnimationClip(fromLay ? 'standUpFromLay' : 'standUpFromSit', dur, tracks) : null;
+}
+
+function buildStandUpFromSitClip(model) { return buildStandUpClipFrom(model, false); }
+function buildStandUpFromLayClip(model) { return buildStandUpClipFrom(model, true); }
+// Back-compat: default standUp uses the from-sit variant.
+function buildStandUpClip(model) { return buildStandUpFromSitClip(model); }
+
+// layDownFromSit: sit -> lay transition. The cat is already sitting
+// (back legs folded, spine lifted for upright torso); only the front
+// legs fold down and the torso drops onto the belly. Back legs are
+// INTENTIONALLY NOT animated so the mixer doesn't touch their sit-
+// clamped values - they stay folded throughout. Without this variant
+// the default layDown clip animates all legs from T-pose, causing
+// the cat to briefly STAND UP (back unfolds to T-pose) mid-transition
+// before re-folding - the bug the user reported.
+function buildLayDownFromSitClip(model) {
+  const hipY = restHipY(model);
+  const dur = 1.3;
+  const tracks = [];
+  const sideAxis = computeRigSideAxis(model);
+  const rad = (d) => THREE.MathUtils.degToRad(d);
+  const add = (bone, endDeg) => {
+    const t = buildRotTrack(model, bone, [[0, sideAxis, 0], [dur, sideAxis, rad(endDeg)]]);
+    if (t) tracks.push(t);
+  };
+  // Front legs fold from straight (0) to lay-fold angles (same as back
+  // sit angles for symmetric reach).
+  add('shoulder_L',  SIT_THIGH_DEG); add('shoulder_R',  SIT_THIGH_DEG);
+  add('upper_arm_L', SIT_SHIN_DEG);  add('upper_arm_R', SIT_SHIN_DEG);
+  add('lower_arm_L', SIT_FOOT_DEG);  add('lower_arm_R', SIT_FOOT_DEG);
+  // Neck curls further down as head drops toward folded front paws.
+  // sit-end neck = 10/10/8; lay-end = 25/20/15. Animate the delta.
+  const addKF = (bone, fromDeg, toDeg) => {
+    const t = buildRotTrack(model, bone, [[0, sideAxis, rad(fromDeg)], [dur, sideAxis, rad(toDeg)]]);
+    if (t) tracks.push(t);
+  };
+  addKF('neck_01', 10, 25);
+  addKF('neck_02', 10, 20);
+  addKF('head',     8, 15);
+
+  // Spine un-lift: sit had spine bones lifted by hipY * 0.832 * SHARE.
+  // Lay has no spine lift. Animate lifted -> rest so chest drops with
+  // the body (the front end was being held up by the compensation; now
+  // it lowers to match the back).
+  const TOTAL_FRAC = DROP_FRAC_BY_SCALE[1.0]; // 0.832
+  const SHARES = {
+    lumbar_01: 0.15, lumbar_02: 0.18,
+    spine_01:  0.18, upper_back_01: 0.14, upper_back_02: 0.12, upper_back_03: 0.10,
+    chest:     0.13
+  };
+  for (const [boneName, share] of Object.entries(SHARES)) {
+    const bone = findBone(model, boneName);
+    if (!bone) continue;
+    const rest = bone.position.toArray();
+    const lifted = [rest[0], rest[1] + hipY * TOTAL_FRAC * share, rest[2]];
+    tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [0, dur], [...lifted, ...rest]));
+  }
+  // NOTE: no root position track - sit clamped root at -hipY*0.832 and
+  // lay needs root at the same depth, so we leave it where sit left it.
+  // NOTE: no back-leg tracks - they stay at sit-clamped values through
+  // the transition. This is THE fix for the user's reported bug.
+  return tracks.length ? new THREE.AnimationClip('layDownFromSit', dur, tracks) : null;
+}
+
+function rebuildClips() {
+  if (!currentModel) { clipCache = null; return; }
+  clipCache = {
+    idle:           buildIdleClip(currentModel),
+    sitDown:        buildSitDownClip(currentModel),
+    layDown:        buildLayDownClip(currentModel),
+    layDownFromSit: buildLayDownFromSitClip(currentModel),
+    standUpFromSit: buildStandUpFromSitClip(currentModel),
+    standUpFromLay: buildStandUpFromLayClip(currentModel),
+    walk:           buildWalkClip(currentModel),
+    run:            buildRunClip(currentModel)
+  };
+}
+
+function updateAnimButtonStates() {
+  // Only touch animation-clip buttons (those have data-anim). Skipping
+  // the generic selector so we don't clobber the Pause button's own
+  // tooltip or mess with its classes.
+  document.querySelectorAll('#animGroup button[data-anim]').forEach(btn => {
+    const name = btn.dataset.anim;
+    const cov = currentReport?.animCoverage?.[name];
+    btn.classList.toggle('incomplete', cov && !cov.complete);
+    btn.title = cov
+      ? `${cov.present}/${cov.required} required bones present${cov.missing.length ? ' - missing: ' + cov.missing.join(', ') : ''}`
+      : '';
+  });
+}
+
+// Context-aware routing for the "Stand Up" button. The UI always shows
+// one physical button; clicking it picks the appropriate anim based on
+// the cat's CURRENT state:
+//   * sitting        -> standUpFromSit (reverse of sit: unfold back legs
+//                                        + un-lift spine)
+//   * lying down     -> standUpFromLay (unfold all 4 legs + neck, no
+//                                        spine un-lift)
+//   * walking/running -> "Stand Still": crossfade to idle immediately
+//   * already idle   -> no-op
+// Returns the actual anim name that will be played, so the UI can
+// reflect button label swaps.
+function resolveStandAction(fromAnim) {
+  if (fromAnim === 'sitDown') return 'standUpFromSit';
+  if (fromAnim === 'layDown' || fromAnim === 'layDownFromSit') return 'standUpFromLay';
+  if (fromAnim === 'walk' || fromAnim === 'run') return 'idle';
+  return 'idle';
+}
+
+// Lay-Down routing: transitioning FROM sit -> lay should keep the back
+// legs folded instead of unfolding through T-pose (the bug the user
+// reported). From any other state, use the regular layDown clip which
+// folds all four legs from scratch.
+function resolveLayAction(fromAnim) {
+  if (fromAnim === 'sitDown') return 'layDownFromSit';
+  return 'layDown';
+}
+
+function playAnim(name) {
+  // Raw mode autoswap: animations require our canonical bone names, which
+  // only the Blender-rigged GLBs have. Meshy's raw cats either have no
+  // bones or a different bone naming scheme, so our clips come out with
+  // zero tracks and the cat looks frozen. Rather than silently no-op,
+  // flip to rigged mode, reload, and queue the requested animation. Idle
+  // does NOT trigger the swap (lets the user watch the raw mesh at rest).
+  // Anything else (walk/run/sit/lay/standUp) triggers the swap.
+  const asset = state.selectedId ? getAsset(state.selectedId) : null;
+  const needsRig = name !== 'idle';
+  if (asset && asset.kind === 'cat' && needsRig && !state.toggles.rigged && assetSupportsRigged(asset)) {
+    state.toggles.rigged = true;
+    saveState();
+    updateSourceButtons();
+    currentAnim = name; // loadAsset -> rebuildClips -> playAnim(currentAnim)
+    toast(`Switched to rigged view (${name} needs the skeleton). Click Raw to see the static mesh again.`);
+    loadAsset(asset);
+    return;
+  }
+  if (!mixer || !clipCache) return;
+  // Context-aware routing: a 'standUp' request is dispatched based on
+  // currentAnim. For other names, play directly.
+  let resolvedName = name;
+  if (name === 'standUp') resolvedName = resolveStandAction(currentAnim);
+  if (name === 'layDown') resolvedName = resolveLayAction(currentAnim);
+
+  const clip = clipCache[resolvedName];
+  const cov = currentReport?.animCoverage?.[resolvedName];
+  if (!clip) {
+    const miss = cov?.missing?.length ? `missing bones: ${cov.missing.join(', ')}` : 'no matching bones';
+    toast(`${resolvedName} clip unavailable - ${miss}`);
+    console.warn(`[anim] clip "${resolvedName}" could not be built. Missing: ${cov?.missing?.join(', ') || '(all)'}`);
+    return;
+  }
+  if (cov && !cov.complete) {
+    console.warn(`[anim] playing "${resolvedName}" with degraded rig - missing: ${cov.missing.join(', ')}`);
+  }
+  const action = mixer.clipAction(clip);
+  action.reset();
+  const isOneShot = resolvedName === 'sitDown' || resolvedName === 'layDown'
+                 || resolvedName === 'layDownFromSit'
+                 || resolvedName === 'standUpFromSit' || resolvedName === 'standUpFromLay';
+  if (isOneShot) {
+    action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true;
+  } else {
+    action.setLoop(THREE.LoopRepeat, Infinity); action.clampWhenFinished = false;
+  }
+  if (activeAction && activeAction !== action) action.crossFadeFrom(activeAction, 0.25, false);
+  action.play();
+  activeAction = action; currentAnim = resolvedName;
+  // UI button state: highlight the button user clicked (by data-anim).
+  document.querySelectorAll('#animGroup button').forEach(b => { b.classList.toggle('active', b.dataset.anim === name); });
+  updateStandUpLabel();
+}
+
+// Swap the stand-up button label based on current state. "Stand Up"
+// when the cat is sitting/laying, "Stand Still" when it's walking/
+// running, disabled-looking when already idle.
+function updateStandUpLabel() {
+  const btn = document.querySelector('#animGroup button[data-anim="standUp"]');
+  if (!btn) return;
+  if (currentAnim === 'walk' || currentAnim === 'run') {
+    btn.textContent = 'Stand Still';
+    btn.title = 'Stop walking/running and return to idle';
+  } else if (currentAnim === 'sitDown' || currentAnim === 'layDown') {
+    btn.textContent = 'Stand Up';
+    btn.title = currentAnim === 'sitDown' ? 'Stand up from sit' : 'Stand up from lay';
+  } else {
+    btn.textContent = 'Stand Up';
+    btn.title = 'Already standing';
+  }
+}
+
+// Pause state for the animation mixer. When paused, we still advance
+// animClock so that `getDelta()` returns the elapsed time each frame,
+// but we feed 0 to `mixer.update()` so bone quaternions stay exactly
+// where they were when the user hit Pause. This lets the user orbit
+// the camera, toggle display options, or grab a screenshot without
+// the cat moving out from under them. Resuming simply flips the flag
+// and the mixer continues from the same t.
+let animPaused = false;
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.autoRotate = state.toggles.autoRotate;
+  controls.update();
+  const delta = animClock.getDelta();
+  if (mixer) mixer.update(animPaused ? 0 : delta);
+  renderer.render(scene, camera);
+}
+animate();
+
+function setAnimPaused(paused) {
+  animPaused = paused;
+  const btn = document.getElementById('btnPauseAnim');
+  if (btn) {
+    btn.textContent = paused ? 'Resume' : 'Pause';
+    btn.classList.toggle('active', paused);
+  }
+}
+const btnPauseAnim = document.getElementById('btnPauseAnim');
+if (btnPauseAnim) btnPauseAnim.onclick = () => setAnimPaused(!animPaused);
+
+// Any animation-button click should resume playback - you don't want
+// the pause flag to outlast your explicit "play walk" request.
+document.querySelectorAll('#animGroup button[data-anim]').forEach(btn => {
+  btn.addEventListener('click', () => { if (animPaused) setAnimPaused(false); }, true);
+});
+
+// ===========================================================================
+// GLB LOADING
+// ===========================================================================
+const gltfLoader = new GLTFLoader();
+
+// Load a canonical rig (no GLB - built programmatically). Reuses the same
+// animation mixer / sandbox plumbing by wrapping the bone hierarchy in a
+// Group and stashing a minimal diagnostic report so the right panel has
+// something to render.
+function loadCanonicalRig(asset) {
+  clearModel();
+  document.getElementById('viewerEmpty').style.display = 'none';
+  const layout = asset.species === 'cat' ? CAT_BONE_LAYOUT : DOG_BONE_LAYOUT;
+  const { rootBone, bones } = buildSkeletonHierarchy(layout);
+
+  // Wrap in a Group so scene management is identical to the GLB path.
+  currentModel = new THREE.Group();
+  currentModel.name = `canonical_${asset.species}`;
+  currentModel.add(rootBone);
+  addJointMarkers(bones, scene);
+
+  // Normalize scale so the skeleton fills the viewer the same way meshes do.
+  const box = new THREE.Box3().setFromObject(currentModel);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = 1.2 / Math.max(size.x, size.y, size.z, 0.001);
+  currentModel.scale.setScalar(scale);
+  box.setFromObject(currentModel);
+  const center = box.getCenter(new THREE.Vector3());
+  currentModel.position.sub(new THREE.Vector3(center.x, box.min.y, center.z));
+  scene.add(currentModel);
+
+  // Always-on skeleton helper for rig view (the whole point is to see bones).
+  currentSkeletonHelper = new THREE.SkeletonHelper(currentModel);
+  currentSkeletonHelper.material.linewidth = 3;
+  currentSkeletonHelper.visible = true;
+  scene.add(currentSkeletonHelper);
+
+  document.getElementById('statusFile').textContent = `canonical ${asset.species} rig (procedural, no mesh)`;
+  document.getElementById('statusMeta').textContent =
+    `${Object.keys(bones).length} bones - 0 mesh - programmatic`;
+
+  // Fabricate a report object so renderDetails has the same shape to render
+  // against. "source: rigged" keeps the anim-compatibility grid visible.
+  const boneList = Object.values(bones).map(b => ({
+    name: b.name, parent: b.parent?.name, pos: b.position.toArray().map(v => +v.toFixed(3))
+  }));
+  const foundNames = new Set(boneList.map(b => b.name));
+  const missing = EXPECTED_BONES_CAT.filter(b => !foundNames.has(b));
+  const animCoverage = {};
+  for (const [anim, req] of Object.entries(ANIM_REQUIREMENTS)) {
+    const missForAnim = req.filter(b => !foundNames.has(b));
+    animCoverage[anim] = { required: req.length, present: req.length - missForAnim.length, missing: missForAnim, complete: missForAnim.length === 0 };
+  }
+  currentReport = {
+    expected: EXPECTED_BONES_CAT.length,
+    found: boneList.length,
+    coveredExpected: EXPECTED_BONES_CAT.length - missing.length,
+    missing, extras: [], bones: boneList,
+    skinnedMeshes: [], skinnedVertexCount: 0,
+    unskinnedMeshCount: 0, unskinnedVertexCount: 0,
+    bbox: { x: +size.x.toFixed(3), y: +size.y.toFixed(3), z: +size.z.toFixed(3) },
+    poseScore: 0, poseHeuristic: 'canonical T-pose',
+    bakedClips: [], animCoverage,
+    source: 'rigged', sourceUrl: `(procedural ${asset.species})`
+  };
+  logDiagnosis(asset.id, currentReport.sourceUrl, currentReport);
+  renderDetails();
+
+  // Wire up the animation mixer. Since clips target bones by name and our
+  // bones match the Blender rig's names, the same procedural clips work.
+  mixer = new THREE.AnimationMixer(currentModel);
+  rebuildClips();
+  animClock.getDelta();
+  updateAnimButtonStates();
+  playAnim(currentAnim || 'idle');
+}
+
+function loadAsset(asset) {
+  // Canonical rigs bypass the GLB loader - they're built in-browser from
+  // the CAT_BONE_LAYOUT / DOG_BONE_LAYOUT tables above.
+  if (asset.kind === 'rig') { loadCanonicalRig(asset); return; }
+
+  const url = pathFor(asset, state.toggles.rigged && assetSupportsRigged(asset));
+  document.getElementById('viewerEmpty').style.display = 'none';
+  document.getElementById('statusFile').textContent = url;
+
+  gltfLoader.load(url, (gltf) => {
+    clearModel();
+    currentGltf = gltf;
+    currentModel = gltf.scene;
+
+    applyWireframe(currentModel, state.toggles.wireframe);
+    if (state.toggles.weights) applyWeightViz(currentModel, true);
+
+    // Propagate world transforms through the scene graph BEFORE measuring
+    // the bbox. For SkinnedMesh children, three.js's Box3.setFromObject
+    // calls SkinnedMesh.computeBoundingBox(), which runs each vertex
+    // through applyBoneTransform using bone.matrixWorld. If we skip this
+    // update the bone world matrices are stale-identity and the skinned
+    // bbox comes out shifted (user-reported symptom: rigged cat rendered
+    // with its bottom half buried below the ground disc even though the
+    // raw-mesh view of the same GLB sits correctly on top of it). Raw
+    // Mesh children use geometry.boundingBox directly and don't need
+    // this, which is why only the rigged side was broken.
+    currentModel.updateMatrixWorld(true);
+
+    // Normalize size. Props vary wildly (a campfire vs a 491 MB Ancient Oak
+    // are off by >10x) so fit-to-1.2m is the only way everything fills the
+    // viewer consistently.
+    const box = new THREE.Box3().setFromObject(currentModel);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const scale = 1.2 / Math.max(size.x, size.y, size.z);
+    currentModel.scale.setScalar(scale);
+    currentModel.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+    scene.add(currentModel);
+
+    currentSkeletonHelper = new THREE.SkeletonHelper(currentModel);
+    currentSkeletonHelper.material.linewidth = 2;
+    currentSkeletonHelper.visible = state.toggles.skeleton;
+    scene.add(currentSkeletonHelper);
+
+    const boneCount = countBones(currentModel);
+    const meshCount = countMeshes(currentModel);
+    document.getElementById('statusMeta').textContent =
+      `${boneCount} bones - ${meshCount} mesh - ${(size.x).toFixed(2)}x${(size.y).toFixed(2)}x${(size.z).toFixed(2)}m`;
+
+    // Diagnostics apply only to cats. Dogs/props skip - the report section
+    // in the right panel checks currentReport to know whether to render.
+    // We also stash the source type (raw vs rigged) on the report so the
+    // renderer can branch: raw Meshy outputs have ZERO bones by design (the
+    // "Rigged T-pose" prompt phrasing is aspirational - Meshy doesn't
+    // actually auto-rig cats), so comparing them against our 26 expected
+    // Blender bone names would produce a uniformly red report that looks
+    // like catastrophe instead of "this is the pre-rig source."
+    if (asset.kind === 'cat') {
+      currentReport = diagnoseRig(currentModel, currentGltf);
+      currentReport.source = (state.toggles.rigged && assetSupportsRigged(asset)) ? 'rigged' : 'raw';
+      currentReport.sourceUrl = url;
+      logDiagnosis(asset.id, url, currentReport);
+    } else {
+      currentReport = null;
+    }
+    renderDetails();
+
+    // Animations apply only to cats with bones. Build the mixer anyway so
+    // toggling to a dog/prop doesn't leave a stale mixer pointing at the
+    // previous cat.
+    mixer = new THREE.AnimationMixer(currentModel);
+    if (asset.kind === 'cat') {
+      rebuildClips();
+      animClock.getDelta();
+      updateAnimButtonStates();
+      playAnim(currentAnim || 'idle');
+    } else {
+      // Dogs/props: no animations. Clear the highlight so no button looks active.
+      document.querySelectorAll('#animGroup button').forEach(b => b.classList.remove('active'));
+    }
+  }, undefined, (err) => {
+    console.error('GLTF load failed:', url, err);
+    document.getElementById('statusFile').textContent = `LOAD FAILED: ${url}`;
+  });
+}
+
+function applyWireframe(root, on) {
+  root.traverse(n => {
+    if (n.isMesh && n.material) {
+      const mats = Array.isArray(n.material) ? n.material : [n.material];
+      for (const m of mats) m.wireframe = on;
+    }
+  });
+}
+function countBones(root) { let c = 0; root.traverse(n => { if (n.isBone) c++; }); return c; }
+function countMeshes(root) { let c = 0; root.traverse(n => { if (n.isMesh) c++; }); return c; }
+
+// ===========================================================================
+// UI RENDERING
+// ===========================================================================
+
+function getCurrentList() {
+  if (state.category === 'cats')  return CATS;
+  if (state.category === 'dogs')  return DOGS;
+  if (state.category === 'props') return PROPS;
+  if (state.category === 'rigs')  return CANONICAL_RIGS;
+  return [];
+}
+
+function getAsset(id) { return getCurrentList().find(a => a.id === id) || null; }
+
+function displayName(asset) {
+  if (asset.kind === 'cat') return npcsIndex[asset.npcId]?.name || (asset.id === 'player' ? 'Player Cat' : asset.id);
+  if (asset.kind === 'dog') return asset.name;
+  if (asset.kind === 'rig') return asset.species === 'cat' ? 'Canonical Cat Rig' : 'Canonical Dog Rig';
+  return asset.id.replace(/_/g, ' ');
+}
+
+function renderCategoryHeader() {
+  const counts = { cats: CATS.length, dogs: DOGS.length, props: PROPS.length, rigs: CANONICAL_RIGS.length };
+  const subs = {
+    cats: '17 clan cats + player',
+    dogs: '4 enemy dog variants',
+    props: `${PROPS.length} environment + weapon + projectile assets`,
+    rigs: 'Canonical anatomically-correct skeletons (no mesh)'
+  };
+  const labels = { cats: 'Cats', dogs: 'Dogs', props: 'Props', rigs: 'Rigs' };
+  document.getElementById('categoryHeader').innerHTML =
+    `${labels[state.category]} <span id="rosterCount" style="float:right;color:var(--muted);font-weight:400;">${counts[state.category]}</span>`;
+  document.getElementById('categorySub').textContent = subs[state.category];
+  document.querySelectorAll('#categoryTabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.category === state.category);
+  });
+}
+
+function renderRoster() {
+  const container = document.getElementById('roster');
+  container.innerHTML = '';
+  renderCategoryHeader();
+
+  if (state.category === 'cats') {
+    // Group cats by clan.
+    const byClan = {};
+    for (const cat of CATS) (byClan[cat.clan] ||= []).push(cat);
+    const clanOrder = ['MistClan', 'StormClan', 'EmberClan', 'FrostClan', 'None'];
+    for (const clan of clanOrder) {
+      if (!byClan[clan]) continue;
+      appendSection(container, clan === 'None' ? 'Neutral / Player' : clan, byClan[clan], clan);
+    }
+  } else if (state.category === 'dogs') {
+    // Dogs are all "Enemy" - show them flat.
+    appendSection(container, 'Enemies', DOGS, 'None');
+  } else if (state.category === 'props') {
+    // Props grouped by PROP_GROUPS order.
+    for (const [groupName, ids] of Object.entries(PROP_GROUPS)) {
+      const items = PROPS.filter(p => p.group === groupName);
+      if (items.length) appendSection(container, groupName, items, 'None');
+    }
+  } else if (state.category === 'rigs') {
+    appendSection(container, 'Canonical Skeletons', CANONICAL_RIGS, 'None');
+  }
+}
+
+function appendSection(container, title, items, clanClass) {
+  const section = document.createElement('div');
+  section.className = 'roster-section';
+  section.innerHTML = `<h3 class="${clanClass}"><span class="dot"></span>${title}</h3>`;
+  for (const asset of items) {
+    const row = document.createElement('div');
+    row.className = `asset-row ${asset.clan || 'None'}${state.selectedId === asset.id ? ' active' : ''}`;
+    row.innerHTML = `
+      <div>
+        <div class="name">${displayName(asset)}</div>
+        <div class="role">${asset.role || ''}</div>
+      </div>
+    `;
+    row.onclick = () => selectAsset(asset.id);
+    section.appendChild(row);
+  }
+  container.appendChild(section);
+}
+
+function renderDetails() {
+  const el = document.getElementById('details');
+  const sub = document.getElementById('detailsSub');
+  if (!state.selectedId) { el.innerHTML = ''; sub.textContent = 'Select an asset'; return; }
+  const asset = getAsset(state.selectedId);
+  if (!asset) { el.innerHTML = ''; sub.textContent = 'Asset not in current category'; return; }
+  sub.textContent = `${displayName(asset)} - ${asset.role || asset.group || ''}`;
+
+  const npc = asset.kind === 'cat' && asset.npcId ? npcsIndex[asset.npcId] : null;
+  const hasPrompt = asset.kind === 'cat' || asset.kind === 'dog';
+  const edited = state.promptEdits[asset.id] !== undefined
+              && state.promptEdits[asset.id] !== (asset.kind === 'cat' ? CAT_PROMPTS[asset.id] : DOG_PROMPTS[asset.id]);
+
+  let html = `<h3>Identity</h3>`;
+  if (asset.kind === 'rig') {
+    html += `<div class="kv"><span class="k">Source</span><span class="v">procedural (no GLB)</span></div>`;
+    html += `<div class="kv"><span class="k">Species</span><span class="v">${asset.species}</span></div>`;
+    html += `<div class="kv"><span class="k">Purpose</span><span class="v" style="color:var(--accent)">Validate animation without mesh. Bones match rig_quadruped.py names, so clips drive both.</span></div>`;
+  } else {
+    html += `<div class="kv"><span class="k">File</span><span class="v">${asset.id}.glb</span></div>`;
+  }
+  html += `<div class="kv"><span class="k">Role</span><span class="v">${asset.role || ''}</span></div>`;
+  if (asset.clan && asset.clan !== 'None') {
+    html += `<div class="kv"><span class="k">Clan</span><span class="v"><span class="chip ${asset.clan}">${asset.clan}</span></span></div>`;
+  }
+  if (asset.kind === 'dog') {
+    html += `<div class="kv"><span class="k">Stats</span><span class="v">${asset.stats}</span></div>`;
+    html += `<div class="kv"><span class="k">Status</span><span class="v" style="color:var(--warn)">Unrigged (lives in meshy_raw_dogs/)</span></div>`;
+  }
+  if (asset.kind === 'prop') {
+    html += `<div class="kv"><span class="k">Group</span><span class="v">${asset.group}</span></div>`;
+  }
+  if (npc) {
+    html += `<div class="kv"><span class="k">NPC ID</span><span class="v">${npc.id}</span></div>`;
+    if (npc.position) html += `<div class="kv"><span class="k">Position</span><span class="v">[${npc.position.join(', ')}]</span></div>`;
+    if (npc.dialogTreeId) html += `<div class="kv"><span class="k">Dialog</span><span class="v">${npc.dialogTreeId}.json</span></div>`;
+  }
+
+  if (hasPrompt) {
+    html += `<h3>Meshy Prompt ${edited ? '<span class="edited-label">(edited)</span>' : ''}</h3>`;
+    html += `<div class="prompt-editor">
+      <textarea id="promptText" spellcheck="false">${escapeHtml(fullPromptFor(asset))}</textarea>
+      <div class="row">
+        <button class="primary" id="btnCopyPrompt">Copy prompt</button>
+        <button id="btnSavePrompt">Save edit</button>
+        <button id="btnRevertPrompt">Revert</button>
+      </div>
+    </div>`;
+  }
+
+  if (npc?.quests?.length) {
+    html += `<h3>Quests</h3>`;
+    for (const q of npc.quests) html += `<div class="quest-item"><span class="name">${q}</span></div>`;
+  }
+  if (npc?.trainingOptions?.length) {
+    html += `<h3>Training Options</h3>`;
+    for (const t of npc.trainingOptions) {
+      html += `<div class="training-item">
+        <span class="cost">${t.cost}g${t.requiredLevel ? ` - lvl ${t.requiredLevel}` : ''}</span>
+        <div class="name">${t.name}</div>
+        <div class="desc">${t.description}</div>
+      </div>`;
+    }
+  }
+  if (npc?.shopInventory?.length) {
+    html += `<h3>Shop Inventory</h3>`;
+    for (const s of npc.shopInventory) {
+      html += `<div class="shop-item">
+        <span class="price">${s.price}g${s.stock > 0 ? ` - x${s.stock}` : ''}</span>
+        <div class="name">${s.name}</div>
+        <div class="desc">${s.description}</div>
+      </div>`;
+    }
+  }
+
+  // Rig report for cats AND canonical rigs. Props/dogs-with-no-rig skip.
+  // Two flavors:
+  //   - RIGGED source: compare against our 26 expected Blender bones, show
+  //     coverage %, pose heuristic, per-anim compatibility, remediation hints.
+  //   - RAW source: Meshy doesn't auto-rig cats, so the expected-bone grid
+  //     would be uniformly red and misleading. Render a different, simpler
+  //     diagnostic explaining this is the pre-rig source + what to do next.
+  if (currentReport && (asset.kind === 'cat' || asset.kind === 'rig')) {
+    const r = currentReport;
+    const isRaw = r.source === 'raw';
+
+    html += `<h3>Rigging Report <span style="font-weight:400;color:${isRaw ? 'var(--warn)' : 'var(--muted)'};font-size:10px;text-transform:none;letter-spacing:0">(${isRaw ? 'RAW Meshy source' : 'rigged via Blender'})</span></h3>`;
+    html += `<div class="rig-report">`;
+
+    if (isRaw) {
+      // Raw-source panel. Meshy's output should have zero bones unless the
+      // user opted into Meshy's own auto-rigger during generation (which we
+      // don't - their quadruped auto-rig is weak, which is why we rebuild
+      // the rig ourselves). Anything other than 0 bones here means Meshy
+      // shipped its auto-rig, which we'd want to flag.
+      const expected = 0;
+      const covClass = r.found === expected ? 'ok' : 'warn';
+      html += `<div class="coverage ${covClass}">Raw mesh has ${r.found} bone${r.found === 1 ? '' : 's'} (expected ${expected} - Meshy doesn't auto-rig cats)</div>`;
+
+      if (r.found > 0) {
+        html += `<div class="coverage warn" style="margin-top:6px">Unexpected bones present (Meshy auto-rigger ran):</div>`;
+        html += `<div class="extras">${r.bones.map(b => `\u00B7 ${b.name}`).join('  ')}</div>`;
+      }
+
+      html += `<div class="kv" style="margin-top:8px"><span class="k">BBox</span><span class="v">${r.bbox.x} \u00D7 ${r.bbox.y} \u00D7 ${r.bbox.z} m</span></div>`;
+      html += `<div class="kv"><span class="k">Pose</span><span class="v">${r.poseHeuristic} (y/longest = ${r.poseScore})</span></div>`;
+      html += `<div class="kv"><span class="k">Mesh</span><span class="v">${r.unskinnedMeshCount + r.skinnedMeshes.length} total (${r.unskinnedVertexCount + r.skinnedVertexCount} verts)</span></div>`;
+
+      html += `<div class="note" style="border-color:var(--accent);background:#1e2a38;color:var(--text)"><strong>What you're seeing:</strong> this is the <em>raw Meshy download</em> before any rigging. Meshy's text-to-3D pipeline does not rig cats (the "Rigged T-pose" phrasing in our prompt is aspirational). To use this cat in-engine, switch the <strong>Source</strong> toggle at top-left to <strong>Rigged</strong> - that loads the heat-fallback Blender rig from <code>cats/rigged/</code>.</div>`;
+      if (r.poseScore >= 0.75) {
+        html += `<div class="note"><strong>Pose warning:</strong> this raw cat's bounding box is taller than it is long - Meshy exported it sitting or standing-up instead of in T-pose. <code>rig_quadruped.py</code> places bones using AABB ratios, so on a vertical pose the "shoulders" and "hips" will land in anatomically wrong locations even after rigging. Best fix: regenerate this cat in Meshy with a stronger <em>"standing naturally on all four paws, body parallel to the ground"</em> constraint.</div>`;
+      }
+    } else {
+      // Rigged-source panel: full expected-bone audit.
+      const covPct = r.coveredExpected / r.expected;
+      const covClass = covPct >= 0.95 ? 'ok' : covPct >= 0.75 ? 'warn' : 'bad';
+      html += `<div class="coverage ${covClass}">Bone coverage: ${r.coveredExpected} / ${r.expected} expected${r.extras.length ? ` (+${r.extras.length} extras)` : ''}</div>`;
+      html += `<div class="bone-grid">`;
+      for (const b of EXPECTED_BONES_CAT) {
+        const hit = !r.missing.includes(b);
+        html += `<span class="bone ${hit ? 'ok' : 'missing'}">${hit ? '\u2713' : '\u2717'} ${b}</span>`;
+      }
+      html += `</div>`;
+      if (r.extras.length) {
+        html += `<div class="coverage warn" style="margin-top:6px">Unexpected extra bones (often Meshy's auto-rig surviving the strip):</div>`;
+        html += `<div class="extras">${r.extras.map(b => `\u00B7 ${b}`).join('  ')}</div>`;
+      }
+      html += `<div class="kv" style="margin-top:8px"><span class="k">BBox</span><span class="v">${r.bbox.x} \u00D7 ${r.bbox.y} \u00D7 ${r.bbox.z} m</span></div>`;
+      html += `<div class="kv"><span class="k">Pose</span><span class="v">${r.poseHeuristic} (y/longest = ${r.poseScore})</span></div>`;
+      html += `<div class="kv"><span class="k">Skinned</span><span class="v">${r.skinnedMeshes.length} mesh (${r.skinnedVertexCount} verts)</span></div>`;
+      if (r.unskinnedMeshCount > 0) {
+        html += `<div class="kv"><span class="k">Unskinned</span><span class="v" style="color:var(--warn)">${r.unskinnedMeshCount} mesh (${r.unskinnedVertexCount} verts) \u2014 will NOT deform</span></div>`;
+      }
+      if (r.bakedClips.length) {
+        html += `<div class="kv"><span class="k">Baked clips</span><span class="v">${r.bakedClips.map(c => c.name).join(', ')}</span></div>`;
+      }
+      html += `<div style="margin-top:8px; font-weight:600; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px">Animation compatibility</div>`;
+      html += `<div class="bone-grid">`;
+      for (const [anim, cov] of Object.entries(r.animCoverage)) {
+        const cls = cov.complete ? 'ok' : 'missing';
+        html += `<span class="bone ${cls}">${cov.complete ? '\u2713' : '\u2717'} ${anim} ${cov.present}/${cov.required}</span>`;
+      }
+      html += `</div>`;
+      if (r.poseScore >= 0.75) {
+        html += `<div class="note"><strong>Heads up:</strong> this cat's bounding box is taller than it is long, suggesting Meshy exported a sitting or standing-up pose. scripts/rig_quadruped.py places bones from AABB ratios, so on a vertical pose the "shoulders" and "hips" land in anatomically wrong locations. Regenerate with a stronger <em>"standing naturally on all four paws, body parallel to the ground"</em> constraint, or hand-rig in Blender.</div>`;
+      }
+      if (r.missing.length > 0 && r.poseScore < 0.75) {
+        html += `<div class="note"><strong>Heads up:</strong> ${r.missing.length} expected bones missing despite a reasonable pose. Likely cause: Blender's heat-diffusion weight solver failed (check rig_batch.log for "Bone Heat Weighting: failed to find solution") and bones got pruned during export.</div>`;
+      }
+    }
+
+    html += `<div class="actions">`;
+    html += `<button id="btnCopyReport">Copy report (markdown)</button>`;
+    html += `<button id="btnLogReport">Log to console</button>`;
+    html += `</div>`;
+    html += `</div>`;
+
+    // Bone Sandbox: only meaningful when the rigged cat has bones to rotate.
+    // Lets you pick any bone and spin it on X/Y/Z individually - answers
+    // "does thigh_L actually move the back-left leg, or does it warp the
+    // belly?" without writing a test harness.
+    if (!isRaw && r.found > 0) {
+      const selectedName = sandboxSelectedBoneName || (r.bones[0] && r.bones[0].name);
+      const stored = sandboxRotations.get(selectedName) || new THREE.Euler();
+      const toDeg = (rad) => Math.round(rad * 180 / Math.PI);
+      html += `<h3>Bone Sandbox</h3>`;
+      html += `<div class="bone-sandbox">`;
+      html += `<div class="row">
+        <select id="sandboxBoneSelect">`;
+      for (const b of r.bones) {
+        const isSel = b.name === selectedName;
+        html += `<option value="${b.name}"${isSel ? ' selected' : ''}>${b.name}${b.parent ? ' (parent: ' + b.parent + ')' : ''}</option>`;
+      }
+      html += `</select>
+        <button id="sandboxResetBone" title="Reset just this bone">Reset</button>
+        <button id="sandboxResetAll" title="Reset every bone to rest pose">Reset all</button>
+      </div>`;
+      for (const axis of ['x', 'y', 'z']) {
+        const deg = toDeg(stored[axis] || 0);
+        html += `<div class="slider-row">
+          <span class="axis">${axis.toUpperCase()}</span>
+          <input type="range" min="-180" max="180" step="1" value="${deg}" data-sandbox-axis="${axis}">
+          <span class="val" data-sandbox-val="${axis}">${deg}\u00B0</span>
+        </div>`;
+      }
+      html += `<div class="preset">
+        <button data-sandbox-preset="x45"    title="Rotate X +45 deg">X +45</button>
+        <button data-sandbox-preset="x-45"   title="Rotate X -45 deg">X -45</button>
+        <button data-sandbox-preset="y45"    title="Rotate Y +45 deg">Y +45</button>
+        <button data-sandbox-preset="y-45"   title="Rotate Y -45 deg">Y -45</button>
+        <button data-sandbox-preset="z45"    title="Rotate Z +45 deg">Z +45</button>
+        <button data-sandbox-preset="z-45"   title="Rotate Z -45 deg">Z -45</button>
+      </div>`;
+      html += `<div class="hint">Drag a slider to rotate <strong>only</strong> the selected bone. Moving a slider pauses playback so the rotation holds. Click any Animate button to resume. Toggle <strong>Weights</strong> in the Display toolbar to see which vertices each bone controls.</div>`;
+      html += `</div>`;
+    }
+  }
+
+  el.innerHTML = html;
+
+  // Wire per-load buttons.
+  const btnCopyPrompt = document.getElementById('btnCopyPrompt');
+  if (btnCopyPrompt) {
+    btnCopyPrompt.onclick = () => {
+      const ta = document.getElementById('promptText');
+      navigator.clipboard.writeText(ta.value).then(() => toast(`Copied prompt for ${asset.id}`));
+    };
+    document.getElementById('btnSavePrompt').onclick = () => {
+      const ta = document.getElementById('promptText');
+      let v = ta.value;
+      const pfx = asset.kind === 'cat' ? PROMPT_PREFIX_CAT : PROMPT_PREFIX_DOG;
+      const sfx = asset.kind === 'cat' ? PROMPT_SUFFIX_CAT : PROMPT_SUFFIX_DOG;
+      if (pfx && v.startsWith(pfx) && v.endsWith(sfx)) v = v.slice(pfx.length, v.length - sfx.length);
+      else if (!pfx && v.endsWith(sfx)) v = v.slice(0, v.length - sfx.length);
+      state.promptEdits[asset.id] = v;
+      saveState();
+      toast(`Saved prompt edit for ${asset.id}`);
+      renderDetails();
+    };
+    document.getElementById('btnRevertPrompt').onclick = () => {
+      delete state.promptEdits[asset.id];
+      saveState();
+      toast(`Reverted ${asset.id} to default prompt`);
+      renderDetails();
+    };
+  }
+  const btnCopyReport = document.getElementById('btnCopyReport');
+  if (btnCopyReport) {
+    btnCopyReport.onclick = () => {
+      const url = pathFor(asset, state.toggles.rigged && assetSupportsRigged(asset));
+      navigator.clipboard.writeText(formatReportMarkdown(asset.id, url, currentReport)).then(() => toast('Rig report copied as markdown'));
+    };
+    document.getElementById('btnLogReport').onclick = () => {
+      logDiagnosis(asset.id, pathFor(asset, true), currentReport);
+      toast('Dumped to console - open devtools');
+    };
+  }
+
+  // Bone Sandbox wiring. The panel only exists when viewing a rigged cat
+  // with bones, so guard every lookup.
+  const sandboxSelect = document.getElementById('sandboxBoneSelect');
+  if (sandboxSelect) {
+    sandboxSelect.onchange = () => {
+      sandboxSelectedBoneName = sandboxSelect.value;
+      renderDetails(); // re-render so sliders reflect the newly-selected bone's stored rotation
+    };
+    // Sliders: dragging updates the bone in real time and writes back to the
+    // numeric label. No mixer interaction - setBoneRotation stops activeAction.
+    document.querySelectorAll('[data-sandbox-axis]').forEach(slider => {
+      const axis = slider.dataset.sandboxAxis;
+      slider.oninput = () => {
+        const deg = parseFloat(slider.value);
+        const rad = deg * Math.PI / 180;
+        setBoneRotation(sandboxSelect.value, axis, rad);
+        const label = document.querySelector(`[data-sandbox-val="${axis}"]`);
+        if (label) label.textContent = `${Math.round(deg)}\u00B0`;
+      };
+    });
+    document.getElementById('sandboxResetBone').onclick = () => {
+      setBoneRotation(sandboxSelect.value, 'x', 0);
+      setBoneRotation(sandboxSelect.value, 'y', 0);
+      setBoneRotation(sandboxSelect.value, 'z', 0);
+      sandboxRotations.delete(sandboxSelect.value);
+      renderDetails();
+    };
+    document.getElementById('sandboxResetAll').onclick = () => {
+      resetAllBoneRotations();
+      toast('All bones reset to rest pose');
+      renderDetails();
+    };
+    // Preset rotation buttons - quick ±45deg nudges without dragging sliders.
+    document.querySelectorAll('[data-sandbox-preset]').forEach(btn => {
+      btn.onclick = () => {
+        const spec = btn.dataset.sandboxPreset; // e.g. "x45", "y-45"
+        const axis = spec[0];
+        const deg = parseInt(spec.slice(1), 10);
+        setBoneRotation(sandboxSelect.value, axis, deg * Math.PI / 180);
+        renderDetails();
+      };
+    });
+  }
+}
+
+function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function selectAsset(id) {
+  state.selectedId = id;
+  saveState();
+  currentReport = null;
+  // Sandbox state is per-model - clear when switching so slider positions
+  // don't carry over to a different skeleton.
+  sandboxSelectedBoneName = null;
+  sandboxRotations.clear();
+  renderRoster();
+  const asset = getAsset(id);
+  if (!asset) { renderDetails(); return; }
+  renderDetails();
+  // Source toggle only meaningful for cats. Disable it for dogs/props.
+  const srcGroup = document.getElementById('sourceGroup');
+  const supports = assetSupportsRigged(asset);
+  srcGroup.querySelectorAll('button').forEach(b => b.classList.toggle('disabled', !supports));
+  loadAsset(asset);
+}
+
+// ===========================================================================
+// TOOLBAR WIRING
+// ===========================================================================
+
+// Category tabs
+document.querySelectorAll('#categoryTabs button').forEach(btn => {
+  btn.onclick = () => {
+    if (state.category === btn.dataset.category) return;
+    state.category = btn.dataset.category;
+    state.selectedId = null; // reset selection when switching categories
+    saveState();
+    renderRoster();
+    renderDetails();
+    // Unload current model so the empty state reappears.
+    clearModel();
+    document.getElementById('viewerEmpty').style.display = '';
+    document.getElementById('statusFile').textContent = '-';
+    document.getElementById('statusMeta').textContent = 'drag to rotate - scroll to zoom - shift-drag to pan';
+    updateAnimButtonStates();
+  };
+});
+
+// Source (Rigged / Raw) - behaves as a radio pair
+const btnRigged = document.getElementById('btnRigged');
+const btnRaw = document.getElementById('btnRaw');
+function updateSourceButtons() {
+  btnRigged.classList.toggle('active', state.toggles.rigged);
+  btnRaw.classList.toggle('active', !state.toggles.rigged);
+}
+updateSourceButtons();
+btnRigged.onclick = () => {
+  if (state.toggles.rigged) return;
+  state.toggles.rigged = true;
+  saveState();
+  updateSourceButtons();
+  if (state.selectedId) loadAsset(getAsset(state.selectedId));
+};
+btnRaw.onclick = () => {
+  if (!state.toggles.rigged) return;
+  state.toggles.rigged = false;
+  saveState();
+  updateSourceButtons();
+  if (state.selectedId) loadAsset(getAsset(state.selectedId));
+};
+
+// Generic toggle wiring - updates classes and runs the provided side-effect.
+function setupToggle(buttonId, toggleKey, onChange) {
+  const btn = document.getElementById(buttonId);
+  const update = () => btn.classList.toggle('active', !!state.toggles[toggleKey]);
+  update();
+  btn.onclick = () => {
+    state.toggles[toggleKey] = !state.toggles[toggleKey];
+    saveState();
+    update();
+    if (onChange) onChange(state.toggles[toggleKey]);
+  };
+}
+setupToggle('btnSkeleton', 'skeleton', (on) => { if (currentSkeletonHelper) currentSkeletonHelper.visible = on; });
+setupToggle('btnWireframe', 'wireframe', (on) => { if (currentModel) applyWireframe(currentModel, on); });
+setupToggle('btnWeights', 'weights', (on) => { if (currentModel) applyWeightViz(currentModel, on); });
+setupToggle('btnAxes', 'axes', (on) => { axesHelper.visible = on; });
+setupToggle('btnAutoRotate', 'autoRotate');
+
+document.getElementById('btnReset').onclick = () => {
+  camera.position.copy(DEFAULT_CAMERA.pos);
+  controls.target.copy(DEFAULT_CAMERA.target);
+  controls.update();
+};
+
+// Background swatches - each carries a hex value in data-bg.
+document.querySelectorAll('.bg-swatch').forEach(btn => {
+  btn.onclick = () => setBackground(parseInt(btn.dataset.bg, 16));
+});
+
+// Animation buttons. Scope to [data-anim] so the Pause button in the
+// same group doesn't get caught here - previously clicking Pause called
+// playAnim(undefined) which reported "undefined clip: no matching bones"
+// and overwrote the Pause button's own click handler.
+document.querySelectorAll('#animGroup button[data-anim]').forEach(btn => {
+  btn.onclick = () => playAnim(btn.dataset.anim);
+});
+
+// ===========================================================================
+// TOAST
+// ===========================================================================
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+// ===========================================================================
+// BOOT
+// ===========================================================================
+(async () => {
+  await loadNPCs();
+  renderRoster();
+  renderDetails();
+  if (state.selectedId) {
+    const a = getAsset(state.selectedId);
+    if (a) {
+      const srcGroup = document.getElementById('sourceGroup');
+      srcGroup.querySelectorAll('button').forEach(b => b.classList.toggle('disabled', !assetSupportsRigged(a)));
+      loadAsset(a);
+    }
+  }
+})();
+</script>
+
+</body>
+</html>
