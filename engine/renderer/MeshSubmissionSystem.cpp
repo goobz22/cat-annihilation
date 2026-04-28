@@ -514,6 +514,43 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             // — well inside the playable budget the perf-halt restored.
             Engine::Transform pose = *transform;
 
+            // 2026-04-26 SURVIVAL-PORT — lift the rendered mesh by
+            // +0.75 m so the cat's feet sit on the ground plane.
+            //
+            // User playtest reported "the cat is clearly in the ground"
+            // with terrain.y=0 and transform.position.y=0. The Meshy
+            // rigged cat/dog GLBs are authored with the model origin at
+            // SPINE / hip height — the mesh extends from y≈-0.75 (feet)
+            // to y≈+0.75 (top of head) in local space. Setting world
+            // position.y = ground_height puts the spine at ground level
+            // and buries the lower half of the body below the visible
+            // ground plane.
+            //
+            // Lifting by +0.75 (an empirical match for the rigged cat's
+            // local-space feet-to-origin distance — proxy-cube path
+            // already used the same constant for the AABB centring at
+            // CatAnnihilation.cpp line 1531) puts the feet at world y=0
+            // and the body fully above the ground plane.
+            //
+            // Why apply it HERE in MeshSubmissionSystem and not bake it
+            // into the spawn position: the GameWorld physics code
+            // (collision, terrain heightmap snap, AI pathfinding) all
+            // expects transform.position.y == ground level, and shifting
+            // the underlying transform would propagate into wave-spawn
+            // ring math, distance-cull radius checks, and the
+            // pushOutOfTrees collision routine — all of which would
+            // start operating on a "ghost" Y above the actual ground.
+            // The pose copy we operate on here is a render-only adjust;
+            // the live transform stays at ground for everything else.
+            //
+            // Per-rig override: a future change can add a
+            // `meshYOffsetMetres` field to MeshComponent and read that
+            // here instead of the constant 0.75, so different rigs
+            // (smaller dogs, taller boss) can each tune their feet
+            // alignment without a recompile of this hot path.
+            constexpr float kRiggedMeshFeetOffsetMetres = 0.75F;
+            pose.position.y += kRiggedMeshFeetOffsetMetres;
+
             // (a) Idle bob — applied first so any subsequent rotation
             // operates on the bobbed position. This produces the desired
             // visual: the entity bobs up/down in world space; the lunge
@@ -770,10 +807,20 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             out.push_back(std::move(draw));
         });
 
-    if (!firstCallReported) {
-        firstCallReported = true;
+    // 2026-04-26 SURVIVAL-PORT — also re-fire the survey at frame 60
+    // and 300 so we can confirm whether skinning kicks in on later
+    // frames (the player's animator is loaded asynchronously and the
+    // first-frame survey runs BEFORE the animator is wired, so a
+    // first-frame `withAnimator=0` doesn't mean skinning is broken).
+    const bool atDiagFrame =
+        submitCallCount == 60U || submitCallCount == 300U;
+    if (!firstCallReported || atDiagFrame) {
+        if (!firstCallReported) {
+            firstCallReported = true;
+        }
         CatEngine::Logger::info(
-            "[MeshSubmission] first-frame survey: visited=" + std::to_string(visitedTotal) +
+            "[MeshSubmission] survey frame=" + std::to_string(submitCallCount) +
+            ": visited=" + std::to_string(visitedTotal) +
             " rejected=" + std::to_string(rejectedNullOrInvisible) +
             " culledFrustum=" + std::to_string(culledFrustum) +
             " culledDistance=" + std::to_string(culledDistance) +

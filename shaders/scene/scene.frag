@@ -1,22 +1,40 @@
 #version 450
 
-// Simple lit terrain fragment shader.
-// Albedo is a weighted blend of grass/dirt/rock driven by the terrain's
-// splat weights. A single directional "sun" light provides diffuse shading,
-// plus a constant ambient term so unlit slopes don't go black.
+// Terrain / scene fragment shader.
 //
-// 2026-04-25 SHIP-THE-CAT iter (sky horizon follow-up): exponential-squared
-// distance fog blending terrain albedo toward the sky color so the far
-// horizon doesn't end in a hard pixel-aligned terrain/sky seam. The prior
-// iteration unlocked a sky band by raising camera pitch to 0 rad and
-// switching the swapchain clear to (0.50, 0.72, 0.95) — that exposed a
-// crisp ~1-pixel boundary between [147,210,129] grass and [188,221,249]
-// sky at the horizon row, which reads as cheap engine cardboard. Fog
-// softens that seam to a believable atmospheric haze and gives the world
-// a sense of depth at distance instead of a flat top-down sample plane.
+// 2026-04-26 SURVIVAL-PORT (Step 1) — albedo source switched from a
+// splat-weight blend (always GRASS_COLOR in practice — splat weights
+// are always (1, 0, 0, 0) on the live Terrain output) to a procedural
+// grass texture sampled at world-space xz / TileSize. Mirrors the
+// canvas-textured ground plane in the web port:
+//
+//   src/components/game/ForestEnvironment.tsx
+//     - 10000-unit plane, texture.repeat.set(20, 20) → 1 tile per
+//       500 world units. Native: sample uv = position.xz / 500.0 with
+//       VK_SAMPLER_ADDRESS_MODE_REPEAT to match the seamless tile.
+//     - Material color #7fb069, roughness 0.9, metalness 0. Color
+//       baked into the texture itself (CatGame::GenerateGrassTexture);
+//       no separate diffuse-color uniform needed here.
+//
+// We sample by world xz, not by the vertex's vTexCoord, because:
+//   1. Terrain.cpp emits per-vertex UV in [0, 1] across the whole
+//      heightmap, which would give one tile total — not the 20×20
+//      tiling the web port uses.
+//   2. World-space sampling stays correct regardless of how the
+//      Terrain mesh's vTexCoord is parameterised. If the heightmap
+//      dimensions or vertex layout change, this shader doesn't.
+// vTexCoord still passes through from the vertex shader so a future
+// authored-UV path (e.g. road decals, biome blends) can reuse it.
+//
+// Lighting (Lambert + sun + ambient) and the existing distance fog
+// stay in place — Step 2 of the survival port retunes the fog values
+// to the web port's #4c6156 near=30 far=150 forest fog. Until that
+// lands, fog still blends to SKY_COLOR with the pre-port density.
+
+layout(set = 0, binding = 0) uniform sampler2D grassSampler;
 
 layout(location = 0) in vec3 vNormal;
-layout(location = 1) in vec4 vSplatWeights;
+layout(location = 1) in vec2 vTexCoord;
 layout(location = 2) in vec3 vWorldPos;
 
 layout(location = 0) out vec4 outColor;
@@ -28,13 +46,6 @@ layout(location = 0) out vec4 outColor;
 // VkPushConstantRange (stage=FRAGMENT, offset=64, size=16) so this is a
 // valid declaration — pushing this from the C++ side without that range
 // is a Vulkan validation error.
-//
-// cameraPos.xyz is the world-space camera position recovered each frame
-// by inverse-projecting the NDC origin through viewProj.inverse(). We
-// only need 12 bytes but the 16-byte slot is allocated for std140-ish
-// alignment compatibility (vec3 needs 16-byte alignment in std430
-// blocks; a stray vec3 followed by a float would otherwise repack
-// awkwardly).
 layout(push_constant) uniform TerrainFragPC {
     layout(offset = 64) vec3 cameraPos;
 } pcf;
@@ -45,57 +56,51 @@ layout(push_constant) uniform TerrainFragPC {
 const vec3 SUN_DIR   = normalize(vec3(0.35, 0.85, 0.4));
 const vec3 SUN_COLOR = vec3(1.0, 0.96, 0.88);
 
-const vec3 GRASS_COLOR = vec3(0.24, 0.55, 0.20);
-const vec3 DIRT_COLOR  = vec3(0.45, 0.30, 0.15);
-const vec3 ROCK_COLOR  = vec3(0.50, 0.50, 0.55);
-
-// SKY_COLOR — must stay in lockstep with the swapchain clear color in
-// engine/renderer/Renderer.cpp (currently {0.50, 0.72, 0.95}). The fog
-// blends terrain TO this value so a fragment at infinite distance reads
-// the same RGB as a fragment in the cleared sky region above the
-// horizon line. Drift between this constant and the clear color shows
-// up as a bright/dim horizon ring — easy to spot in a frame dump.
+// SKY_COLOR — kept here for the existing swapchain-clear-lockstep
+// invariant only. The terrain fragment shader no longer blends TO
+// this value; it now uses FOG_COLOR (forest haze) per the web port
+// (see ForestEnvironment.tsx `<fog args={['#4c6156', 30, 150]}>`).
+// Sky is its own thing now.
 const vec3 SKY_COLOR = vec3(0.50, 0.72, 0.95);
 
-// FOG_DENSITY tunes how aggressively distant terrain blends to sky.
-// We use the exp2(-(density * d)^2) formula (a.k.a. fogExpSquared in
-// the classic D3D9 fixed-function pipeline) — gentler than linear
-// (visible cliff at the start distance) and more "atmospheric" than
-// straight exp (which softens too uniformly close to the camera).
+// 2026-04-26 SURVIVAL-PORT (Step 2) — fog values switched to mirror
+// the web port's ForestEnvironment fog exactly:
+//   fog color  #4c6156  =  (76, 97, 86) / 255  ≈  (0.298, 0.380, 0.337)
+//   fog model  linear, near=30, far=150
 //
-// 0.012 was tuned empirically against a heightfield where the cat
-// proxy lives at ~world Y=0 and the camera orbits at ~3 m radius:
-//   d=  10 m -> fog ≈ 0.014  (essentially clear, terrain reads true)
-//   d=  50 m -> fog ≈ 0.30   (mild haze, depth cue starts)
-//   d= 100 m -> fog ≈ 0.76   (strong haze, geometry recedes)
-//   d= 150 m -> fog ≈ 0.96   (fully blended into sky)
-// The terrain mesh extends to ~150 m radius in the current test world,
-// so far edges are visually consumed by the haze instead of clipping
-// hard against the sky band. If that changes, retune this knob with
-// the pixel sampling in ENGINE_PROGRESS rather than removing fog
-// entirely.
-const float FOG_DENSITY = 0.012;
+// Why we ditched the prior exp² fog:
+// The web port uses three.js's basic linear fog
+// (`<fog attach="fog" args={[color, near, far]}>` = THREE.Fog, linear).
+// The two formulas give visibly different falloff curves: linear is
+// flat at d<near, ramps in a straight line to 1 at d=far, and clamps
+// past that. exp² has a long soft tail that never quite saturates.
+// To get a visually identical look to the web port's forest haze we
+// match the linear formula directly here. If a future iteration wants
+// the exp² aesthetic back (e.g. for an open-sky biome) it can branch
+// on a uniform — that's not in scope for survival parity.
+const vec3  FOG_COLOR = vec3(76.0/255.0, 97.0/255.0, 86.0/255.0);
+const float FOG_NEAR  = 30.0;
+const float FOG_FAR   = 150.0;
 
 // FOG_HEIGHT_FALLOFF makes the fog thinner as we look up — the haze
 // near the horizon is genuine (lots of atmosphere between camera and
 // far terrain at eye level), but a fragment whose world-space normal
 // points straight up wants slightly less haze so the silhouette of
-// nearby ridges against the sky stays crisp. The factor is
-// max(0, 1 - 0.4 * n.y), capping the loss at 0.4× — preserves at
-// least 60% fog contribution even on a flat-up surface.
+// nearby ridges against the sky stays crisp. Cap loss at 0.4×.
 const float FOG_NORMAL_FALLOFF = 0.4;
 
+// Tile size in world units — must match
+// CatGame::GrassTextureBuffer::TileSize. If a future iteration changes
+// the tile span (e.g. dropping to 250 for tighter detail), update both
+// the C++ constant and this one in the same commit.
+const float GRASS_TILE_SIZE = 500.0;
+
 void main() {
-    // Splat weights blend (unchanged from baseline). Guard against the
-    // pathological zero-weight vertex — division by 1e-4 produces
-    // saturated colors but no NaN, which is the right failure mode
-    // for a debug/tooling triangle that should never escape into
-    // production geometry but might during terrain authoring.
-    float wSum = max(vSplatWeights.r + vSplatWeights.g + vSplatWeights.b, 1e-4);
-    vec3 albedo =
-        (GRASS_COLOR * vSplatWeights.r +
-         DIRT_COLOR  * vSplatWeights.g +
-         ROCK_COLOR  * vSplatWeights.b) / wSum;
+    // Sample the procedural grass at the world xz position. REPEAT
+    // address mode (configured in ScenePass::CreateTextureResources)
+    // gives us seamless tiling across the entire heightmap.
+    vec2 grassUv = vWorldPos.xz / GRASS_TILE_SIZE;
+    vec3 albedo = texture(grassSampler, grassUv).rgb;
 
     vec3 n = normalize(vNormal);
     float lambert = max(dot(n, SUN_DIR), 0.0);
@@ -105,36 +110,24 @@ void main() {
     vec3 litColor = ambient + diffuse;
 
     // ---- Distance fog -----------------------------------------------
-    // Use horizontal distance only (.xz, ignoring Y). Why: the camera
-    // is already only 1.2 m above the cat's anchor; vertical separation
-    // between camera and a 150-m-distant terrain quad is near zero
-    // compared to the horizontal leg, so length(.xyz) ≈ length(.xz)
-    // for the cases that matter. Stripping Y also makes the fog factor
-    // independent of terrain height variation — a fragment at the top
-    // of a hill does not get LESS fog than one at sea level, which
-    // would look weird (the hill peak should fade to sky just like
-    // the basin behind it).
+    // Linear three.js-style fog (web port parity):
+    //   fogFactor = clamp((d - near) / (far - near), 0, 1)
+    // Horizontal distance only (vertical separation is small under the
+    // current camera setup; using xz length keeps the haze depth
+    // independent of terrain elevation, which would otherwise produce
+    // weird "hill peaks have less fog" artifacts).
     vec2 worldXZ = vWorldPos.xz;
     vec2 cameraXZ = pcf.cameraPos.xz;
     float horizDist = length(worldXZ - cameraXZ);
 
-    // Exponential-squared fog. The formula is
-    //   fogFactor = 1 - exp(-(density * d)^2)
-    // which is 0 at d=0 (no haze) and saturates smoothly to 1 at
-    // distance. Compared to plain exp (-density * d) it gives a
-    // longer "clear zone" near the camera and faster falloff at
-    // depth, matching how real atmospheres work.
-    float densityScaled = FOG_DENSITY * horizDist;
-    float fogFactor = 1.0 - exp(-densityScaled * densityScaled);
-
-    // Up-facing normals get slightly less fog (see FOG_NORMAL_FALLOFF
-    // comment). Keeps ridge silhouettes legible against the sky band.
+    float fogFactor = clamp((horizDist - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0.0, 1.0);
     fogFactor *= 1.0 - FOG_NORMAL_FALLOFF * max(n.y, 0.0);
 
-    // Final mix — blend lit terrain toward sky color. mix(a, b, t)
-    // interprets t=0 as a, t=1 as b, so fogFactor=0 keeps the
-    // unfogged albedo and fogFactor=1 reads pure sky.
-    vec3 finalColor = mix(litColor, SKY_COLOR, fogFactor);
+    // Blend toward FOG_COLOR (forest haze, NOT sky). The web port's
+    // sky and fog are different colors; mirroring that keeps the
+    // distant ridge silhouettes legible as "deep forest" rather than
+    // "thin air."
+    vec3 finalColor = mix(litColor, FOG_COLOR, fogFactor);
 
     outColor = vec4(finalColor, 1.0);
 }

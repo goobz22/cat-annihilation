@@ -555,6 +555,8 @@ set(GAME_SOURCES
     game/world/Terrain.cpp
     game/world/Forest.cpp
     game/world/Environment.cpp
+    game/world/GrassTexture.cpp
+    game/world/ProceduralTreeMesh.cpp
     game/ui/GameUI.cpp
     game/ui/HUD.cpp
     game/ui/MainMenu.cpp

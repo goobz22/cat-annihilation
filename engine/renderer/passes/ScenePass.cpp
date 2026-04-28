@@ -8,6 +8,7 @@
 #include "../../cuda/particles/RibbonTrailDevice.cuh"
 #include "../../cuda/particles/ParticleSystem.hpp"
 #include "../../../game/world/Terrain.hpp"
+#include "../../../game/world/GrassTexture.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -26,8 +27,12 @@ namespace {
 //   offset 32 : vec2 texCoord      (8 bytes + 8 padding to align next vec4)
 //   offset 48 : vec4 splatWeights
 constexpr size_t TERRAIN_VERTEX_STRIDE = sizeof(CatGame::Terrain::Vertex);
+// Offsets account for Engine::vec3's `alignas(16)` — each vec3 sits in
+// a 16-byte slot, the vec2 texCoord gets 8 bytes of trailing pad to
+// keep the next vec4 splat 16-aligned. Total stride = 64 bytes.
 constexpr uint32_t TERRAIN_ATTR_OFFSET_POSITION = 0;
 constexpr uint32_t TERRAIN_ATTR_OFFSET_NORMAL = 16;
+constexpr uint32_t TERRAIN_ATTR_OFFSET_TEXCOORD = 32;
 constexpr uint32_t TERRAIN_ATTR_OFFSET_SPLAT = 48;
 static_assert(sizeof(CatGame::Terrain::Vertex) == 64,
               "Terrain::Vertex layout changed — update ScenePass vertex offsets.");
@@ -53,14 +58,24 @@ bool ScenePass::Setup(RHI::VulkanDevice* device, RHI::VulkanSwapchain* swapchain
     if (!CreateRenderPass(swapchain->GetVkFormat())) return false;
     if (!CreateDepthResources(m_width, m_height)) return false;
     if (!CreateFramebuffers()) return false;
-    if (!CreatePipeline()) return false;
-    // CreateTextureResources MUST run before CreateEntityPipelineAndMesh —
-    // the entity pipeline layout pulls in m_textureDescriptorSetLayout
-    // (created here) so the layout handle has to be valid at pipeline
-    // construction time. CreateTextureResources also builds the 1×1 white
-    // default texture + its descriptor set, which the entity loop binds
-    // for cube proxies and any model lacking baseColorImageCpu.
+    // 2026-04-26 SURVIVAL-PORT — CreateTextureResources hoisted ABOVE
+    // CreatePipeline so the terrain pipeline can pull
+    // m_textureDescriptorSetLayout into its layoutInfo (the new grass
+    // texture binds at set=0 in scene.frag). Pre-port order ran
+    // CreatePipeline first; texture resources are independent of
+    // render-pass / framebuffer setup so the swap is safe. The original
+    // comment about "must run before CreateEntityPipelineAndMesh"
+    // still holds — entity pipeline still runs after.
     if (!CreateTextureResources()) return false;
+    if (!LoadGrassTexture()) {
+        std::cerr << "[ScenePass] LoadGrassTexture failed — "
+                  << "ground will fall back to default-white sampler "
+                  << "(visible as flat tint, not a hard crash)\n";
+        // Non-fatal: m_grassTexture.descriptorSet stays VK_NULL_HANDLE,
+        // and the terrain draw path falls back to the default-white set
+        // so the sampler always reads valid data.
+    }
+    if (!CreatePipeline()) return false;
     if (!CreateEntityPipelineAndMesh()) return false;
     // Sky pipeline is created EAGERLY (same as other pipelines) but its
     // failure is non-fatal: the renderer falls back to the flat sky-blue
@@ -467,8 +482,19 @@ bool ScenePass::CreatePipeline() {
     pcRanges[1].offset = sizeof(float) * 16;        // 64
     pcRanges[1].size = sizeof(float) * 4;           // vec3 + pad
 
+    // 2026-04-26 SURVIVAL-PORT — terrain pipeline now consumes the same
+    // descriptor set layout (set=0, binding=0, COMBINED_IMAGE_SAMPLER)
+    // that the entity pipeline uses, so scene.frag can sample the
+    // procedural grass texture loaded by LoadGrassTexture(). The DSL
+    // is created in CreateTextureResources(), which Setup() now
+    // explicitly runs BEFORE this function — see the reorder comment
+    // in Setup(). No fallback required: if LoadGrassTexture failed,
+    // the bind path uses m_defaultWhiteTexture's descriptor set
+    // (which is always valid) so the sampler still reads valid data.
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &m_textureDescriptorSetLayout;
     layoutInfo.pushConstantRangeCount = 2;
     layoutInfo.pPushConstantRanges = pcRanges;
 
@@ -488,8 +514,17 @@ bool ScenePass::CreatePipeline() {
     stages[1].pName = "main";
 
     // Vertex input: Terrain::Vertex is (vec3 pos, vec3 normal, vec2 uv, vec4 splat),
-    // total stride 48 bytes. We bind attributes for pos/normal/splat and
-    // intentionally skip the unused uv attribute.
+    // total stride 48 bytes.
+    //
+    // 2026-04-26 SURVIVAL-PORT — attribute slot 2 was previously
+    // wired to vec4 splatWeights at offset 32. Splat weights are
+    // always (1, 0, 0, 0) on the current Terrain output (no
+    // splat-textured authoring path is shipping), so the data
+    // never reaches the shader as anything but constant. Replaced
+    // with the previously-skipped vec2 texCoord at offset 24
+    // (TERRAIN_ATTR_OFFSET_TEXCOORD), which scene.frag now uses to
+    // sample the procedural grass texture. The Vertex struct is
+    // unchanged; we just bind a different field at location 2.
     VkVertexInputBindingDescription binding = {};
     binding.binding = 0;
     binding.stride = static_cast<uint32_t>(TERRAIN_VERTEX_STRIDE);
@@ -506,8 +541,8 @@ bool ScenePass::CreatePipeline() {
     attrs[1].offset = TERRAIN_ATTR_OFFSET_NORMAL;
     attrs[2].location = 2;
     attrs[2].binding = 0;
-    attrs[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attrs[2].offset = TERRAIN_ATTR_OFFSET_SPLAT;
+    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[2].offset = TERRAIN_ATTR_OFFSET_TEXCOORD;
 
     VkPipelineVertexInputStateCreateInfo vi = {};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1123,6 +1158,18 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
     // ---- Terrain ----------------------------------------------------------
     if (drawTerrain) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+
+        // 2026-04-26 SURVIVAL-PORT — bind the grass texture at set=0 so
+        // scene.frag can sample it. Falls back to the default-white set
+        // when LoadGrassTexture failed (m_grassTexture.descriptorSet ==
+        // VK_NULL_HANDLE), which renders as a uniformly-tinted ground —
+        // same as the pre-port baseline, so a load failure is a visible
+        // regression to baseline, not a hard crash.
+        VkDescriptorSet groundSet = (m_grassTexture.descriptorSet != VK_NULL_HANDLE)
+                                        ? m_grassTexture.descriptorSet
+                                        : m_defaultWhiteTexture.descriptorSet;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_pipelineLayout, 0, 1, &groundSet, 0, nullptr);
 
         // Vertex push constant — mat4 viewProj at offset 0 (unchanged
         // from the pre-fog baseline; only the range count changed).
@@ -2813,6 +2860,92 @@ bool ScenePass::CreateTextureResources() {
     return true;
 }
 
+// 2026-04-26 SURVIVAL-PORT — generate the procedural grass texture
+// described in src/components/game/ForestEnvironment.tsx:234-281, upload
+// it through the same Create2DTextureFromRGBA path the per-Model entity
+// textures use, allocate a descriptor set from m_textureDescriptorPool,
+// and write the (sampler, view, SHADER_READ_ONLY_OPTIMAL) binding.
+//
+// Idempotent (cheap): a second call with m_grassTexture already populated
+// returns true without reuploading. On any failure path
+// m_grassTexture.descriptorSet is left VK_NULL_HANDLE; the terrain draw
+// path falls back to m_defaultWhiteTexture.descriptorSet so the sampler
+// still reads valid data — the visual is "uniform tinted ground" which
+// is exactly what survival mode rendered before this port (a regression
+// to baseline, not a hard crash).
+bool ScenePass::LoadGrassTexture() {
+    if (m_device == nullptr) return false;
+    VkDevice dev = m_device->GetDevice();
+
+    if (m_grassTexture.descriptorSet != VK_NULL_HANDLE) {
+        return true; // already loaded; idempotent path
+    }
+
+    if (m_textureDescriptorPool == VK_NULL_HANDLE
+        || m_textureDescriptorSetLayout == VK_NULL_HANDLE) {
+        std::cerr << "[ScenePass] LoadGrassTexture: texture resources not"
+                  << " initialised (CreateTextureResources must run first)\n";
+        return false;
+    }
+
+    // Generate the 256×256 RGBA8 buffer in CPU code. Deterministic seed
+    // so screenshot diffs in cat-annihilation/docs/parity/ stay
+    // reproducible across runs — the web port re-randomises every page
+    // load, which is fine in the browser but not for a port scoreboard.
+    const CatGame::GrassTextureBuffer buf = CatGame::GenerateGrassTexture();
+    m_grassTexture.width  = CatGame::GrassTextureBuffer::Width;
+    m_grassTexture.height = CatGame::GrassTextureBuffer::Height;
+
+    if (!Create2DTextureFromRGBA(m_grassTexture.width, m_grassTexture.height,
+                                 buf.rgba.data(), "grass-procedural",
+                                 m_grassTexture.image,
+                                 m_grassTexture.memory,
+                                 m_grassTexture.view)) {
+        // Diagnostic was printed inside the helper. Leave descriptorSet
+        // null so the draw path falls back to the default-white set.
+        std::cerr << "[ScenePass] LoadGrassTexture: image upload failed\n";
+        return false;
+    }
+
+    // Allocate + write the descriptor set against the shared layout.
+    VkDescriptorSetAllocateInfo dsAlloc{};
+    dsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorPool = m_textureDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &m_textureDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(dev, &dsAlloc, &m_grassTexture.descriptorSet) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] LoadGrassTexture: descriptor set alloc"
+                  << " failed (pool exhausted? bump kMaxBaseColorDescriptorSets)\n";
+        // Free the just-uploaded texture so we don't leak.
+        vkDestroyImageView(dev, m_grassTexture.view, nullptr);
+        vkDestroyImage(dev, m_grassTexture.image, nullptr);
+        vkFreeMemory(dev, m_grassTexture.memory, nullptr);
+        m_grassTexture = ModelTexture{};
+        return false;
+    }
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = m_baseColorSampler;
+    imgInfo.imageView = m_grassTexture.view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_grassTexture.descriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+
+    std::cout << "[ScenePass] grass texture ready "
+              << m_grassTexture.width << "x" << m_grassTexture.height
+              << " (procedural; tile=" << CatGame::GrassTextureBuffer::TileSize
+              << " world units)\n";
+    return true;
+}
+
 void ScenePass::DestroyTextureResources() {
     if (m_device == nullptr) return;
     VkDevice dev = m_device->GetDevice();
@@ -2842,6 +2975,23 @@ void ScenePass::DestroyTextureResources() {
         m_defaultWhiteTexture.memory = VK_NULL_HANDLE;
     }
     m_defaultWhiteTexture.descriptorSet = VK_NULL_HANDLE;
+
+    // 2026-04-26 SURVIVAL-PORT — grass texture (allocated separately,
+    // same shape as default-white). Descriptor set itself is freed by
+    // the pool destroy below; we just release image/view/memory here.
+    if (m_grassTexture.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev, m_grassTexture.view, nullptr);
+        m_grassTexture.view = VK_NULL_HANDLE;
+    }
+    if (m_grassTexture.image != VK_NULL_HANDLE) {
+        vkDestroyImage(dev, m_grassTexture.image, nullptr);
+        m_grassTexture.image = VK_NULL_HANDLE;
+    }
+    if (m_grassTexture.memory != VK_NULL_HANDLE) {
+        vkFreeMemory(dev, m_grassTexture.memory, nullptr);
+        m_grassTexture.memory = VK_NULL_HANDLE;
+    }
+    m_grassTexture.descriptorSet = VK_NULL_HANDLE;
 
     if (m_textureDescriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(dev, m_textureDescriptorPool, nullptr);

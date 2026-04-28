@@ -15,6 +15,9 @@
 #include "../engine/rhi/vulkan/VulkanCommandBuffer.hpp"
 #include "world/GameWorld.hpp"
 #include "world/Terrain.hpp"
+#include "world/Forest.hpp"
+#include "../engine/assets/AssetManager.hpp"
+#include "world/ProceduralTreeMesh.hpp"
 #include "ui/WavePopup.hpp"
 
 #include "imgui.h"
@@ -134,11 +137,22 @@ bool CatAnnihilation::initialize() {
     // a null sampler at first spawn.
     if (gameWorld_ != nullptr) {
         const auto* terrain = gameWorld_->getTerrain();
+        const auto* forest = gameWorld_->getForest();
         if (playerControlSystem_ != nullptr) {
             playerControlSystem_->setCombatSystem(combatSystem_);
             playerControlSystem_->setElementalMagicSystem(magicSystem_.get());
             if (terrain != nullptr) {
                 playerControlSystem_->setTerrain(terrain);
+            }
+            // 2026-04-26 SURVIVAL-PORT — wire Forest so the Physics tail
+            // can push the player out of trees every frame. Without this,
+            // Forest's 18,931 RigidBody tree colliders in PhysicsWorld
+            // are invisible to player movement (the player isn't a
+            // physics body) and the user walks through everything. Per
+            // explicit user directive: "make sure the terrain i cant
+            // walk through and really hone in".
+            if (forest != nullptr) {
+                playerControlSystem_->setForest(forest);
             }
         }
         if (terrain != nullptr) {
@@ -611,9 +625,18 @@ void CatAnnihilation::loadGameData() {
     }
 
     // Load NPC data
-    if (npcSystem_ != nullptr) {
-        npcSystem_->loadNPCsFromFile("assets/npcs/npcs.json");
-    }
+    //
+    // 2026-04-26 SURVIVAL-ONLY MODE — NPC spawn disabled by user directive
+    // ("keep it fucking simple ... just me against the dogs"). The 16
+    // story-mode NPCs from npcs.json (mentors / leaders / merchants per
+    // clan) belong to the StoryScene, not the SurvivalScene. Wave dogs
+    // are still spawned by WaveSystem; the player is still spawned by
+    // createPlayer(). When story mode comes back online, gate this on
+    // a runtime mode flag instead of removing the call.
+    //
+    // if (npcSystem_ != nullptr) {
+    //     npcSystem_->loadNPCsFromFile("assets/npcs/npcs.json");
+    // }
 
     // Load spell definitions
     // Note: ElementalMagicSystem::loadSpellDefinitions() is private and called internally during init()
@@ -656,6 +679,87 @@ void CatAnnihilation::loadAssets() {
     //   docblock on DogEntity::PreloadAllVariants for why calling this
     //   twice (e.g., from a future restart-to-main-menu flow) is safe.
     DogEntity::PreloadAllVariants();
+
+    // 2026-04-26 SURVIVAL-PORT — Meshy tree GLB pre-load is GATED OFF.
+    //
+    // The Meshy props/tree_*.glb exports are catastrophically oversized
+    // for a real-time renderer:
+    //   tree_oak.glb         319 MB
+    //   tree_oak_autumn.glb  228 MB
+    //   tree_pine.glb        162 MB
+    //   tree_pine_frost.glb   89 MB
+    //   tree_dead_burnt.glb   23 MB  (smallest tree)
+    //   ember_oak_ancient.glb 461 MB
+    //   landmark_ancient_oak.glb 469 MB
+    //
+    // (See `ls -lh assets/models/props/*.glb` for the full table.)
+    //
+    // Meshy output ships with millions of vertices per asset because the
+    // service targets static rendering / 3D-print, not games. The engine
+    // has NO mesh-decimation pipeline yet — it uploads every tri straight
+    // to a GpuMesh — so pre-loading even one of these blocks the main
+    // thread for 5–15 s on disk-read + glTF parse, and once on the GPU
+    // each draw of a 64-instance tree budget pushes ~200 M verts/frame.
+    // cat-verify evidence rows #104 and #105 measured fps=8.5 (80 m cull
+    // unbudgeted) and fps=0.6 (35 m cull, 64-tree budget) respectively
+    // with this loop active — both unplayable.
+    //
+    // The right fix is a build-time decimation step (gltfpack /
+    // meshoptimizer simplify) that targets <5 k tris per tree and writes
+    // back into assets/models/props/. Until that lands, leave the
+    // pre-load disabled — every other engine subsystem (collision via
+    // Forest's PhysicsWorld trees, pushOutOfTrees, terrain, fog,
+    // grass texture) operates correctly without rendered trees, so
+    // disabling rendering specifically keeps the rest of the SURVIVAL-PORT
+    // playable.
+    //
+    // The renderFrame submission loop also gates on `treeModels_.empty()`
+    // and skips emit when the map is empty, so leaving this block
+    // disabled cleanly turns tree rendering off without dead branches.
+    //
+    // Re-enable by setting kTreeRenderingEnabled to true AFTER decimation
+    // lands. The map key is the integer-cast Forest::TreeType so the
+    // header (which forward-decls Model and doesn't include Forest)
+    // doesn't need to know about the enum. Renderer-side lookup converts
+    // the enum to int at call time.
+    // 2026-04-26 SURVIVAL-PORT — procedural tree primitives.
+    //
+    // The Meshy props/tree_*.glb exports were too large to ship as-is
+    // (162 MB pine, 319 MB oak; cat-verify rows #104-#105 measured 0.6-8.5
+    // fps with the GLB path live), so we generate matching geometry in
+    // C++ at startup. The web port (src/components/game/ForestEnvironment.tsx)
+    // renders trees as a cylinder trunk + sphere foliage; we mirror the
+    // exact same primitives — see game/world/ProceduralTreeMesh.cpp for
+    // the per-shape construction and the why-block on why we split the
+    // primitives across multiple Models.
+    {
+        ProceduralTreeMeshes meshes = BuildProceduralTreeMeshes();
+        proceduralTreeTrunk_        = std::move(meshes.trunk);
+        proceduralTreePineFoliage_  = std::move(meshes.pineFoliage);
+        proceduralTreeOakFoliage_   = std::move(meshes.oakFoliage);
+        proceduralTreeBush_         = std::move(meshes.bush);
+
+        // Diag: vertex/index counts for the four primitives so the log
+        // shows we built non-degenerate geometry. If a future change
+        // accidentally emits zero verts (e.g. a copy-paste bug zeroing
+        // a segment count), this line catches it before the visual
+        // disappears in the cat-verify PPM.
+        const auto countVI = [](const std::shared_ptr<CatEngine::Model>& m) {
+            if (!m || m->meshes.empty()) return std::pair<size_t, size_t>{0, 0};
+            return std::pair<size_t, size_t>{m->meshes[0].vertices.size(),
+                                              m->meshes[0].indices.size()};
+        };
+        auto trunkVI = countVI(proceduralTreeTrunk_);
+        auto pineVI  = countVI(proceduralTreePineFoliage_);
+        auto oakVI   = countVI(proceduralTreeOakFoliage_);
+        auto bushVI  = countVI(proceduralTreeBush_);
+        Engine::Logger::info(
+            "CatAnnihilation: procedural tree meshes built — trunk(" +
+            std::to_string(trunkVI.first) + "v/" + std::to_string(trunkVI.second) + "i) " +
+            "pineFoliage(" + std::to_string(pineVI.first) + "v/" + std::to_string(pineVI.second) + "i) " +
+            "oakFoliage(" + std::to_string(oakVI.first) + "v/" + std::to_string(oakVI.second) + "i) " +
+            "bush(" + std::to_string(bushVI.first) + "v/" + std::to_string(bushVI.second) + "i)");
+    }
 
     Engine::Logger::info("Assets loaded");
 }
@@ -1408,6 +1512,28 @@ void CatAnnihilation::render() {
                 camPos = playerControlSystem_->getCameraPosition();
                 if (auto* playerXform =
                         ecs_.getComponent<Engine::Transform>(playerEntity_)) {
+                    // Anchor the lookAt at the cat's torso (player.y + 0.75).
+                    //
+                    // 2026-04-26 SURVIVAL-PORT note: an earlier iteration
+                    // tried `camera.lookAt(player.x, 0, player.z)` to mirror
+                    // the web port's BasicScene.tsx convention, but the
+                    // engine's CUDA-generated terrain heightmap sits at
+                    // y≈25 in the spawn area (verified by PlayerCtrl-DIAG
+                    // logs: pos=(0, 24.98, 0) groundY=24.98), NOT at y=0
+                    // like the web port assumes. Pointing the camera at
+                    // y=0 from a camPos at player.y+12 gave a 68°-down
+                    // pitch and dropped the cat completely out of frame
+                    // — the user playtest read this as "the cat is under
+                    // the map" because the camera was looking past the
+                    // cat at the y=0 plane far below it.
+                    //
+                    // Aiming at player.y + 0.75 (cat torso height for the
+                    // ~1.5 m-tall rigged Meshy cat with origin at feet)
+                    // keeps the cat centred regardless of terrain
+                    // elevation. The web port works with y=0 because its
+                    // terrain is implicitly y=0 there; mirroring that
+                    // literally would only be correct if our terrain
+                    // were also at y=0.
                     camTarget = playerXform->position +
                                 Engine::vec3(0.0F, 0.75F, 0.0F);
                 } else {
@@ -1548,6 +1674,300 @@ void CatAnnihilation::render() {
                                   &cullFrustum,
                                   &camPos,
                                   kMeshDistanceCullMetres);
+
+            // 2026-04-26 SURVIVAL-PORT — tree-instance submission loop. The
+            // web port (src/components/game/ForestEnvironment.tsx) renders
+            // ~18.9k Forest trees as InstancedMesh batches keyed on TreeType.
+            // The native engine has no instanced path yet, so we emit one
+            // EntityDraw per visible tree and let MeshSubmissionSystem's
+            // retention ring keep each Model* alive across frames-in-flight.
+            //
+            // Why not pre-batch into the MeshSubmissionSystem call above:
+            // MeshSubmissionSystem walks the ECS for entities carrying
+            // (Transform + MeshComponent). Forest stores trees as a flat
+            // std::vector<TreeInstance> — they are NOT ECS entities, by
+            // design, because spawning 18.9k entities would balloon
+            // component storage and per-frame iteration time for systems
+            // that have no business touching trees (combat, AI, magic, …).
+            // Iterating Forest::getInstances() directly here keeps the
+            // tree population invisible to gameplay systems while still
+            // funnelling through ScenePass's existing model-draw path.
+            //
+            // Distance + frustum cull match the entity-mesh policy above:
+            // 80 m sphere, then frustum::intersectsSphere using a per-type
+            // bounding radius derived from the GLB's largest extent times
+            // the per-instance scale. The bounding radii (3.5 / 4.0 / 1.5)
+            // are sized from the Meshy exports in assets/models/props — a
+            // pine trunk+canopy is ~7 m tall scaled at 1.0, an oak is
+            // wider, a bush is small. These are intentionally generous
+            // (we'd rather draw a tree just off-frame than pop one
+            // visibly at the screen edge).
+            //
+            // tree.scale comes from Forest's Poisson-disk gen (range
+            // params.minScale..maxScale, currently 0.8..1.3), so the
+            // final cull-sphere radius is per-instance:
+            //   radius = baseRadius * tree.scale.
+            //
+            // Why we look up the model on a per-tree basis instead of
+            // hoisting the std::shared_ptr<Model>* outside the loop:
+            // the iteration order is deterministic (Forest persists
+            // instances in placement order) but TreeType is interleaved
+            // (Pine/Oak/Bush picked by selectTreeType per slot). A
+            // hoisted pointer would either need a TreeType==prevType
+            // check or an indexed array; the unordered_map lookup is
+            // O(1) amortised on three keys and dwarfed by the per-draw
+            // cost downstream, so keep it simple.
+            if (gameWorld_ != nullptr) {
+                const auto* forest = gameWorld_->getForest();
+                const bool proceduralReady =
+                    proceduralTreeTrunk_ && proceduralTreePineFoliage_ &&
+                    proceduralTreeOakFoliage_ && proceduralTreeBush_;
+                // 2026-04-26 SURVIVAL-PORT iter 4 — tree submission
+                // re-enabled. The earlier `false &&` gate was a
+                // diagnostic short to verify the cat was visible
+                // without occlusion; with the cat now confirmed
+                // upright, on-ground, framed by the locked-behind
+                // camera, trees can come back. The 18 m horizontal
+                // cull + 16-tree budget keeps the per-frame draw
+                // count manageable, AND the new 12 m exclusion zone
+                // around the world origin (added in this loop, see
+                // the spawnExclusionRadiusSq check) prevents the
+                // very-near-camera trees that were occluding the cat
+                // on first frame.
+                if (forest != nullptr && proceduralReady) {
+                    const auto& trees = forest->getInstances();
+                    // 35 m horizontal cull + per-frame budget cap. Why this
+                    // is so much tighter than the 80 m used by the entity
+                    // mesh path:
+                    //
+                    // Forest density is 0.02 trees/m² (Forest::Params),
+                    // which over an 80 m disk yields π·80²·0.02 ≈ 402
+                    // trees on average. ScenePass draws each EntityDraw as
+                    // its own bindVertexBuffers + draw call (no GPU
+                    // instancing yet), and the per-draw fixed cost dominates
+                    // at this entity count — cat-verify evidence row #104
+                    // measured fpsAvg=8.5 with the 80 m cull active, vs the
+                    // ~30+ fps target. A 35 m cull yields π·35²·0.02 ≈ 77
+                    // trees, and the budget cap below clamps to 64 visible
+                    // tree draws even if the random distribution clusters
+                    // higher than the average.
+                    //
+                    // The visual cost of dropping from 80 m to 35 m is
+                    // small in this camera setup: the camera sits 15 m
+                    // behind + 12 m above the player (PlayerControlSystem.hpp
+                    // SURVIVAL-PORT camera offset), and linear fog from
+                    // FOG_NEAR=30 to FOG_FAR=150 in scene.frag fades trees
+                    // toward sky color at the cull boundary anyway, so the
+                    // 45 m of extra range we drop is the *barely-visible
+                    // far fog band*, not foreground scenery.
+                    //
+                    // GPU-instanced trees (one draw per TreeType with a
+                    // per-instance transform buffer) are the proper fix and
+                    // would let us push the cull back out to 80–100 m
+                    // without bottlenecking — tracked as a follow-up; for
+                    // this iteration we land visible trees first.
+                    // 2026-04-26 SURVIVAL-PORT iter 2: dropped from 35 m / 64
+                    // budget after user playtest reported "wayyyy too many
+                    // trees i cant even see the app". The procedural meshes
+                    // are visually denser than the Meshy-export expectations
+                    // assumed (cylinder + sphere read as bigger than a typical
+                    // GLB foliage cluster of comparable footprint), so 64
+                    // visible × 2 draws each fills the screen with green at
+                    // close range. 18 m + 16 budget keeps a tight ring of
+                    // background trees without occluding the gameplay area
+                    // around the cat. Revisit when GPU instancing lands and
+                    // the per-draw cost drops, OR when the camera framing
+                    // changes (a higher / more pulled-back camera could
+                    // tolerate denser trees without the wall-of-green effect).
+                    constexpr float kTreeDistanceCullMetres = 18.0F;
+                    constexpr float kTreeDistanceCullSq =
+                        kTreeDistanceCullMetres * kTreeDistanceCullMetres;
+                    constexpr int kTreeDrawBudget = 16;
+                    int treeDrawn = 0;
+                    for (const auto& tree : trees) {
+                        if (treeDrawn >= kTreeDrawBudget) {
+                            // Hard budget cap. Forest emits trees in placement
+                            // order (Poisson disk sampling pass), which is
+                            // roughly spatially clustered, so the first 64
+                            // that pass cull are NOT guaranteed to be the
+                            // closest 64 — there's a mild bias toward trees
+                            // generated earlier in the scan. In practice this
+                            // produces a visually fine "pocket of trees"
+                            // pattern around the player; tightening to true
+                            // distance-sorted top-K would require sorting
+                            // per frame, which costs more than it saves at
+                            // this scale. Revisit if a future build exposes
+                            // a clearly-visible "missing tree right next to
+                            // me" artifact.
+                            break;
+                        }
+                        // Distance cull on horizontal plane only — the camera
+                        // sits above the player, so a tall pine far away
+                        // can have a non-trivial 3D distance from the camera
+                        // but its base is still inside the gameplay disk we
+                        // want to render. Using an XZ-plane test keeps the
+                        // visible tree disk a clean top-down circle around
+                        // the player rather than an awkward camera-space
+                        // sphere that culls more on the far side than the
+                        // near side.
+                        const float dx = tree.position.x - camPos.x;
+                        const float dz = tree.position.z - camPos.z;
+                        if (dx * dx + dz * dz > kTreeDistanceCullSq) {
+                            continue;
+                        }
+
+                        // 2026-04-26 SURVIVAL-PORT — spawn exclusion zone.
+                        // The Forest::generate Poisson-disk sampler doesn't
+                        // know where the player spawns, so a tree can
+                        // occasionally land on world origin (= the player's
+                        // spawn point). With the close third-person camera
+                        // (offset 0/3/6) at startup that tree fills 80% of
+                        // the frame, occluding the cat the user is trying
+                        // to verify. A 12 m no-render zone around (0,0,0)
+                        // keeps the immediate gameplay area clear without
+                        // touching Forest's collider list (which would
+                        // remove physics, defeating the point of having
+                        // colliders in the first place). The cat moves
+                        // away from origin within 1-2 seconds in autoplay,
+                        // at which point trees on the periphery come back
+                        // into view naturally.
+                        constexpr float kSpawnExclusionRadiusMetres = 12.0F;
+                        constexpr float kSpawnExclusionRadiusSq =
+                            kSpawnExclusionRadiusMetres * kSpawnExclusionRadiusMetres;
+                        const float distFromOriginSq =
+                            tree.position.x * tree.position.x +
+                            tree.position.z * tree.position.z;
+                        if (distFromOriginSq < kSpawnExclusionRadiusSq) {
+                            continue;
+                        }
+
+                        // Per-type bounding-sphere radius (units: world metres
+                        // at scale=1). Pine and oak share the same trunk model
+                        // but have different foliage spheres (radius 2 vs 2.5);
+                        // bushes are a single small sphere with no trunk.
+                        // Radii here are sized to the procedural geometry's
+                        // actual extents:
+                        //   Pine: trunk extends y∈[0,4], foliage sphere centre
+                        //         (0,5,0) radius 2 → top y≈7, widest radius 2 →
+                        //         worst-case tree-radius 3.5 m feels generous.
+                        //   Oak:  same trunk + foliage sphere radius 2.5 →
+                        //         top y≈7.5, widest radius 2.5 → 4.0 m.
+                        //   Bush: sphere radius 0.7 → tight 0.7 m radius.
+                        float baseRadius = 3.5F;
+                        const float displayScale = tree.scale;
+                        const CatEngine::Model* trunkModel    = nullptr;
+                        const CatEngine::Model* foliageModel  = nullptr;
+                        Engine::vec3 trunkColor(0.396F, 0.263F, 0.129F);   // #654321
+                        Engine::vec3 foliageColor(0.133F, 0.545F, 0.133F); // #228B22
+                        switch (tree.type) {
+                            case CatGame::Forest::TreeType::Pine:
+                                baseRadius   = 3.5F;
+                                trunkModel   = proceduralTreeTrunk_.get();
+                                foliageModel = proceduralTreePineFoliage_.get();
+                                break;
+                            case CatGame::Forest::TreeType::Oak:
+                                baseRadius   = 4.0F;
+                                trunkModel   = proceduralTreeTrunk_.get();
+                                foliageModel = proceduralTreeOakFoliage_.get();
+                                break;
+                            case CatGame::Forest::TreeType::Bush:
+                                // Bushes have no trunk in the web port — only
+                                // a low sphere. trunkModel stays null and the
+                                // emit step skips the trunk draw.
+                                baseRadius   = 0.7F;
+                                trunkModel   = nullptr;
+                                foliageModel = proceduralTreeBush_.get();
+                                // #3a5f38 — darker green, matches web port.
+                                foliageColor = Engine::vec3(0.227F, 0.373F, 0.220F);
+                                break;
+                            case CatGame::Forest::TreeType::Count:
+                                continue;
+                        }
+                        if (foliageModel == nullptr) {
+                            continue;
+                        }
+
+                        // Frustum-test against a sphere centred at the tree
+                        // base + half its expected height. Trees grow upward
+                        // from y=tree.position.y; a bounding sphere centred
+                        // exactly at the base would conservatively pass the
+                        // cull when only the canopy was on-screen, which is
+                        // fine, but lifting the centre by ~baseRadius gives
+                        // tighter culls when the camera looks straight down
+                        // and only the trunks would otherwise pass the test.
+                        const float instanceRadius = baseRadius * displayScale;
+                        const Engine::vec3 sphereCenter(
+                            tree.position.x,
+                            tree.position.y + instanceRadius,
+                            tree.position.z);
+                        if (!cullFrustum.intersectsSphere(sphereCenter,
+                                                         instanceRadius)) {
+                            continue;
+                        }
+
+                        // Build the world-space transform: translate to the
+                        // sampled terrain position, rotate around Y by the
+                        // per-instance random rotation (so identical meshes
+                        // don't visibly tile), then uniform-scale. Order
+                        // matters: T * R * S applied to a local-space mesh
+                        // yields rotation-then-translation in world space.
+                        // The same matrix is shared by trunk + foliage —
+                        // their local-space y offsets (trunk centred at
+                        // y=2, foliage centred at y=5) come from the
+                        // procedural mesh data itself.
+                        const Engine::mat4 modelMatrix =
+                            Engine::mat4::translate(tree.position) *
+                            Engine::mat4::rotateY(tree.rotation) *
+                            Engine::mat4::scale(Engine::vec3(displayScale));
+
+                        // Trunk draw (skipped for bushes).
+                        if (trunkModel != nullptr) {
+                            CatEngine::Renderer::ScenePass::EntityDraw d;
+                            d.position    = tree.position;
+                            d.halfExtents = Engine::vec3(instanceRadius);
+                            d.color       = trunkColor;
+                            d.model       = trunkModel;
+                            d.modelMatrix = modelMatrix;
+                            entityDraws.push_back(std::move(d));
+                        }
+
+                        // Foliage draw (always present — pine/oak sphere or
+                        // bush sphere).
+                        {
+                            CatEngine::Renderer::ScenePass::EntityDraw d;
+                            d.position    = tree.position;
+                            d.halfExtents = Engine::vec3(instanceRadius);
+                            d.color       = foliageColor;
+                            d.model       = foliageModel;
+                            d.modelMatrix = modelMatrix;
+                            entityDraws.push_back(std::move(d));
+                        }
+
+                        // Counts a "tree", not a "draw" — the budget is in
+                        // tree instances, so a Pine costs 1 budget slot
+                        // and emits 2 draws while a Bush costs 1 slot and
+                        // emits 1 draw. Predictable visual density.
+                        ++treeDrawn;
+                    }
+
+                    // One-shot diag so we can grep the cat-verify log to
+                    // confirm trees actually emit. Mirrors the
+                    // sceneRenderCallCount log just below — fires at the
+                    // same milestone frames so a single cat-verify run
+                    // produces a co-located trace of tree counts vs
+                    // scene-execute counts.
+                    static int treeSubmitCallCount = 0;
+                    ++treeSubmitCallCount;
+                    if (treeSubmitCallCount == 1
+                        || treeSubmitCallCount == 60
+                        || treeSubmitCallCount == 300
+                        || treeSubmitCallCount == 600) {
+                        std::cerr << "[CatRender-DIAG] frame=" << treeSubmitCallCount
+                                  << " forestTreesTotal=" << trees.size()
+                                  << " forestTreesDrawn=" << treeDrawn << "\n";
+                    }
+                }
+            }
 
             auto* sceneCmdBuffer = renderer_->GetCommandBuffer();
             // DIAG: log per-frame whether the scene Execute path is reached.
@@ -2119,29 +2539,30 @@ void CatAnnihilation::createPlayer() {
 }
 
 void CatAnnihilation::repopulateWorldEntities() {
-    // No NPCSystem in this build — fine, just nothing to re-spawn. Headless
-    // tests / unit harnesses that exercise CatAnnihilation without the JSON
-    // catalogue hit this branch and return cleanly.
-    if (npcSystem_ == nullptr) {
-        return;
+    // 2026-04-26 SURVIVAL-ONLY MODE — body disabled by user directive,
+    // pairs with loadGameData()'s commented-out loadNPCsFromFile call.
+    // Restart paths still hit this function (called from
+    // restart() / startNewGame() — see line ~1848 + ~2015), but in
+    // survival mode there is nothing to re-populate: the player is
+    // re-created in createPlayer(), wave dogs by WaveSystem.
+    //
+    // We still call clearAll() if the system exists — left over NPCData
+    // from a prior session would cause stale dialog state if we ever
+    // flip story mode on. Calling clearAll() on a fresh system is a
+    // no-op so it's safe in survival too.
+    if (npcSystem_ != nullptr) {
+        npcSystem_->clearAll();
     }
 
-    // Reset NPCSystem's internal "id -> NPCData" map so the upcoming
-    // loadNPCsFromFile pass doesn't collide with the dead-entity bookkeeping
-    // left over from the prior session. clearAll also resets dialog/shop/
-    // training state in case a `restart()` was triggered mid-conversation.
-    npcSystem_->clearAll();
-
-    // The catalogue path is the same one loadGameData uses at startup. We
-    // don't read it from a config slot because the NPC roster is part of
-    // the world definition, not per-save state — even a fresh game in a
-    // new save slot expects the same 16 mentors/leaders/merchants.
-    const std::string npcCataloguePath = "assets/npcs/npcs.json";
-    if (!npcSystem_->loadNPCsFromFile(npcCataloguePath)) {
-        Engine::Logger::warn(
-            "repopulateWorldEntities: failed to reload NPCs from " +
-            npcCataloguePath + " — world map will be empty this session");
-    }
+    // Original story-mode re-load path (preserved as a comment so the
+    // shape is recoverable when story mode comes back online):
+    //
+    //   const std::string npcCataloguePath = "assets/npcs/npcs.json";
+    //   if (!npcSystem_->loadNPCsFromFile(npcCataloguePath)) {
+    //       Engine::Logger::warn(
+    //           "repopulateWorldEntities: failed to reload NPCs from " +
+    //           npcCataloguePath + " — world map will be empty this session");
+    //   }
 }
 
 // ----------------------------------------------------------------------------

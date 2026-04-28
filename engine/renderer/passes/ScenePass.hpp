@@ -343,6 +343,21 @@ private:
     bool CreateTextureResources();
     void DestroyTextureResources();
 
+    // 2026-04-26 SURVIVAL-PORT — generates the procedural grass texture
+    // (CatGame::GenerateGrassTexture, 256² RGBA8) and uploads it through
+    // the same Create2DTextureFromRGBA pipeline the entity textures use.
+    // Allocates a descriptor set from m_textureDescriptorPool and writes
+    // the combined-image-sampler binding so the terrain pipeline can
+    // bind set=0 at draw time. Idempotent: a second call is a no-op
+    // (m_grassTexture.descriptorSet stays valid). Failure paths log to
+    // stderr and leave m_grassTexture.descriptorSet = VK_NULL_HANDLE,
+    // which the draw path treats as "fall back to per-vertex color"
+    // by binding the default-white set instead. Called from Setup
+    // AFTER CreateTextureResources but BEFORE CreatePipeline (the
+    // pipeline layout references m_textureDescriptorSetLayout, which
+    // CreateTextureResources just created).
+    bool LoadGrassTexture();
+
     // EnsureModelTexture: lazy uploader + descriptor allocator for the
     // PBR baseColor map of a Model.
     //
@@ -625,6 +640,23 @@ private:
     // kMaxDescriptorSets here or swap to a multi-pool allocator (the
     // latter is more complex than this iteration warrants).
     VkDescriptorPool m_textureDescriptorPool = VK_NULL_HANDLE;
+
+    // 2026-04-26 SURVIVAL-PORT — procedural grass texture for the
+    // ground plane, mirroring the canvas texture in the web port's
+    // ForestEnvironment.tsx. Generated once at Setup from
+    // CatGame::GenerateGrassTexture (256×256 RGBA8) and uploaded via
+    // the same Create2DTextureFromRGBA path the per-Model entity
+    // textures use. The descriptor set is allocated from
+    // m_textureDescriptorPool and lives next to the per-Model sets;
+    // the terrain pipeline pulls m_textureDescriptorSetLayout into
+    // its layout so it can bind this set at draw time.
+    //
+    // Sampling: scene.vert/.frag interpret UV as world-space
+    // position.xz / GrassTextureBuffer::TileSize (500), with sampler
+    // ADDRESS_MODE_REPEAT producing the seamless tile. UV outside
+    // [0,1]² is normal — the ground extends well past the per-tile
+    // span — so REPEAT is correct.
+    ModelTexture m_grassTexture{};
 
     // ---- Ribbon-trail rendering resources ---------------------------------
     //

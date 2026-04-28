@@ -36,6 +36,19 @@
 #include "game_events.hpp"
 #include "../engine/core/save_system.hpp"
 #include <memory>
+#include <unordered_map>
+// Forward-decl Model so the treeModels_ shared_ptr type is complete in this
+// translation unit without pulling the full ModelLoader header into every
+// CatAnnihilation includer. CatAnnihilation.cpp pulls the full header when
+// it actually fills the map.
+//
+// IMPORTANT: tag must match the real declaration in
+// engine/assets/ModelLoader.hpp (`class Model { ... };`). MSVC mangles
+// `class Model` and `struct Model` into DIFFERENT decorated names
+// (UModel vs VModel), so a mismatched tag here compiles fine but produces
+// an LNK2019 unresolved-external for any AssetManager method whose
+// signature mentions `shared_ptr<Model>`. Caught the hard way 2026-04-26.
+namespace CatEngine { class Model; }
 
 namespace CatGame {
 
@@ -580,6 +593,37 @@ private:
     std::unique_ptr<GameWorld> gameWorld_;
     std::unique_ptr<Game::GameAudio> gameAudio_;
     std::unique_ptr<Engine::SaveSystem> saveSystem_;
+
+    // 2026-04-26 SURVIVAL-PORT — Meshy tree GLBs pre-loaded once at
+    // engine init and reused for every visible Forest tree instance
+    // (~18,931 trees, but only the ~50-200 within 80 m of the camera
+    // get submitted as EntityDraws each frame — see the renderFrame
+    // tree-rendering block). Map is keyed by Forest::TreeType so the
+    // wave-1 spawn ring lookup is O(1). nullptr = no model loaded for
+    // that type (rendering loop skips), used to guard a missing GLB
+    // without aborting boot.
+    //
+    // Pointer/lifetime contract: AssetManager owns the Model; we keep
+    // a non-owning shared_ptr here for cheap reference. Models survive
+    // until AssetManager teardown at shutdown.
+    std::unordered_map<int, std::shared_ptr<CatEngine::Model>> treeModels_;
+
+    // 2026-04-26 SURVIVAL-PORT — procedural tree primitives that bypass
+    // the oversized Meshy GLB pipeline. Each tree instance emits TWO
+    // EntityDraws per frame: trunk model + foliage model (or just bush
+    // for TreeType::Bush). See world/ProceduralTreeMesh.hpp for the full
+    // rationale and per-primitive geometry.
+    //
+    // Storage as four shared_ptr<Model> members rather than the
+    // ProceduralTreeMeshes struct directly so the header doesn't need
+    // to include ProceduralTreeMesh.hpp — the pointers are
+    // forward-declarable via the existing `namespace CatEngine { class
+    // Model; }` decl above. The .cpp pulls in the full struct when it
+    // calls BuildProceduralTreeMeshes().
+    std::shared_ptr<CatEngine::Model> proceduralTreeTrunk_;
+    std::shared_ptr<CatEngine::Model> proceduralTreePineFoliage_;
+    std::shared_ptr<CatEngine::Model> proceduralTreeOakFoliage_;
+    std::shared_ptr<CatEngine::Model> proceduralTreeBush_;
 
     // Non-owning pointer to the main-loop-owned GameConfig. Menus read
     // starting values and write through here when the Settings panel's
