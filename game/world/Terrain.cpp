@@ -234,6 +234,43 @@ void Terrain::downloadFromGpu() {
     // Download heightmap
     m_gpuHeightmap.copyToHost(m_heightmap.data(), vertexCount);
 
+    // 2026-04-26 SURVIVAL-PORT — flatten the heightmap unconditionally.
+    //
+    // User playtest: "dude put the cat on a flat plane and figure this
+    // out the game is so fucking unusable the cat cant even walk".
+    // The CUDA terrain generator produces a heightmap with values in
+    // roughly [0, 50] (verified by PlayerCtrl-DIAG: pos.y=24.98 at
+    // (0,0,0) spawn). The elevated terrain creates several compounding
+    // problems for the SURVIVAL-PORT iteration:
+    //   - Camera framing: camera offset (0, 12, 15) places camera 12 m
+    //     above the cat, but with cat at y=25 the camera is at y=37
+    //     and the lookAt code I tried (y=0 to mirror the web port) sent
+    //     the camera 68° down looking past the cat toward the world
+    //     origin.
+    //   - Visual confusion: the terrain MESH renders with elevation,
+    //     but at this camera distance + this resolution + this lighting,
+    //     the elevation isn't visually obvious. The cat sliding across
+    //     hills reads as "the cat is somewhere in space" rather than
+    //     "the cat is on terrain".
+    //   - User feedback: the gameplay reads as broken because the cat
+    //     looks like it's floating / clipping through invisible
+    //     geometry, when really it's just on terrain that's hard to
+    //     read at the current camera framing.
+    //
+    // Flattening to y=0 takes those compounding visual problems off the
+    // table while we focus on cat walking + camera framing + tree
+    // placement. The terrain MESH will render as a flat plane at y=0,
+    // the cat ground-clamps to y=0, the camera's (0, 12, 15) offset and
+    // (player + 0.75 lookAt) framing both work for cat-at-y=0, and
+    // trees place at y=0 once we relax Forest's height-bounds gate.
+    //
+    // This is a TEMPORARY override. Re-enabling terrain elevation needs
+    // (a) a camera framing that handles arbitrary cat.y, (b) better
+    // terrain shading so the elevation reads visually, (c) a forest /
+    // tree placement strategy that doesn't end up with cat trapped on
+    // hilltops. For now, flat-plane to unblock the playtest loop.
+    std::fill(m_heightmap.begin(), m_heightmap.end(), 0.0F);
+
     // Download normals
     std::vector<float> normalData(vertexCount * 3);
     m_gpuNormals.copyToHost(normalData.data(), vertexCount * 3);
@@ -245,6 +282,16 @@ void Terrain::downloadFromGpu() {
             normalData[i * 3 + 1],
             normalData[i * 3 + 2]
         );
+    }
+
+    // 2026-04-26 SURVIVAL-PORT — paired with the heightmap-flatten above,
+    // override normals to straight-up (0, 1, 0). The CUDA generator
+    // computed gradient-based normals matching the original elevated
+    // heightmap; a flat plane needs flat-up normals so lighting reads
+    // as a uniformly-lit ground plane instead of inheriting the
+    // pre-flatten gradient noise.
+    for (auto& n : m_normals) {
+        n = Engine::vec3(0.0F, 1.0F, 0.0F);
     }
 
     // Download splatmap

@@ -4,9 +4,11 @@
 #include "../components/GameComponents.hpp"
 #include "../components/EnemyComponent.hpp"
 #include "../world/Terrain.hpp"
+#include "../world/Forest.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/math/Math.hpp"
 #include "../../engine/core/Logger.hpp"
+#include <iostream>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -98,6 +100,19 @@ void PlayerControlSystem::setCinematicOrbit(bool enabled, float yawRateRadPerSec
     cinematicOrbitYawRate_ = yawRateRadPerSec;
 }
 
+void PlayerControlSystem::setFollowPlayerYaw(bool enabled, float lagPerSecond) {
+    // Mutually-exclusive with cinematic orbit at the gameplay level — both
+    // modes write cameraYaw_ each frame, so leaving both on would produce
+    // an oscillation between the player's yaw and the orbit-advancing
+    // yaw. We don't enforce mutex inside the setter (callers compose
+    // them), but updateCamera() prefers cinematic-orbit when both are on
+    // because the orbit was the legacy intent.
+    followPlayerYawEnabled_ = enabled;
+    if (lagPerSecond >= 0.0F) {
+        followPlayerYawLagPerSec_ = lagPerSecond;
+    }
+}
+
 void PlayerControlSystem::setElementalMagicSystem(ElementalMagicSystem* magicSystem) {
     magicSystem_ = magicSystem;
 }
@@ -176,15 +191,31 @@ void PlayerControlSystem::processMovementInput(float dt) {
     // Update position based on velocity
     transform->position += movement->velocity * dt;
 
-    // Ground collision — follow the terrain heightfield when one is wired,
-    // otherwise fall back to the y=0 plane so standalone tests still work.
-    float groundY = 0.0f;
+    // Ground stick — survival-mode rule: the cat is always on the ground.
+    //
+    // 2026-04-26 SURVIVAL-PORT: prior behaviour was a conditional snap
+    // (`position.y <= groundY && velocity.y <= 0`) that left the cat
+    // floating during the gravity-driven fall any time the spawn pose
+    // sat above terrain. The user observed: "the ground is clearly not
+    // solid and we need gravity you cant fly in real life". With no
+    // jump mechanic in survival, the cleanest fix is to clamp Y to
+    // the heightmap unconditionally each frame — the cat sticks to
+    // terrain, gravity is implicit (terrain dictates Y), and the
+    // visual reads as "walking on uneven ground" instead of
+    // "hovering above geometry".
+    //
+    // When jump comes back online: gate this clamp on
+    // `velocity.y <= 0 || position.y <= groundY` (the original logic)
+    // so a positive velocity from a jump impulse can lift the cat above
+    // terrain. Until then the unconditional snap is the right call.
     if (terrain_ != nullptr) {
-        groundY = terrain_->getHeightAt(transform->position.x, transform->position.z);
-    }
-    if (transform->position.y <= groundY && movement->velocity.y <= 0.0f) {
+        const float groundY = terrain_->getHeightAt(transform->position.x,
+                                                    transform->position.z);
         transform->position.y = groundY;
         movement->land(groundY);
+    } else if (transform->position.y < 0.0F) {
+        transform->position.y = 0.0F;
+        movement->land(0.0F);
     }
 
     // Update health component invincibility
@@ -209,9 +240,26 @@ void PlayerControlSystem::processMovementInput(float dt) {
 }
 
 void PlayerControlSystem::processMouseLook(float dt) {
-    // Get mouse delta
+    // 2026-04-26 SURVIVAL-PORT — locked-behind camera mode (option C in
+    // the camera-UX research, see openclaw/docs/cat-port-session/SESSION-NOTES.md
+    // and the web port BasicScene.tsx CameraFollow). When follow-player-yaw
+    // is enabled, the camera is anchored behind the cat by the cat's
+    // facing yaw — running mouselook ON TOP of that produces a fight
+    // between two systems both writing cameraYaw_, which the user
+    // playtest 2026-04-26 read as "its odd... we are doing it odd".
+    //
+    // The drain step `getMouseDelta` is still called so mouse-delta
+    // accumulation in the Input layer doesn't snowball between frames
+    // — without the drain a future re-enable of mouselook would inherit
+    // a giant first-frame delta from however long the user moved the
+    // mouse while in locked mode. Discarding the result is the cheap
+    // way to keep the system in a consistent state.
     Engine::f64 mouseDx, mouseDy;
     input_->getMouseDelta(mouseDx, mouseDy);
+
+    if (followPlayerYawEnabled_) {
+        return; // Mouselook off in locked-behind mode.
+    }
 
     // Update camera rotation
     cameraYaw_ -= static_cast<float>(mouseDx) * mouseSensitivity_;
@@ -594,17 +642,144 @@ void PlayerControlSystem::updateAutoplay(float dt) {
     movement->applyGravity(GRAVITY, dt);
     transform->position += movement->velocity * dt;
 
-    float groundY = 0.0f;
+    // 2026-04-26 SURVIVAL-PORT — push player out of any tree the new
+    // velocity-integrated position now overlaps. Mirrors the web port's
+    // TerrainCollisionSystem.tsx:84-96 static-object push-out. Forest
+    // already added 18,931 RigidBody colliders to PhysicsWorld, but the
+    // player isn't wired into PhysicsWorld so those colliders did
+    // nothing — this XZ-only post-step push-out is the cheap fix that
+    // makes the user's "really hone in" demand actually hold (they
+    // can't walk through trees anymore). Runs on every frame in both
+    // human-driven and autoplay paths because they share this Physics
+    // tail.
+    pushOutOfTrees();
+
+    // Ground stick — see processMovementInput's matching block for the full
+    // rationale. Survival mode: the cat is always on the ground, no jump
+    // yet, so an unconditional clamp to the heightmap is correct and gives
+    // a much better visual than the old conditional snap (which let the
+    // cat float during the gravity fall after spawn).
     if (terrain_ != nullptr) {
-        groundY = terrain_->getHeightAt(transform->position.x, transform->position.z);
-    }
-    if (transform->position.y <= groundY && movement->velocity.y <= 0.0f) {
+        const float groundY = terrain_->getHeightAt(transform->position.x,
+                                                    transform->position.z);
         transform->position.y = groundY;
         movement->land(groundY);
+    } else if (transform->position.y < 0.0F) {
+        transform->position.y = 0.0F;
+        movement->land(0.0F);
+    }
+
+    // 2026-04-26 SURVIVAL-PORT diag — log player position + groundY at
+    // frames 60/300/600 so cat-verify logs prove where the cat physically
+    // is in world space. User feedback "the cat is under the map" is
+    // ambiguous without a Y trace — without these prints the only clue
+    // is the rendered PPM, which doesn't separate "cat below terrain Y"
+    // from "cat occluded by tree" or "cat off-screen due to camera angle".
+    static int diagFrameCount = 0;
+    ++diagFrameCount;
+    if (diagFrameCount == 60 || diagFrameCount == 300 || diagFrameCount == 600) {
+        const float groundYDiag = terrain_ != nullptr
+            ? terrain_->getHeightAt(transform->position.x, transform->position.z)
+            : 0.0F;
+        Engine::Logger::info(
+            std::string("[PlayerCtrl-DIAG] frame=") + std::to_string(diagFrameCount) +
+            " pos=(" + std::to_string(transform->position.x) +
+            "," + std::to_string(transform->position.y) +
+            "," + std::to_string(transform->position.z) + ")" +
+            " groundY=" + std::to_string(groundYDiag) +
+            " vel=(" + std::to_string(movement->velocity.x) +
+            "," + std::to_string(movement->velocity.y) +
+            "," + std::to_string(movement->velocity.z) + ")");
     }
 
     if (health) {
         health->updateInvincibility(dt);
+    }
+}
+
+// Tree-collision push-out — runs every frame from the Physics tail.
+//
+// Algorithm (lifted from src/components/game/terrain/TerrainCollisionSystem.tsx
+// lines 84-96):
+//
+//   for each nearby tree:
+//     if distance(player.xz, tree.xz) < tree.radius + player.radius:
+//       push player radially out to the edge of (tree.radius + player.radius)
+//
+// Y is intentionally unmodified — the ground-snap step that runs after this
+// keeps the player on the heightmap. We only resolve XZ-plane overlaps so
+// the player can still jump onto / over things later (when jump comes back
+// online).
+//
+// Per-tree-type radii match the GameWorld tree-collider sizes
+// (game/world/GameWorld.cpp:215-235):
+//   Pine: 0.5 * scale * 0.8  (slim trunk, tall)
+//   Oak:  0.5 * scale * 1.2  (wider trunk)
+//   Bush: 0.5 * scale * 0.6  (small)
+//
+// kPlayerRadius is a fixed 0.5 — the cat's body half-width. Tighter than
+// the visible mesh so the player can comfortably approach trees without
+// snapping back from a millimetre away.
+//
+// Search radius 4 m: max tree radius is ~0.8 m + max player travel per
+// frame at 8 m/s × 16 ms = 0.13 m + slack. 4 m absorbs every plausible
+// per-frame overlap and the spatial query is cheap enough at the typical
+// ~5-15 trees within range.
+void PlayerControlSystem::pushOutOfTrees() {
+    if (forest_ == nullptr) {
+        return; // No forest wired (e.g. headless test) — no-op.
+    }
+    auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
+    if (transform == nullptr) {
+        return;
+    }
+
+    constexpr float kPlayerRadius = 0.5F;
+    constexpr float kSearchRadius = 4.0F;
+
+    const auto nearbyIndices = forest_->findTreesInRadius(transform->position, kSearchRadius);
+    if (nearbyIndices.empty()) {
+        return;
+    }
+    const auto& trees = forest_->getInstances();
+
+    for (int idx : nearbyIndices) {
+        if (idx < 0 || idx >= static_cast<int>(trees.size())) {
+            continue;
+        }
+        const auto& tree = trees[static_cast<size_t>(idx)];
+
+        float treeRadius = 0.5F * tree.scale;
+        switch (tree.type) {
+            case Forest::TreeType::Pine: treeRadius *= 0.8F; break;
+            case Forest::TreeType::Oak:  treeRadius *= 1.2F; break;
+            case Forest::TreeType::Bush: treeRadius *= 0.6F; break;
+            default: break;
+        }
+
+        const float minDist = treeRadius + kPlayerRadius;
+        const float dx = transform->position.x - tree.position.x;
+        const float dz = transform->position.z - tree.position.z;
+        const float dist = std::sqrt(dx * dx + dz * dz);
+        if (dist >= minDist) {
+            continue;
+        }
+        if (dist < 1e-4F) {
+            // Player exactly on tree centre — extremely unlikely (would
+            // require spawning into a tree) but we guard against the
+            // divide-by-zero so a degenerate input never produces NaN.
+            // Push +X by the full minDist; ground-snap will keep Y sane.
+            transform->position.x = tree.position.x + minDist;
+            continue;
+        }
+
+        // Radial push to the edge of the combined-radius circle. The
+        // 0.001 slack avoids re-firing on the next frame from a
+        // sub-epsilon overlap.
+        const float push = (minDist - dist) + 0.001F;
+        const float invDist = 1.0F / dist;
+        transform->position.x += dx * invDist * push;
+        transform->position.z += dz * invDist * push;
     }
 }
 
@@ -655,6 +830,63 @@ void PlayerControlSystem::updateCamera(float dt) {
         } else if (cameraYaw_ < -twoPi) {
             cameraYaw_ += twoPi;
         }
+    } else if (followPlayerYawEnabled_) {
+        // 2026-04-26 SURVIVAL-PORT — the camera sits behind the cat.
+        //
+        // Read the player's current facing yaw from its transform.
+        // processMovementInput / updateAutoplay already write
+        // transform->rotation as a Y-axis quaternion using the
+        // `targetYaw = atan2(dir.x, -dir.z)` convention, so we recover
+        // the same scalar here and snap to it.
+        //
+        // We extract the yaw from the quaternion's (w, y) components:
+        // for a pure Y-axis quaternion of angle θ,
+        //   q = (cos(θ/2), 0, sin(θ/2), 0)
+        // and the yaw can be recovered as `2 * atan2(q.y, q.w)`. This
+        // is exact for the Y-only rotations the player writes; if some
+        // future code starts mixing in pitch/roll on the player
+        // rotation we'd want a full 3-axis decomposition, but until
+        // then the cheap form is correct.
+        //
+        // The shortest-arc wrap below handles the seam at ±π: lerping
+        // from +3.10 toward -3.10 should swing 0.08 rad through ±π,
+        // not -6.20 rad the long way around.
+        const auto& playerRot = transform->rotation;
+        const float playerYaw = 2.0F * std::atan2(playerRot.y, playerRot.w);
+
+        // Hard snap. Earlier this branch lerped via
+        // `1 - exp(-rate*dt)`, but the cat's transform.rotation is set
+        // by autoplay/AI in a single frame when picking a new target,
+        // so the cat's facing yaw can jump 90°+ in one frame. A 125 ms
+        // lerp on the camera then leaves us looking at the cat from
+        // the side for ~7 frames after every target switch — exactly
+        // the "clearly not anchored behind the cat" the user reported
+        // 2026-04-26. The web port (BasicScene.tsx CameraFollow) does
+        // a hard snap and accepts that the world rotates around the
+        // cat — which is what "anchored behind the cat" actually
+        // means visually.
+        cameraYaw_ = playerYaw;
+
+        // 2026-04-26 SURVIVAL-PORT diag — print cameraYaw vs playerYaw
+        // every ~5 sec so we can confirm the camera is actually tracking
+        // the cat. User playtest 2026-04-26 said "its clearly not
+        // anchored behind the cat" — this trace will show whether the
+        // tracking math is broken or whether something downstream
+        // (lookAt, offset rotation handedness) is the actual culprit.
+        static int camDiagFrameCount = 0;
+        ++camDiagFrameCount;
+        if (camDiagFrameCount == 60 || camDiagFrameCount == 300 || camDiagFrameCount == 600) {
+            const float playerYawDeg = playerYaw * 180.0F / Engine::Math::PI;
+            const float camYawDeg = cameraYaw_ * 180.0F / Engine::Math::PI;
+            Engine::Logger::info(
+                std::string("[Camera-DIAG] frame=") + std::to_string(camDiagFrameCount) +
+                " playerYaw=" + std::to_string(playerYawDeg) + "deg" +
+                " cameraYaw=" + std::to_string(camYawDeg) + "deg" +
+                " camPitch=" + std::to_string(cameraPitch_ * 180.0F / Engine::Math::PI) + "deg" +
+                " camPos=(" + std::to_string(cameraPosition_.x) +
+                "," + std::to_string(cameraPosition_.y) +
+                "," + std::to_string(cameraPosition_.z) + ")");
+        }
     }
 
     // Calculate camera rotation
@@ -670,11 +902,55 @@ void PlayerControlSystem::updateCamera(float dt) {
     Engine::vec3 desiredCameraPosition = transform->position + rotatedOffset;
 
     // Smooth camera follow
-    cameraPosition_ = Engine::vec3::lerp(
-        cameraPosition_,
-        desiredCameraPosition,
-        cameraFollowSpeed_ * dt
-    );
+    if (followPlayerYawEnabled_) {
+        // Locked-behind mode: hard-snap position too. Lerping position
+        // produces the same lag-then-side-of-cat artifact the yaw
+        // snap above just fixed — the offset is a rigid function of
+        // the player's transform, so we should write it rigidly.
+        cameraPosition_ = desiredCameraPosition;
+    } else {
+        cameraPosition_ = Engine::vec3::lerp(
+            cameraPosition_,
+            desiredCameraPosition,
+            cameraFollowSpeed_ * dt
+        );
+    }
+
+    // 2026-04-26 SURVIVAL-PORT — clamp the camera Y to stay above the
+    // terrain plane.
+    //
+    // User playtest: "if i use my mouse i can go underneath the screen
+    // the shouldnt be possible the ground is solid". The mouse-pitch
+    // input feeds cameraPitch_, which rotates the camera offset around
+    // the X axis. At a steep enough downward pitch the rotated offset
+    // can swing the camera position to a Y below the player AND below
+    // the ground. The lookAt code then dutifully points the camera
+    // upward at the cat from below, so the user sees the world from
+    // beneath the ground plane.
+    //
+    // The clamp keeps the camera at least 0.5 m above the local ground
+    // height (or above y=0 when terrain is the flat-plane override).
+    // 0.5 m is the smallest clearance that doesn't visibly clip the
+    // camera into the grass texture; tighter than that and the
+    // near-clip frustum starts intersecting the ground geometry,
+    // producing a chunk of black at the bottom of the screen.
+    //
+    // Sampling terrain at the CAMERA's xz (not the player's) means a
+    // long-back camera that's drifted into a future-pothole-or-hill
+    // area still respects the terrain it's actually standing over,
+    // not the terrain under the cat. With the current flat-plane
+    // override this distinction is meaningless, but it'll matter when
+    // elevated terrain comes back online.
+    constexpr float kMinCameraGroundClearanceMetres = 0.5F;
+    float groundUnderCamera = 0.0F;
+    if (terrain_ != nullptr) {
+        groundUnderCamera = terrain_->getHeightAt(cameraPosition_.x,
+                                                  cameraPosition_.z);
+    }
+    const float minCameraY = groundUnderCamera + kMinCameraGroundClearanceMetres;
+    if (cameraPosition_.y < minCameraY) {
+        cameraPosition_.y = minCameraY;
+    }
 
     // ----------------------------------------------------------------------
     // Camera bob synced to player locomotion speed.

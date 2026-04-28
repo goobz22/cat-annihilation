@@ -156,7 +156,18 @@ struct CommandLineArgs {
     // MeshSubmissionSystem::SetEnableCpuSkinning at startup; the
     // [MeshSubmission] gate state is logged so the playtest log shows
     // unambiguously which path is live.
-    bool enableCpuSkinning = false;
+    // 2026-04-26 SURVIVAL-PORT — split into explicit on/off + resolved
+    // value so the autoplay default can flip ON without losing the
+    // ability for callers (perf-gate, golden-image runs) to force it
+    // off via --no-cpu-skinning. The original perf-halt note above was
+    // written when 17-20 skinned NPCs were on screen; survival mode
+    // has NPCs disabled (just the player + 3-5 dogs in early waves),
+    // which is well within the CPU-skinning budget. Without this
+    // default the autoplay cat renders as a sliding T-pose, exactly
+    // the "cats legs arent moving when it walks" the user flagged.
+    bool enableCpuSkinning            = false;  // resolved after parsing
+    bool enableCpuSkinningExplicitOn  = false;
+    bool enableCpuSkinningExplicitOff = false;
 
     // --starting-wave <N>: bypass wave 1 and seed the WaveSystem to spawn
     // wave N as the first wave in autoplay mode. Default 1 = unchanged
@@ -382,7 +393,13 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             // the renderer is up via
             // `MeshSubmissionSystem::SetEnableCpuSkinning(true)` — see the
             // setter docblock in MeshSubmissionSystem.hpp for the WHY.
-            args.enableCpuSkinning = true;
+            args.enableCpuSkinningExplicitOn = true;
+        } else if (arg == "--no-cpu-skinning") {
+            // Force CPU skinning off even when --autoplay would otherwise
+            // turn it on by default. Useful for high-NPC perf captures or
+            // if a future change reintroduces the >15-skinned-entity
+            // bottleneck and a repro needs the bind-pose fallback.
+            args.enableCpuSkinningExplicitOff = true;
         } else if (arg == "--day-night-rate") {
             // Space-separated form: --day-night-rate <seconds>.
             // Plumbed straight into ScenePass::SetDayCycleSeconds() after
@@ -439,15 +456,39 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
     // Resolve the cinematic orbit gate AFTER the loop so the autoplay-
     // default-on rule can see the final --autoplay state regardless of
     // argv ordering. Explicit on / explicit off both override the rule.
+    // 2026-04-26 SURVIVAL-PORT — same explicit-on/off/autoplay-default
+    // shape as cinematic-orbit. NPCs are disabled in survival, so the
+    // historical 17-20-skinned-entity perf cliff does not apply; turning
+    // skinning on by default makes the player cat's legs actually
+    // animate, which the user flagged as broken in playtest.
+    if (args.enableCpuSkinningExplicitOff) {
+        args.enableCpuSkinning = false;
+    } else if (args.enableCpuSkinningExplicitOn) {
+        args.enableCpuSkinning = true;
+    } else {
+        // 2026-04-26 SURVIVAL-PORT iter 3 — DEFAULT OFF in autoplay too.
+        // The CPU-skinning path produces a cat lying on its back (legs in
+        // the air, paws planted on the ground), confirmed by user
+        // playtest. Bind-pose rendering shows the cat upright and
+        // recognizable (cat-verify row #107 PPM). Until the orientation
+        // bug in the skinning matrix chain is found and fixed, default
+        // to bind-pose so the cat at least stands upright. Opt back in
+        // with --enable-cpu-skinning when investigating the bug.
+        args.enableCpuSkinning = false;
+    }
+
     if (args.cinematicOrbitExplicitOff) {
         args.cinematicOrbitCamera = false;
     } else if (args.cinematicOrbitExplicitOn) {
         args.cinematicOrbitCamera = true;
-    } else if (args.autoplay) {
-        // Autoplay is the portfolio / smoke-run context, so the orbit is
-        // a strict win there. Manual play stays at the legacy default.
-        args.cinematicOrbitCamera = true;
     } else {
+        // 2026-04-26 SURVIVAL-PORT — autoplay used to default the orbit ON
+        // because the orbit was a portfolio / smoke-run win for static
+        // demos. With the survival-port follow-cat-yaw camera live (see
+        // PlayerControlSystem::updateCamera), an orbiting camera fights
+        // the yaw-tracking and produces "the cat turns sidways and shit"
+        // (verbatim user feedback). Default OFF in all modes; opt back in
+        // with --cinematic-orbit-camera for a fixed portfolio capture.
         args.cinematicOrbitCamera = false;
     }
 
@@ -569,6 +610,17 @@ int main(int argc, char* argv[]) {
     windowConfig.fullscreen = gameConfig.graphics.fullscreen;
     windowConfig.vsync = gameConfig.graphics.vsync;
     windowConfig.resizable = true;
+    // 2026-04-26 SURVIVAL-PORT — when --autoplay is set, the user is
+    // typically not actively at the game window (cat-verify smoke
+    // tests, recordings running alongside other apps). Don't steal
+    // foreground focus or pull the mouse cursor in front of
+    // whatever they were doing. The Window::Config flag below sets
+    // GLFW_FOCUSED=FALSE + GLFW_FOCUS_ON_SHOW=FALSE — visible window
+    // (so frame-dump still captures) but inert vs. user's current
+    // task. User directive: "cat annihiliation is tkaing control of
+    // my mouse when you launch it run it in background for your
+    // tests so it doesnt do it".
+    windowConfig.noFocusSteal = cmdArgs.autoplay;
 
     Engine::Window window(windowConfig);
     Engine::Logger::info("Window created: " +
@@ -771,8 +823,16 @@ int main(int argc, char* argv[]) {
                              : 0.001F)) +
                     " s per revolution)");
             } else {
+                // 2026-04-26 SURVIVAL-PORT — when orbit is off in autoplay,
+                // enable follow-player-yaw so the camera tracks the cat's
+                // facing instead of staying world-axis-locked. This is the
+                // behaviour the user asked for in playtest: "shift with the
+                // direction the cat is facing the world around it so we are
+                // always facing forwards". Default lag (8 rad/s, ~125 ms
+                // half-life) gives a smooth chase without snap.
+                playerControl->setFollowPlayerYaw(true, 8.0F);
                 Engine::Logger::info(
-                    "[cli] --cinematic-orbit-camera: off (legacy fixed third-person follow)");
+                    "[cli] camera: follow-player-yaw enabled (lag=8 rad/s ~125ms half-life)");
             }
         } else {
             Engine::Logger::warn("[cli] --autoplay: PlayerControlSystem not available, cat will be idle");

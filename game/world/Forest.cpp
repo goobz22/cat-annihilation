@@ -253,10 +253,18 @@ bool Forest::isValidPlacement(const Engine::vec3& position) const {
         return false;
     }
 
-    // Check height constraints
-    if (position.y < m_params.minHeight || position.y > m_params.maxHeight) {
-        return false;
-    }
+    // 2026-04-26 SURVIVAL-PORT — height-constraint check disabled.
+    //
+    // The default Params (minHeight=5, maxHeight=45) was tuned for the
+    // CUDA-elevated terrain with heights in roughly [0, 50], excluding
+    // valley floors and mountain peaks. Pairing with the flat-plane
+    // override in Terrain::downloadFromGpu (every heightmap value forced
+    // to 0), the height check would reject EVERY tree position because
+    // 0 < minHeight=5 — the forest would generate empty and the user
+    // would see a bare flat plane with no trees. Skipping the check
+    // lets trees populate the flat plane until elevated terrain comes
+    // back online, at which point this override + the matching one in
+    // Terrain.cpp can be removed together.
 
     // Check slope
     Engine::vec3 normal = m_terrain->getNormalAt(position.x, position.z);

@@ -34,6 +34,17 @@ public:
         bool resizable = true;
         bool vsync = true;
         bool fullscreen = false;
+        // 2026-04-26 SURVIVAL-PORT — when true, the window is created
+        // with GLFW_FOCUSED=FALSE and GLFW_FOCUS_ON_SHOW=FALSE so it
+        // doesn't steal foreground focus or pull the user's mouse
+        // cursor out of whatever they were doing. Used by --autoplay
+        // (cat-verify subprocesses, recording scripts, demos run
+        // alongside other apps). Has no effect on rendering — the
+        // swapchain still presents and frame-dump still works.
+        // User directive: "cat annihiliation is tkaing control of my
+        // mouse when you launch it run it in background for your
+        // tests so it doesnt do it".
+        bool noFocusSteal = false;
     };
 
     /**

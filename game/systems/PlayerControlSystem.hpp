@@ -137,6 +137,23 @@ public:
     void setTerrain(const Terrain* terrain) { terrain_ = terrain; }
 
     /**
+     * Set forest reference so the player can be pushed out of tree colliders
+     * each frame. Without this, the 18,931 tree colliders in PhysicsWorld
+     * are invisible to the player movement system — the player walks through
+     * trees because nothing checks tree positions vs player position. Mirrors
+     * the web port's TerrainCollisionSystem.tsx static-object push-out at
+     * src/components/game/terrain/TerrainCollisionSystem.tsx:84-96.
+     *
+     * Pass nullptr (the default) to disable tree collision entirely (e.g.
+     * for a debug "no-clip" mode). The Physics tail no-ops cleanly in that
+     * case.
+     *
+     * 2026-04-26 SURVIVAL-PORT: explicit user directive
+     * ("make sure the terrain i cant walk through and really hone in").
+     */
+    void setForest(const class Forest* forest) { forest_ = forest; }
+
+    /**
      * Enable or disable autoplay AI. When enabled the player ignores
      * keyboard/mouse input and is driven by a minimal "chase nearest enemy,
      * attack in range" policy. Used by the `--autoplay` CLI smoke run and by
@@ -202,6 +219,38 @@ public:
      */
     bool isCinematicOrbitEnabled() const { return cinematicOrbitEnabled_; }
 
+    /**
+     * @brief Enable / disable "camera follows the cat's facing direction".
+     *
+     * 2026-04-26 SURVIVAL-PORT. When enabled, updateCamera() lerps
+     * cameraYaw_ toward the player's transform-yaw every frame, so the
+     * camera always sits roughly behind the cat regardless of where the
+     * cat turns. When the cat pivots to face a new dog, the camera
+     * follows. The default `lagPerSecond` value is tuned so the camera
+     * doesn't snap (which would feel jarring) but doesn't drift (which
+     * would let the cat run sideways out of frame).
+     *
+     * Mutually exclusive with cinematic-orbit in the sense that orbit
+     * advances cameraYaw_ at a constant rate while follow-yaw drives it
+     * from the player — running both at once would oscillate. The
+     * autoplay default disables orbit and enables follow-yaw; toggling
+     * orbit on via --cinematic-orbit-camera also disables follow-yaw at
+     * the call site (game/main.cpp gate).
+     *
+     * @param enabled        true to track player yaw each frame.
+     * @param lagPerSecond   Exponential follow rate. 8.0 → ~0.125 s
+     *                       half-life; the camera covers half the
+     *                       remaining angle every ~125 ms. Higher values
+     *                       feel snappier (good for chase), lower feels
+     *                       cinematic. 0 freezes yaw at its current value.
+     */
+    void setFollowPlayerYaw(bool enabled, float lagPerSecond = 8.0F);
+
+    /**
+     * @return true when follow-player-yaw is driving cameraYaw_ each frame.
+     */
+    bool isFollowPlayerYawEnabled() const { return followPlayerYawEnabled_; }
+
 private:
     // Input processing
     void processMovementInput(float dt);
@@ -221,6 +270,14 @@ private:
 
     // Camera management
     void updateCamera(float dt);
+
+    // 2026-04-26 SURVIVAL-PORT — radial XZ push-out of any tree the
+    // player overlaps. Called from the Physics tail in
+    // {processMovementInput, updateAutoplay} after velocity-integrated
+    // position update. No-op when forest_ is null. Mirrors the web
+    // port's TerrainCollisionSystem.tsx static-object push (radius
+    // tree + 0.5m player, push to the edge of the combined circle).
+    void pushOutOfTrees();
 
     // Dodge double-tap detection
     struct DoubleTapState {
@@ -242,6 +299,12 @@ private:
     class CombatSystem* combatSystem_ = nullptr;
     class ElementalMagicSystem* magicSystem_ = nullptr;  // Non-owning, optional.
     const Terrain* terrain_ = nullptr;
+
+    // Non-owning Forest reference used by the Physics-tail tree-collision
+    // push-out (see processTreeCollision() in PlayerControlSystem.cpp).
+    // Optional — null = no tree collision check, player walks through trees
+    // (the regression we are fixing here).
+    const class Forest* forest_ = nullptr;
 
     // Autoplay spell cadence: a level-1 single-target ranged spell is cast
     // at most every kAutoplayCastInterval seconds, guaranteeing a steady
@@ -345,7 +408,14 @@ private:
     // plane (0.1 m) at extreme yaw + pitch combinations during an
     // autoplay sprint, which would crop the model worse than the
     // distance fix achieves. 2.8 m is the empirical break-even.
-    Engine::vec3 cameraOffset_ = Engine::vec3(0.0f, 1.5f, 2.8f);
+    // 2026-04-26 SURVIVAL-PORT — camera offset matched to web port:
+    // src/components/game/BasicScene.tsx:193 uses
+    // `<PerspectiveCamera position={[0, 12, 15]} fov={75}>`. The pre-port
+    // value (0, 1.5, 2.8) zoomed too tight on the cat — the user
+    // explicitly called this out as "way too close to the cat ... should
+    // be a proper 3rd person view". 12 up + 15 back = ~19 unit hypot
+    // at ~38° pitch, matches the web port shot framing.
+    Engine::vec3 cameraOffset_ = Engine::vec3(0.0f, 3.0f, 6.0f);
     Engine::vec3 cameraPosition_ = Engine::vec3(0.0f, 0.0f, 0.0f);
     Engine::vec3 cameraForward_ = Engine::vec3(0.0f, 0.0f, -1.0f);
     float cameraYaw_ = 0.0f;       // Horizontal rotation (radians)
@@ -472,6 +542,35 @@ private:
     // separate boolean.
     bool  cinematicOrbitEnabled_  = false;
     float cinematicOrbitYawRate_  = 0.5F;  // rad/s, ~28.6°/s, ~12.6 s per revolution
+
+    // 2026-04-26 SURVIVAL-PORT — follow-player-yaw camera state.
+    //
+    // When followPlayerYawEnabled_ is true, updateCamera() reads the
+    // player's transform yaw (the same atan2-based yaw written by
+    // processMovementInput / updateAutoplay when the cat turns to face
+    // a target) and lerps cameraYaw_ toward it at exponential rate
+    // followPlayerYawLagPerSec_. This sits the camera roughly behind
+    // the cat at all times: when the cat pivots to attack a dog on its
+    // left, the camera follows.
+    //
+    // WHY this is a sibling state of cinematicOrbit and not a
+    // replacement: the legacy cinematic-orbit demo mode is still useful
+    // for portfolio captures (a single fixed yaw-advance produces a
+    // clean revolving turntable shot). Having both modes available
+    // lets the autoplay default flip to follow-yaw without breaking
+    // anyone who launches with --cinematic-orbit-camera explicitly.
+    //
+    // WHY exponential lerp (lagPerSec) and not linear lerp or instant:
+    //   - linear lerp at fixed dt-multiplied rate snaps when dt is
+    //     large and crawls when dt is small, which produces uneven
+    //     camera tracking under variable frame pacing.
+    //   - instant snap (cameraYaw_ = playerYaw) gives the camera
+    //     teleport feel — the cat turns and the camera teleports.
+    //   - exponential lerp `cameraYaw_ += (target - cameraYaw_) *
+    //     (1 - exp(-rate * dt))` is frame-rate independent and feels
+    //     natural — the half-life is `ln(2) / rate` regardless of dt.
+    bool  followPlayerYawEnabled_   = false;
+    float followPlayerYawLagPerSec_ = 8.0F;
     // Movement parameters
     float movementDeadzone_ = 0.1f;
 

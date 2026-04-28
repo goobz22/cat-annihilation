@@ -40,6 +40,21 @@ Window::Window(const Config& config)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, config.resizable ? GLFW_TRUE : GLFW_FALSE);
 
+    // 2026-04-26 SURVIVAL-PORT — autoplay/background mode opts out of
+    // focus stealing. Without these hints GLFW creates a window that
+    // steals foreground from whatever the user is doing — disruptive
+    // when cat-verify spawns the exe in the middle of a play session,
+    // a recording, or just normal desktop work.
+    //
+    // GLFW_FOCUSED=FALSE: don't request focus when the window appears.
+    // GLFW_FOCUS_ON_SHOW=FALSE: don't grab focus when the window is
+    //   first shown (some platforms re-request focus at show-time
+    //   even if FOCUSED was false at create-time).
+    if (config.noFocusSteal) {
+        glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+        glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+    }
+
     // Determine monitor for fullscreen
     GLFWmonitor* monitor = config.fullscreen ? glfwGetPrimaryMonitor() : nullptr;
 
