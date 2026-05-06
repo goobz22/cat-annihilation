@@ -436,10 +436,20 @@ public:
             return false;
         }
 
-        Key last_key = dense_keys_.back();
-        dense_keys_[dense_idx] = last_key;
-        dense_values_[dense_idx] = std::move(dense_values_.back());
-        sparse_[to_index(last_key)] = dense_idx;
+        // Swap-with-last erase. If the element being erased IS the last
+        // element, swapping with itself is a self-move-assignment: the
+        // standard says it leaves the object "valid but unspecified", and
+        // libstdc++ / MSVC happen to handle std::string + std::vector
+        // gracefully — but a user-defined Value with a hand-rolled move-
+        // assignment that lacks an `if (this != &other)` guard will silently
+        // corrupt itself before pop_back() runs. Skip the swap in that case
+        // and just pop.
+        if (dense_idx + 1 != dense_keys_.size()) {
+            Key last_key = dense_keys_.back();
+            dense_keys_[dense_idx] = last_key;
+            dense_values_[dense_idx] = std::move(dense_values_.back());
+            sparse_[to_index(last_key)] = dense_idx;
+        }
 
         dense_keys_.pop_back();
         dense_values_.pop_back();

@@ -10,6 +10,40 @@
 namespace Engine {
 
 /**
+ * SlotMapHandle - generational handle into a SlotMap<T>.
+ *
+ * Hoisted out of SlotMap<T> so std::hash can specialise on it. The previous
+ * `template<typename T> std::hash<Engine::SlotMap<T>::Handle>` form was a
+ * non-deduced context per [temp.deduct.type]/5: T appears only inside a
+ * dependent nested-name-specifier, so the compiler cannot deduce T from the
+ * hash key, the primary template is never selected, and any caller that
+ * tried `std::unordered_map<SlotMap<E>::Handle, V>` got a "no match for
+ * std::hash" error. Handle has zero T dependence anyway — it is just two
+ * uint32_ts — so making it a regular non-template struct lets std::hash use
+ * an ordinary specialization. Each SlotMap<T> still aliases it as
+ * SlotMap<T>::Handle so existing call-sites keep working unchanged.
+ */
+struct SlotMapHandle {
+    uint32_t index;
+    uint32_t generation;
+
+    constexpr SlotMapHandle() : index(UINT32_MAX), generation(0) {}
+    constexpr SlotMapHandle(uint32_t idx, uint32_t gen) : index(idx), generation(gen) {}
+
+    [[nodiscard]] constexpr bool is_valid() const noexcept {
+        return index != UINT32_MAX;
+    }
+
+    [[nodiscard]] constexpr bool operator==(const SlotMapHandle& other) const noexcept {
+        return index == other.index && generation == other.generation;
+    }
+
+    [[nodiscard]] constexpr bool operator!=(const SlotMapHandle& other) const noexcept {
+        return !(*this == other);
+    }
+};
+
+/**
  * SlotMap - Handle-based container with generational indices
  *
  * Features:
@@ -25,28 +59,12 @@ template<typename T>
 class SlotMap {
 public:
     /**
-     * Handle type - uniquely identifies an element
-     * Contains index and generation to detect use-after-free
+     * Handle type - uniquely identifies an element.
+     * Aliased to the non-template Engine::SlotMapHandle (see comment above)
+     * so std::hash<Handle> resolves to a regular non-template specialisation.
+     * Existing call-sites that spell `SlotMap<T>::Handle` keep working.
      */
-    struct Handle {
-        uint32_t index;
-        uint32_t generation;
-
-        constexpr Handle() : index(UINT32_MAX), generation(0) {}
-        constexpr Handle(uint32_t idx, uint32_t gen) : index(idx), generation(gen) {}
-
-        [[nodiscard]] constexpr bool is_valid() const noexcept {
-            return index != UINT32_MAX;
-        }
-
-        [[nodiscard]] constexpr bool operator==(const Handle& other) const noexcept {
-            return index == other.index && generation == other.generation;
-        }
-
-        [[nodiscard]] constexpr bool operator!=(const Handle& other) const noexcept {
-            return !(*this == other);
-        }
-    };
+    using Handle = SlotMapHandle;
 
 private:
     struct Slot {
@@ -319,11 +337,16 @@ public:
 
 } // namespace Engine
 
-// Hash support for Handle
+// Hash support for Handle.
+//
+// Specialisation is on the non-template Engine::SlotMapHandle (see the type
+// definition above for the [temp.deduct.type]/5 rationale). One spelling
+// covers SlotMap<T>::Handle for every T, since they all alias the same
+// underlying struct.
 namespace std {
-    template<typename T>
-    struct hash<Engine::SlotMap<T>::Handle> {
-        size_t operator()(const typename Engine::SlotMap<T>::Handle& handle) const noexcept {
+    template<>
+    struct hash<Engine::SlotMapHandle> {
+        size_t operator()(const Engine::SlotMapHandle& handle) const noexcept {
             return static_cast<size_t>(handle.index) ^ (static_cast<size_t>(handle.generation) << 32);
         }
     };

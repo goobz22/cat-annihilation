@@ -83,13 +83,25 @@ struct alignas(16) vec3 {
     vec3(float x, float y, float z) : x(x), y(y), z(z), _padding(0.0f) {}
     vec3(const vec2& v, float z) : x(v.x), y(v.y), z(z), _padding(0.0f) {}
 
-    // SIMD-accelerated operations
+    // SIMD-accelerated operations.
+    //
+    // _padding occupies lane 4 of the 16-byte vec3 so the type is alignas(16)
+    // and the 4-float SIMD load/store sequences are well-aligned. We force
+    // lane 4 of every result back to 0.0f because operator/ on a zero scalar
+    // computes (_padding / 0) = (0 / 0) = NaN in lane 4, and any later SIMD
+    // op on the result re-loads that NaN, propagates it, and stores it back —
+    // poisoning vec3s that look fine to scalar code but hand a NaN to any
+    // downstream reader that widens lane 4 to vec4 (the SoA-style copy paths
+    // in the ribbon-trail kernel and particle SoA). Storing 0.0f after each
+    // op is one MOV; cheaper than _mm_blend_ps and safer than relying on
+    // every consumer to ignore lane 4.
     vec3 operator+(const vec3& other) const {
         __m128 a = _mm_load_ps(&x);
         __m128 b = _mm_load_ps(&other.x);
         __m128 result = _mm_add_ps(a, b);
         vec3 ret;
         _mm_store_ps(&ret.x, result);
+        ret._padding = 0.0f;
         return ret;
     }
 
@@ -99,6 +111,7 @@ struct alignas(16) vec3 {
         __m128 result = _mm_sub_ps(a, b);
         vec3 ret;
         _mm_store_ps(&ret.x, result);
+        ret._padding = 0.0f;
         return ret;
     }
 
@@ -108,6 +121,7 @@ struct alignas(16) vec3 {
         __m128 result = _mm_mul_ps(a, s);
         vec3 ret;
         _mm_store_ps(&ret.x, result);
+        ret._padding = 0.0f;
         return ret;
     }
 
@@ -117,6 +131,7 @@ struct alignas(16) vec3 {
         __m128 result = _mm_div_ps(a, s);
         vec3 ret;
         _mm_store_ps(&ret.x, result);
+        ret._padding = 0.0f;
         return ret;
     }
 
@@ -132,6 +147,7 @@ struct alignas(16) vec3 {
         __m128 b = _mm_load_ps(&other.x);
         __m128 result = _mm_add_ps(a, b);
         _mm_store_ps(&x, result);
+        _padding = 0.0f; // keep lane 4 quiescent — see operator+ comment
         return *this;
     }
 
@@ -140,6 +156,7 @@ struct alignas(16) vec3 {
         __m128 b = _mm_load_ps(&other.x);
         __m128 result = _mm_sub_ps(a, b);
         _mm_store_ps(&x, result);
+        _padding = 0.0f;
         return *this;
     }
 
@@ -148,6 +165,7 @@ struct alignas(16) vec3 {
         __m128 s = _mm_set1_ps(scalar);
         __m128 result = _mm_mul_ps(a, s);
         _mm_store_ps(&x, result);
+        _padding = 0.0f;
         return *this;
     }
 
@@ -156,6 +174,7 @@ struct alignas(16) vec3 {
         __m128 s = _mm_set1_ps(scalar);
         __m128 result = _mm_div_ps(a, s);
         _mm_store_ps(&x, result);
+        _padding = 0.0f;
         return *this;
     }
 

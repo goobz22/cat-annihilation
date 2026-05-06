@@ -222,6 +222,19 @@ set(UNIT_TEST_SOURCES
     # negative score, 8-bit round-trip through PPM is byte-exact, and the
     # reader rejects unsupported variants (P3 ASCII, non-255 maxval).
     unit/test_image_compare.cpp
+    # test_containers_correctness.cpp pins the correctness contract for the
+    # four highest-PageRank container/math headers in the engine
+    # (HashMap.hpp, SlotMap.hpp, SparseSet.hpp, Vector.hpp). Header-only and
+    # STL-only — no GPU, no Vulkan, no engine-runtime dependency — so it
+    # links into the no-GPU test build with no extra plumbing. Five
+    # invariants are locked: HashMap::erase backward-shift preserves
+    # value_type lifetime (no byte-copy UB on std::string / unique_ptr),
+    # HashMap stores the full size_t hash (no uint32_t truncation collision
+    # storm on 64-bit IDs), SlotMap<T>::Handle is hashable via std::hash
+    # (regression-locks the non-deducible-context fix), SparseSetWithData
+    # erase of the last element does not self-move, and vec3's _padding
+    # lane stays at 0.0f after divide-by-zero (no NaN poisoning of lane 4).
+    unit/test_containers_correctness.cpp
     # unit/test_quest_system.cpp     # SKIPPED — references Clan::Shadow/Warrior/Hunter/Mystic, but the
                                      #           real enum class Clan (game/systems/story_mode.hpp) is
                                      #           { None, MistClan, StormClan, EmberClan, FrostClan }. The

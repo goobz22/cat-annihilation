@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <functional>
 #include <stdexcept>
@@ -50,7 +51,15 @@ private:
 
     struct Bucket {
         alignas(value_type) uint8_t storage[sizeof(value_type)];
-        uint32_t hash;
+        // We store the FULL std::hash<K> result (size_t) rather than a
+        // truncated uint32_t. Truncation looks innocuous but hits a real
+        // 50%-collision pathology for keys whose std::hash is identity
+        // (libstdc++ / libc++ / MSVC all use identity for std::hash<uint64_t>):
+        // any 64-bit ID and its low-32 alias would hash-equal here and force
+        // a full key compare on every probe. Bucket already pays alignment
+        // padding to value_type's alignment, so widening hash to size_t is
+        // free in most layouts and removes the foot-gun entirely.
+        size_t hash;
         uint32_t distance; // Distance from ideal position (for Robin Hood)
         bool occupied;
 
@@ -129,14 +138,25 @@ private:
         }
     }
 
-    bool insert_internal(value_type&& kv, uint32_t hash) {
+    bool insert_internal(value_type&& kv_in, size_t hash) {
+        // Stash the incoming pair into an std::optional so the Robin Hood
+        // swap path can "reassign" it across loop iterations. value_type is
+        // std::pair<const K, V>, which is NOT move-assignable: the const K
+        // member can't be reassigned member-wise, so the previous form
+        // (`kv = std::move(temp);`) fails to compile the moment the
+        // template is instantiated with a real (K, V). std::optional<T>
+        // sidesteps the assignment requirement entirely — reset() destroys
+        // in place and emplace() placement-news a fresh value into the
+        // same buffer, which is exactly the lifecycle the swap path needs.
+        std::optional<value_type> kv(std::move(kv_in));
+
         size_type idx = index_from_hash(hash);
         uint32_t distance = 0;
 
         while (true) {
             if (!buckets_[idx].occupied) {
                 // Empty slot found
-                new (buckets_[idx].storage) value_type(std::move(kv));
+                new (buckets_[idx].storage) value_type(std::move(*kv));
                 buckets_[idx].hash = hash;
                 buckets_[idx].distance = distance;
                 buckets_[idx].occupied = true;
@@ -152,9 +172,12 @@ private:
 
                 value_type temp(std::move(*buckets_[idx].ptr()));
                 buckets_[idx].ptr()->~value_type();
-                new (buckets_[idx].storage) value_type(std::move(kv));
-                kv = std::move(temp);
-            } else if (buckets_[idx].hash == hash && key_eq_(buckets_[idx].ptr()->first, kv.first)) {
+                new (buckets_[idx].storage) value_type(std::move(*kv));
+                // Replace optional payload via destroy-then-construct, the
+                // const-K-safe equivalent of `kv = std::move(temp);`.
+                kv.reset();
+                kv.emplace(std::move(temp));
+            } else if (buckets_[idx].hash == hash && key_eq_(buckets_[idx].ptr()->first, kv->first)) {
                 // Key already exists
                 return false;
             }
@@ -167,7 +190,7 @@ private:
     size_type find_index(const K& key) const {
         if (capacity_ == 0) return capacity_;
 
-        uint32_t hash = hash_key(key);
+        size_t hash = hash_key(key);
         size_type idx = index_from_hash(hash);
         uint32_t distance = 0;
 
@@ -407,7 +430,7 @@ public:
             grow();
         }
 
-        uint32_t hash = hash_key(kv.first);
+        size_t hash = hash_key(kv.first);
         size_type existing = find_index(kv.first);
 
         if (existing != capacity_) {
@@ -430,7 +453,7 @@ public:
             grow();
         }
 
-        uint32_t hash = hash_key(kv.first);
+        size_t hash = hash_key(kv.first);
         size_type existing = find_index(kv.first);
 
         if (existing != capacity_) {
@@ -463,11 +486,30 @@ public:
         buckets_[idx].occupied = false;
         --size_;
 
-        // Backward shift deletion to maintain Robin Hood invariants
+        // Backward-shift deletion to maintain Robin Hood invariants.
+        //
+        // CRITICAL: Bucket holds value_type inside an aligned uint8_t buffer,
+        // so the compiler-generated `Bucket::operator=` would byte-copy the
+        // storage[] array — bypassing value_type's copy/move constructor. For
+        // trivially-copyable value_type that is harmless, but a value_type
+        // with internal pointers (std::string SSO, std::unique_ptr,
+        // DynamicArray) ends up with a byte-clone that aliases the original's
+        // owned memory; the original is then marked unoccupied and never
+        // destructed, so the next clear() / erase() walks a dangling
+        // self-pointer (canonical heap-corruption pattern) and the engine
+        // leaks one heap allocation per shifted slot.
+        //
+        // We therefore shift each slot by hand: placement-new-move into the
+        // freshly-vacated `idx` slot, destruct the source at `next_idx`, and
+        // copy the integer hash/distance bookkeeping separately.
         size_type next_idx = (idx + 1) & (capacity_ - 1);
         while (buckets_[next_idx].occupied && buckets_[next_idx].distance > 0) {
-            buckets_[idx] = buckets_[next_idx];
-            --buckets_[idx].distance;
+            new (buckets_[idx].storage) value_type(std::move(*buckets_[next_idx].ptr()));
+            buckets_[next_idx].ptr()->~value_type();
+
+            buckets_[idx].hash = buckets_[next_idx].hash;
+            buckets_[idx].distance = buckets_[next_idx].distance - 1;
+            buckets_[idx].occupied = true;
 
             buckets_[next_idx].occupied = false;
             idx = next_idx;
