@@ -10,7 +10,9 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    // 3100, NOT 3000 — ThothOS's dev server owns :3000 on this machine
+    // (operator directive 2026-07-16). Keep this port clear of 3000/3007.
+    port: 3100,
     open: true,
   },
   build: {
