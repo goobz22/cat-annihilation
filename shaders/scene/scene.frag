@@ -82,13 +82,6 @@ const vec3  FOG_COLOR = vec3(76.0/255.0, 97.0/255.0, 86.0/255.0);
 const float FOG_NEAR  = 30.0;
 const float FOG_FAR   = 150.0;
 
-// FOG_HEIGHT_FALLOFF makes the fog thinner as we look up — the haze
-// near the horizon is genuine (lots of atmosphere between camera and
-// far terrain at eye level), but a fragment whose world-space normal
-// points straight up wants slightly less haze so the silhouette of
-// nearby ridges against the sky stays crisp. Cap loss at 0.4×.
-const float FOG_NORMAL_FALLOFF = 0.4;
-
 // Tile size in world units — must match
 // CatGame::GrassTextureBuffer::TileSize. If a future iteration changes
 // the tile span (e.g. dropping to 250 for tighter detail), update both
@@ -120,8 +113,13 @@ void main() {
     vec2 cameraXZ = pcf.cameraPos.xz;
     float horizDist = length(worldXZ - cameraXZ);
 
+    // No normal-based falloff here: an earlier iteration scaled the fog
+    // down by 0.4 * n.y to keep upward-facing ridge tops crisp, but the
+    // survival terrain is a FLAT plane whose every normal is (0,1,0) —
+    // the falloff silently capped ground fog at 60% and the horizon
+    // never saturated to the web reference's #4c6156 (three.js linear
+    // fog has no such term; ForestEnvironment.tsx fog is pure distance).
     float fogFactor = clamp((horizDist - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0.0, 1.0);
-    fogFactor *= 1.0 - FOG_NORMAL_FALLOFF * max(n.y, 0.0);
 
     // Blend toward FOG_COLOR (forest haze, NOT sky). The web port's
     // sky and fog are different colors; mirroring that keeps the
