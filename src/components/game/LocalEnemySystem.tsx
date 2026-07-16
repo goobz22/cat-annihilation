@@ -113,9 +113,18 @@ const LocalDogEnemy = ({ enemy, onDamage, onKill, allEnemies }: {
   const ENEMY_SEPARATION_RADIUS = 1.5;
   const SEPARATION_FORCE = 3.0;
 
+  // Guard against re-entrant onKill calls. When an enemy's health hits 0, useFrame
+  // continues to fire for the remaining frames until React removes this component from
+  // the tree on the next render — without this guard we would call onKill (which does
+  // setState + global mutations) once per frame, spamming the system.
+  const killNotifiedRef = useRef(false);
+
   useFrame((_, delta) => {
     if (enemy.health <= 0) {
-      onKill(enemy.id);
+      if (!killNotifiedRef.current) {
+        killNotifiedRef.current = true;
+        onKill(enemy.id);
+      }
       return;
     }
 

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, memo } from 'react';
+import React, { useRef, useEffect, useState, memo, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -67,27 +67,51 @@ const CustomizableCatMesh = memo(({
   const group = useRef<THREE.Group>(null);
   const bodyGroup = useRef<THREE.Group>(null);
   const catGroup = useRef<THREE.Group>(null);
-  
-  // Animation state
-  const [animState, setAnimState] = useState({
-    walkTime: 0,
-    attackTime: 0,
-    defendTime: 0,
-    tailRotation: 0,
-  });
-  
-  // Merge with defaults
-  const config = { ...defaultCustomization, ...customization };
-  
+
+  // Animation accumulators live in refs, NOT state. Storing per-frame timers in
+  // React state forced a re-render every frame (setAnimState was called from inside
+  // useFrame), which in turn re-derived `config` (a fresh object literal) and re-ran the
+  // fur-layer useEffect 60×/s — allocating ~20 ShaderMaterial+Mesh per frame with no
+  // disposal. Refs keep the timers without triggering renders. The mesh rotations are
+  // already mutated directly via three.js, so we never needed the state mirror.
+  const walkTimeRef = useRef(0);
+  const attackTimeRef = useRef(0);
+  const defendTimeRef = useRef(0);
+
+  // Memoize the merged config — a fresh object literal every render would invalidate
+  // every downstream `useMemo`/`useEffect` that depends on it, churning GPU resources
+  // for no semantic change. Keying on each primitive field keeps referential equality
+  // stable when nothing actually changed.
+  const config = useMemo(
+    () => ({ ...defaultCustomization, ...customization }),
+    [
+      customization.primaryColor,
+      customization.secondaryColor,
+      customization.eyeColor,
+      customization.noseColor,
+      customization.pawColor,
+      customization.pattern,
+      customization.patternColor,
+      customization.earSize,
+      customization.tailLength,
+      customization.furLength,
+      customization.bodyType,
+      customization.collar?.color,
+      customization.collar?.hasTag,
+      // Scars array is small; stringify is acceptable and stable across equal contents
+      customization.scars ? JSON.stringify(customization.scars) : null,
+    ]
+  );
+
   // Calculate body dimensions based on bodyType
   const bodyScale = config.bodyType === 'slim' ? 0.9 : config.bodyType === 'chubby' ? 1.15 : 1.0;
   const bodyRadius = 0.35 * bodyScale;
   const bodyHeight = 1.0;
-  
+
   // Calculate tail length
   const tailLengthMultiplier = config.tailLength === 'short' ? 0.7 : config.tailLength === 'long' ? 1.3 : 1.0;
   const tailLength = 0.6 * tailLengthMultiplier;
-  
+
   // Calculate ear size
   const earSizeMultiplier = config.earSize === 'small' ? 0.7 : config.earSize === 'large' ? 1.3 : 1.0;
   
@@ -142,9 +166,15 @@ const CustomizableCatMesh = memo(({
             ctx.fillRect(0, 200, 256, 56); // Paws
             break;
             
-          case 'calico':
-            // Calico patches
-            const colors = [config.patternColor, config.secondaryColor || '#FF6B35', '#000000'];
+          case 'calico': {
+            // Calico patches. patternColor is optional on CatCustomization so we have to
+            // fall back to a defined string — passing undefined into fillStyle silently
+            // keeps the prior fillStyle (was a TS error and a runtime surprise).
+            const colors: string[] = [
+              config.patternColor ?? patternColor,
+              config.secondaryColor || '#FF6B35',
+              '#000000'
+            ];
             for (let i = 0; i < 15; i++) {
               ctx.fillStyle = colors[i % colors.length];
               const x = Math.random() * 256;
@@ -154,15 +184,19 @@ const CustomizableCatMesh = memo(({
               ctx.fillRect(x, y, w, h);
             }
             break;
-            
-          case 'siamese':
-            // Siamese gradient (darker extremities)
+          }
+
+          case 'siamese': {
+            // Siamese gradient (darker extremities). patternColor is optional on
+            // CatCustomization — coalesce to the resolved patternColor so the gradient
+            // stop is always a real color string.
             const gradient = ctx.createRadialGradient(128, 128, 50, 128, 128, 128);
             gradient.addColorStop(0, config.primaryColor);
-            gradient.addColorStop(1, config.patternColor);
+            gradient.addColorStop(1, config.patternColor ?? patternColor);
             ctx.fillStyle = gradient;
             ctx.fillRect(0, 0, 256, 256);
             break;
+          }
         }
       }
       
@@ -176,16 +210,21 @@ const CustomizableCatMesh = memo(({
     };
   }, [config.primaryColor, config.pattern, config.patternColor, config.secondaryColor]);
   
-  // Fur rendering setup with customization
+  // Fur rendering setup with customization.
+  //
+  // Each layer of "fur" is a Mesh + cloned ShaderMaterial — non-trivial GPU resources.
+  // The previous version (a) called `bodyGroup.current.clear()` which removes children
+  // but does NOT dispose their geometry/materials, and (b) had `config` (a new object
+  // literal every render) in its dep array, so this effect re-fired on every parent
+  // re-render and leaked 20+ ShaderMaterials each time. The cleanup function now disposes
+  // both the shared geometry and each cloned material so the GC actually reclaims them.
   useEffect(() => {
-    if (!catGroup.current || !bodyGroup.current || !patternTexture) return;
-    
-    // Clear existing fur
-    bodyGroup.current.clear();
-    
+    const bodyGroupNode = bodyGroup.current;
+    if (!catGroup.current || !bodyGroupNode || !patternTexture) return;
+
     const furLayers = config.furLength === 'short' ? 10 : config.furLength === 'long' ? 30 : 20;
     const furLengthValue = config.furLength === 'short' ? 0.02 : config.furLength === 'long' ? 0.08 : 0.05;
-    
+
     const baseGeometry = new THREE.CapsuleGeometry(bodyRadius, bodyHeight, 8, 16);
     const furMaterial = new THREE.ShaderMaterial({
       uniforms: {
@@ -231,63 +270,82 @@ const CustomizableCatMesh = memo(({
       depthWrite: false,
     });
 
-    // Add fur layers
+    // Track everything we allocate so cleanup can release the exact same set.
+    const createdMaterials: THREE.ShaderMaterial[] = [];
+    const createdMeshes: THREE.Mesh[] = [];
     for (let i = 1; i <= furLayers; i++) {
-      const layerMesh = new THREE.Mesh(baseGeometry, furMaterial.clone());
-      layerMesh.material.uniforms.layer.value = i;
-      bodyGroup.current.add(layerMesh);
+      const layerMaterial = furMaterial.clone();
+      layerMaterial.uniforms.layer.value = i;
+      const layerMesh = new THREE.Mesh(baseGeometry, layerMaterial);
+      bodyGroupNode.add(layerMesh);
+      createdMaterials.push(layerMaterial);
+      createdMeshes.push(layerMesh);
     }
+    // The template material itself was never attached to a mesh — dispose it now so we
+    // don't hold a phantom GPU program for the lifetime of the component.
+    furMaterial.dispose();
+
+    return () => {
+      for (const mesh of createdMeshes) {
+        bodyGroupNode.remove(mesh);
+      }
+      for (const material of createdMaterials) {
+        material.dispose();
+      }
+      baseGeometry.dispose();
+    };
   }, [config, patternTexture, bodyRadius, bodyHeight]);
   
-  // Animation updates
+  // Animation updates.
+  //
+  // Drives mesh rotations directly via three.js refs — no React state involved. The
+  // previous implementation called `setAnimState` every frame, which forced a re-render
+  // every frame and re-derived the whole `config` object, triggering the fur-layer
+  // useEffect's re-allocation chain. Now timers live in refs and the mesh handle is
+  // looked up by `userData.partType` exactly as before.
   useFrame((_, delta) => {
     if (!group.current || !catGroup.current || !bodyGroup.current) return;
-    
-    const newAnimState = { ...animState };
-    
-    // Get references to mesh parts
-    const tailMesh = catGroup.current.children.find(child => 
+
+    const tailMesh = catGroup.current.children.find(child =>
       child.userData.partType === 'tail'
-    ) as THREE.Mesh;
-    
+    ) as THREE.Mesh | undefined;
+
     if (isMoving) {
       const animSpeed = isRunning ? 10 : 5;
-      newAnimState.walkTime += delta * animSpeed;
-      
-      const walkCycle = Math.sin(newAnimState.walkTime);
-      
-      // Tail wagging
-      if (tailMesh && tailMesh.rotation) {
+      walkTimeRef.current += delta * animSpeed;
+
+      if (tailMesh) {
         const tailWagSpeed = isRunning ? 3 : 2;
         const tailWagAmount = isRunning ? 0.3 : 0.2;
-        newAnimState.tailRotation = Math.sin(newAnimState.walkTime * tailWagSpeed) * tailWagAmount;
-        tailMesh.rotation.z = newAnimState.tailRotation;
+        tailMesh.rotation.z = Math.sin(walkTimeRef.current * tailWagSpeed) * tailWagAmount;
       }
     }
-    
+
     if (isAttacking) {
-      newAnimState.attackTime += delta * 10;
-      const attackPhase = Math.min(1, (newAnimState.attackTime % 1) * 2);
-      const attackOffset = attackPhase < 0.5 
-        ? attackPhase * 2 
+      attackTimeRef.current += delta * 10;
+      const attackPhase = Math.min(1, (attackTimeRef.current % 1) * 2);
+      const attackOffset = attackPhase < 0.5
+        ? attackPhase * 2
         : 1 - ((attackPhase - 0.5) * 2);
-      
+
       catGroup.current.position.z = attackOffset * 0.3;
     } else {
       catGroup.current.position.z = 0;
+      // Reset attack timer so the next attack starts from a clean phase.
+      attackTimeRef.current = 0;
     }
-    
+
+    if (isDefending) {
+      defendTimeRef.current += delta * 5;
+    } else {
+      defendTimeRef.current = 0;
+    }
+
     // Idle animation
     if (!isMoving && !isJumping && !isAttacking && !isDefending && tailMesh) {
-      newAnimState.walkTime += delta;
-      
-      if (tailMesh && tailMesh.rotation) {
-        newAnimState.tailRotation = Math.sin(newAnimState.walkTime * 0.5) * 0.1;
-        tailMesh.rotation.z = newAnimState.tailRotation;
-      }
+      walkTimeRef.current += delta;
+      tailMesh.rotation.z = Math.sin(walkTimeRef.current * 0.5) * 0.1;
     }
-    
-    setAnimState(newAnimState);
   });
 
   return (

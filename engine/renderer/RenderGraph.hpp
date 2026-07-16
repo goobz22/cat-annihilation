@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <memory>
 #include <cstdint>
 
 namespace CatEngine::Renderer {
@@ -350,8 +351,15 @@ private:
     std::unordered_map<std::string, uint32_t> resourceNameMap;
     uint32_t nextResourceID = 1;  // 0 is invalid
 
-    // Passes
-    std::vector<RenderGraphPass*> passes;
+    // Passes owned by the graph. unique_ptr so destruction is automatic on
+    // graph teardown (and the moved-from owner cannot leak the heap node).
+    // Pre-2026-05: stored as raw RenderGraphPass* and freed in ~RenderGraph
+    // via explicit `delete`. The explicit-delete path was correct as long as
+    // no early-return ever sneaked into AddGraphicsPass/AddComputePass/
+    // AddTransferPass — and because there was no such guard, *any* future
+    // editor adding a "validate inputs first" early-return on those entry
+    // points would leak. RAII removes the failure mode at the type level.
+    std::vector<std::unique_ptr<RenderGraphPass>> passes;
     std::unordered_map<std::string, uint32_t> passNameMap;
     uint32_t nextPassID = 0;
 
@@ -395,6 +403,13 @@ private:
     void TopologicalSort();
     void AllocateTransientResources();
     void DeallocateTransientResources();
+
+    // Single allocation site for RenderGraphPass nodes. AddGraphicsPass /
+    // AddComputePass / AddTransferPass forward here with their PassType so
+    // the unique_ptr ownership transfer + ID assignment + name-map insert
+    // lives in exactly one place. Private because the public surface
+    // intentionally exposes only the pass-type-named entry points.
+    RenderGraphPass* AddPassOfType(const std::string& name, PassType type);
 
     // Insert any pipeline barriers required to transition the resources used
     // by `pass` from their current tracked access/stage into the access/stage

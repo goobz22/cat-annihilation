@@ -142,11 +142,33 @@ void EnemyAISystem::updateAttackingState(CatEngine::Entity entity, EnemyComponen
     if (enemy.canAttack()) {
         auto* targetHealth = ecs_->getComponent<HealthComponent>(enemy.target);
         if (targetHealth && !targetHealth->isInvincible()) {
-            // Deal damage
-            targetHealth->currentHealth -= enemy.attackDamage;
-            targetHealth->timeSinceLastDamage = 0.0f;
-
-            // Apply invincibility frames (brief)
+            // Route enemy damage through HealthComponent::damage() instead of
+            // mutating currentHealth directly. The direct-mutation pre-fix
+            // path:
+            //
+            //   (a) bypassed HealthComponent::damage()'s own invincibility +
+            //       death-flag bookkeeping, so a target dropped to ≤0 hp by
+            //       this branch never flipped isDead until the next
+            //       HealthSystem::updateHealth tick — a one-frame window
+            //       where an enemy could deal a "post-mortem" second hit on
+            //       the same target before HealthSystem caught up.
+            //
+            //   (b) never tagged a damage source, so the friendly-fire
+            //       detection layer (HitInfo.attacker / HealthComponent
+            //       callbacks) couldn't tell a dog-on-cat hit from a dog-
+            //       on-dog hit. Routing through damage() and stamping
+            //       lastDamageType=Physical along with the entity-tagged
+            //       fields means the death callback's EntityDeathEvent
+            //       picks the right (attacker, target) pair for whatever
+            //       game-layer subscriber wants to gate on it.
+            //
+            // The hand-set 0.2 s i-frame is preserved because the dog AI
+            // intentionally uses a tighter window than HealthComponent's
+            // 0.5 s default (dogs need to be able to chain-attack faster
+            // than the player). We override AFTER damage() because damage()
+            // writes invincibilityDuration into invincibilityTimer.
+            targetHealth->lastDamageType = DamageType::Physical;
+            targetHealth->damage(enemy.attackDamage);
             targetHealth->invincibilityTimer = 0.2f;
 
             // Reset attack cooldown

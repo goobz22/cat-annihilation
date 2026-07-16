@@ -8,6 +8,7 @@
 #include <utility>
 #include <initializer_list>
 #include <iterator>
+#include <type_traits>
 
 namespace Engine {
 
@@ -90,7 +91,13 @@ public:
         , allocator_(alloc)
     {}
 
-    explicit DynamicArray(size_type count, const T& value = T(), const Allocator& alloc = Allocator())
+    // count + value ctor. SFINAE-disabled when T is not copy-constructible,
+    // so it doesn't get selected against a move-only T and produce a
+    // confusing instantiation error inside push_back. Callers wanting
+    // default-constructed elements use the count-only overload below.
+    template<typename U = T,
+             typename = std::enable_if_t<std::is_copy_constructible_v<U>>>
+    explicit DynamicArray(size_type count, const T& value, const Allocator& alloc = Allocator())
         : data_(reinterpret_cast<pointer>(small_buffer_))
         , size_(0)
         , capacity_(SMALL_BUFFER_SIZE)
@@ -99,6 +106,31 @@ public:
         reserve(count);
         for (size_type i = 0; i < count; ++i) {
             push_back(value);
+        }
+    }
+
+    // count-only ctor. SFINAE-disabled when T is not default-constructible.
+    //
+    // WHY this overload exists: the previous single ctor took
+    // `const T& value = T()` as a default arg, which forced T to have an
+    // accessible default constructor JUST to declare a DynamicArray<T>
+    // of any non-zero size, even when the caller would have supplied a
+    // value explicitly. Splitting the two overloads lets a non-default-
+    // constructible T still be sized-with-value via the count+value ctor
+    // above, and surfaces a clean compile error (rather than the cryptic
+    // "no matching function for call to T::T()") when a default-construct
+    // is the only path that fits.
+    template<typename U = T,
+             typename = std::enable_if_t<std::is_default_constructible_v<U>>>
+    explicit DynamicArray(size_type count, const Allocator& alloc = Allocator())
+        : data_(reinterpret_cast<pointer>(small_buffer_))
+        , size_(0)
+        , capacity_(SMALL_BUFFER_SIZE)
+        , allocator_(alloc)
+    {
+        reserve(count);
+        for (size_type i = 0; i < count; ++i) {
+            emplace_back();
         }
     }
 
@@ -333,7 +365,13 @@ public:
         }
     }
 
-    void resize(size_type count, const T& value = T()) {
+    // resize(count, value) — copy-fill the new tail with `value`.
+    // SFINAE-disabled for non-copy-constructible T (e.g. unique_ptr) so the
+    // bare `arr.resize(n)` form below is the only callable resize and the
+    // compiler error points there instead of inside the construct() body.
+    template<typename U = T,
+             typename = std::enable_if_t<std::is_copy_constructible_v<U>>>
+    void resize(size_type count, const T& value) {
         if (count < size_) {
             for (size_type i = count; i < size_; ++i) {
                 std::allocator_traits<Allocator>::destroy(allocator_, data_ + i);
@@ -343,6 +381,35 @@ public:
             reserve(count);
             for (size_type i = size_; i < count; ++i) {
                 std::allocator_traits<Allocator>::construct(allocator_, data_ + i, value);
+            }
+            size_ = count;
+        }
+    }
+
+    // resize(count) — default-construct the new tail elements.
+    // SFINAE-disabled for non-default-constructible T.
+    //
+    // WHY this is split from the resize(count, value) overload above: the
+    // previous single signature was `resize(count, const T& value = T())`,
+    // which required T to be default-constructible just to declare the
+    // function body, even when callers always passed an explicit value.
+    // That broke `DynamicArray<std::unique_ptr<X>>::resize(n, std::move(p))`
+    // — the unique_ptr default-construct INSIDE the default argument
+    // failed to compile even though the supplied value would have worked.
+    // Splitting the overloads lets each form be present iff T supports
+    // the corresponding construction.
+    template<typename U = T,
+             typename = std::enable_if_t<std::is_default_constructible_v<U>>>
+    void resize(size_type count) {
+        if (count < size_) {
+            for (size_type i = count; i < size_; ++i) {
+                std::allocator_traits<Allocator>::destroy(allocator_, data_ + i);
+            }
+            size_ = count;
+        } else if (count > size_) {
+            reserve(count);
+            for (size_type i = size_; i < count; ++i) {
+                std::allocator_traits<Allocator>::construct(allocator_, data_ + i);
             }
             size_ = count;
         }

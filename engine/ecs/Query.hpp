@@ -31,6 +31,15 @@ public:
         return index_ != other.index_;
     }
 
+    bool operator==(const QueryIterator& other) const {
+        // Symmetric counterpart to operator!=. Without this, Query::empty()
+        // (and any algorithm that compares iterators with ==) fails to
+        // compile because the range-for / find pattern relies on equality,
+        // not just inequality. Defining only != is a real correctness gap
+        // the moment a caller exercises the iterator like a standard one.
+        return index_ == other.index_;
+    }
+
     QueryIterator& operator++() {
         ++index_;
         findNext();

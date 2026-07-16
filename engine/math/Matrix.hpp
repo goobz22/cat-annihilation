@@ -315,37 +315,64 @@ struct alignas(16) mat4 {
         );
     }
 
-    // Camera matrices
-    static mat4 perspective(float fovy, float aspect, float near, float far) {
+    // Camera matrices — Vulkan clip-space convention.
+    //
+    // Vulkan's clip-space Z is [0, 1] (not OpenGL's [-1, 1]) and clip-space Y
+    // points down (NDC Y is positive-down on screen). The renderer is built
+    // against Vulkan, so the projection matrices below MUST emit the
+    // [0, 1] depth range or the depth test silently inverts and the scene
+    // disappears behind the near plane on first draw. Y-flip is intentionally
+    // NOT folded into the projection — the renderer's viewport already sets
+    // negative-height for the Y-flip (matches the GLM_FORCE_DEPTH_ZERO_TO_ONE
+    // + flipped viewport pattern most Vulkan tutorials use). Keeping the
+    // matrix Y-up here lets the same matrices drive CPU-side culling math
+    // without remembering to un-flip Y on every read.
+    // The `near` and `far` parameter names are reserved by <windows.h> on
+    // MSVC (legacy 16-bit pointer attributes — they expand to empty macros
+    // when windows.h is in scope). Calling them nearPlane/farPlane keeps
+    // the math readable AND prevents `result[2][2] = far / (near - far)`
+    // from collapsing into `result[2][2] = / ( - )` whenever a translation
+    // unit picks up windows.h ahead of Matrix.hpp.
+    static mat4 perspective(float fovy, float aspect, float nearPlane, float farPlane) {
         float tanHalfFovy = std::tan(fovy / 2.0f);
         mat4 result(0.0f);
         result[0][0] = 1.0f / (aspect * tanHalfFovy);
         result[1][1] = 1.0f / tanHalfFovy;
-        result[2][2] = -(far + near) / (far - near);
+        // Vulkan depth range [0, 1]: for view-space z = -nearPlane (the
+        // near plane) z_clip / w_clip = 0; for z = -farPlane it = 1.
+        // Reversed-Z renderers can flip the two diagonal terms; that is
+        // a renderer-level toggle, not a matrix-default change.
+        result[2][2] = farPlane / (nearPlane - farPlane);
         result[2][3] = -1.0f;
-        result[3][2] = -(2.0f * far * near) / (far - near);
+        result[3][2] = -(farPlane * nearPlane) / (farPlane - nearPlane);
         return result;
     }
 
-    static mat4 perspectiveInfinite(float fovy, float aspect, float near) {
+    static mat4 perspectiveInfinite(float fovy, float aspect, float nearPlane) {
         float tanHalfFovy = std::tan(fovy / 2.0f);
         mat4 result(0.0f);
         result[0][0] = 1.0f / (aspect * tanHalfFovy);
         result[1][1] = 1.0f / tanHalfFovy;
+        // Infinite-far Vulkan perspective: as farPlane -> +inf, [2][2] -> -1
+        // and [3][2] -> -nearPlane. Depth range remains [0, 1) for
+        // view-space z in [-nearPlane, -inf).
         result[2][2] = -1.0f;
         result[2][3] = -1.0f;
-        result[3][2] = -2.0f * near;
+        result[3][2] = -nearPlane;
         return result;
     }
 
-    static mat4 ortho(float left, float right, float bottom, float top, float near, float far) {
+    static mat4 ortho(float left, float right, float bottom, float top,
+                      float nearPlane, float farPlane) {
+        // Same Vulkan [0, 1] depth-range contract as perspective(). For an
+        // orthographic projection: z_clip = (-view.z - nearPlane) / (farPlane - nearPlane).
         mat4 result(1.0f);
         result[0][0] = 2.0f / (right - left);
         result[1][1] = 2.0f / (top - bottom);
-        result[2][2] = -2.0f / (far - near);
+        result[2][2] = -1.0f / (farPlane - nearPlane);
         result[3][0] = -(right + left) / (right - left);
         result[3][1] = -(top + bottom) / (top - bottom);
-        result[3][2] = -(far + near) / (far - near);
+        result[3][2] = -nearPlane / (farPlane - nearPlane);
         return result;
     }
 

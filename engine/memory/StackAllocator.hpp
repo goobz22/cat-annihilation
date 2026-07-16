@@ -85,6 +85,13 @@ public:
     [[nodiscard]] size_t getCurrentOffset() const noexcept { return m_currentOffset; }
 
 private:
+    // *Locked cores assume the caller already holds m_mutex when m_threadSafe
+    // is true. They exist so the public API doesn't recurse-with-lock and
+    // self-deadlock on the non-recursive std::mutex.
+    void* allocateLocked(size_t size, size_t alignment) noexcept;
+    void resetLocked() noexcept;
+    void rollbackToMarkerLocked(Marker marker) noexcept;
+
     void* m_memory;          // Base pointer to allocated memory
     size_t m_currentOffset;  // Current allocation offset
     bool m_threadSafe;       // Thread-safety flag

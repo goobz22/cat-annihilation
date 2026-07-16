@@ -89,7 +89,7 @@ public:
     //   (a) Proxy-cube path  — `model` is null. ScenePass binds the shared
     //       unit-cube VB/IB and renders an axis-aligned box centered at
     //       `position`, sized by `halfExtents`, tinted by `color`. Used
-    //       by entities WITHOUT a CatGame::MeshComponent (placeholders for
+    //       by entities WITHOUT a CatGame::MeshComponent (marker cubes for
     //       the player and enemies before MeshComponent attaches, plus any
     //       loadModel() failures that fall back to a marker cube).
     //   (b) Real-mesh path  — `model` is non-null AND ScenePass has a

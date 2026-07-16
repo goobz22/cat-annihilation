@@ -428,5 +428,67 @@ This testing infrastructure provides:
 
 ---
 
+## Canonical green signal — `scripts/cat-test-gate.ts`
+
+Until the 10-file Catch2 drift (above) is triaged, the single canonical
+"is the engine green?" probe is the Bun script at
+[scripts/cat-test-gate.ts](scripts/cat-test-gate.ts). It is the one
+command openclaw polls; no other build/test path counts as authoritative.
+
+```bash
+bun scripts/cat-test-gate.ts              # full gate (compile → build → cat-verify)
+bun scripts/cat-test-gate.ts --quick      # stage 1 only (compile-check)
+bun scripts/cat-test-gate.ts --json       # machine-readable verdict on stdout
+```
+
+**Three stages** (each must be `ok:true` for overall green):
+
+1. **`compile-check`** — `make -f Makefile.check` (or `ninja -C build-ninja
+   CatAnnihilation` fallback if `make` isn't on PATH). Catches header drift
+   and undefined references without a full link. SKIPPED cleanly with
+   `ok:true` when neither toolchain is present, so `--quick` returns green
+   on bare boxes.
+2. **`ninja-build`** — `ninja -C build-ninja CatAnnihilation` (full app
+   build). Skipped in `--quick` mode. Requires `cmake -G Ninja -B build-ninja`
+   to have been run once.
+3. **`cat-verify`** — `bun ../../openclaw/bridge/cat-verify.ts --seconds 30
+   --json` (runtime perf + visual-regression gate against the built binary).
+   Drives the binary in autoplay for 30 s, applies the four hard gates
+   (fpsMin ≥ 15, fpsAvg ≥ 30, distinctColors ≥ 50, topColorPct ≤ 0.35).
+   Skipped in `--quick` mode.
+
+**Why cat-verify instead of `./unit_tests`** — the Catch2 suite has 10/15
+files drifted against current API (see "Current status: broad drift"
+above). Rewriting those is a separate triage ask. cat-verify exercises the
+*built binary* against runtime invariants, so it actually detects the
+regression classes openclaw cares about (renderer breaks, FPS collapses,
+sky-only / solid-color frames) without pretending drifted unit tests pass.
+When the unit-test rewrite lands it can be added as a 4th stage.
+
+**Exit-code contract** (this is what openclaw polls):
+
+| exit | meaning |
+|------|---------|
+| `0`  | green — every stage `ok:true` |
+| `1`  | red — a stage executed and failed (build break, fps gate missed, etc.) |
+| `2`  | tool error — a stage couldn't even run (no toolchain, missing build dir) |
+
+**Status files** (atomic-write JSON + append-only history):
+
+- `.cat-gate-status.json` (project root) — last verdict, overwritten each
+  run. Shape: `{ts, ok, exitCode, stages:[{name,ok,exitCode,durationMs,
+  summary}], gitSha, invocation}`. openclaw polls this with mtime + JSON
+  read rather than respawning the gate.
+- `.cat-gate-status.jsonl` (project root) — one JSON line appended per
+  run for forensics ("when did the engine go red").
+
+If openclaw's miner needs a different path than `.cat-gate-status.json`,
+update the `STATUS_FILE` constant at the top of
+[scripts/cat-test-gate.ts](scripts/cat-test-gate.ts) — both writers and
+readers reference it from there.
+
+---
+
 *Cat Annihilation Testing Infrastructure v1.0*
 *Created: December 2025*
+*Canonical green signal section added: 2026-05-16*

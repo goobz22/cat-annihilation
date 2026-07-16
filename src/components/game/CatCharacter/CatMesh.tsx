@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, memo } from 'react';
+import React, { useRef, useEffect, memo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -23,23 +23,29 @@ const CatMesh = memo(({
   const group = useRef<THREE.Group>(null);
   const bodyGroup = useRef<THREE.Group>(null);
   const catGroup = useRef<THREE.Group>(null);
-  
-  // Animation state
-  const [animState, setAnimState] = useState({
-    walkTime: 0,
-    attackTime: 0,
-    defendTime: 0,
-    headRotation: 0,
-    tailRotation: 0,
-  });
-  
-  // Fur rendering setup
+
+  // Animation timers live in refs. Storing them in React state forced a re-render
+  // every frame (the gated `setAnimState` at the end of useFrame still fired the
+  // common case), and React state has no business in a useFrame loop per ARCHITECTURE.md.
+  const walkTimeRef = useRef(0);
+  const attackTimeRef = useRef(0);
+  const defendTimeRef = useRef(0);
+
+  // Fur rendering setup.
+  //
+  // The previous version created 20 fur-layer ShaderMaterials and 20 fur Meshes once
+  // and attached them to the bodyGroup / catGroup, but never disposed any of them on
+  // unmount — every CatCharacter unmount (e.g. error-boundary recovery) leaked ~60
+  // GPU objects (20 body + 20 head + 20 tail meshes, each with a cloned ShaderMaterial).
+  // We now track everything we add and dispose it on cleanup.
   useEffect(() => {
-    if (!catGroup.current || !bodyGroup.current) return;
-    
+    const bodyGroupNode = bodyGroup.current;
+    const catGroupNode = catGroup.current;
+    if (!catGroupNode || !bodyGroupNode) return;
+
     const furLayers = 20;
     const furLength = 0.05;
-    
+
     const baseGeometry = new THREE.CapsuleGeometry(0.35, 1.0, 8, 16);
     const furMaterial = new THREE.ShaderMaterial({
       uniforms: {
@@ -80,159 +86,130 @@ const CatMesh = memo(({
       depthWrite: false,
     });
 
+    const createdMaterials: THREE.ShaderMaterial[] = [];
+    const bodyMeshes: THREE.Mesh[] = [];
+    const headMeshes: THREE.Mesh[] = [];
+    const tailMeshes: THREE.Mesh[] = [];
+
     // Body fur
     for (let i = 1; i <= furLayers; i++) {
-      const layerMesh = new THREE.Mesh(baseGeometry, furMaterial.clone());
-      layerMesh.material.uniforms.layer.value = i;
-      bodyGroup.current.add(layerMesh);
+      const layerMaterial = furMaterial.clone();
+      layerMaterial.uniforms.layer.value = i;
+      const layerMesh = new THREE.Mesh(baseGeometry, layerMaterial);
+      bodyGroupNode.add(layerMesh);
+      bodyMeshes.push(layerMesh);
+      createdMaterials.push(layerMaterial);
     }
 
     // Head fur
     const headGeometry = new THREE.SphereGeometry(0.3, 16, 16);
     for (let i = 1; i <= furLayers; i++) {
-      const layerMesh = new THREE.Mesh(headGeometry, furMaterial.clone());
-      layerMesh.material.uniforms.layer.value = i;
+      const layerMaterial = furMaterial.clone();
+      layerMaterial.uniforms.layer.value = i;
+      const layerMesh = new THREE.Mesh(headGeometry, layerMaterial);
       layerMesh.position.set(0, 0.5, 0.6);
-      catGroup.current.add(layerMesh);
+      catGroupNode.add(layerMesh);
+      headMeshes.push(layerMesh);
+      createdMaterials.push(layerMaterial);
     }
 
     // Tail fur
     const tailGeometry = new THREE.CylinderGeometry(0.075, 0.05, 0.6, 8);
     for (let i = 1; i <= furLayers; i++) {
-      const layerMesh = new THREE.Mesh(tailGeometry, furMaterial.clone());
-      layerMesh.material.uniforms.layer.value = i;
+      const layerMaterial = furMaterial.clone();
+      layerMaterial.uniforms.layer.value = i;
+      const layerMesh = new THREE.Mesh(tailGeometry, layerMaterial);
       layerMesh.position.set(0, 0.2, -0.5);
       layerMesh.rotation.set(0.1, 0, 0);
-      catGroup.current.add(layerMesh);
+      catGroupNode.add(layerMesh);
+      tailMeshes.push(layerMesh);
+      createdMaterials.push(layerMaterial);
     }
+
+    // The template material itself never gets attached; dispose it so we don't keep a
+    // phantom GPU shader program around for the component's lifetime.
+    furMaterial.dispose();
+
+    return () => {
+      for (const mesh of bodyMeshes) bodyGroupNode.remove(mesh);
+      for (const mesh of headMeshes) catGroupNode.remove(mesh);
+      for (const mesh of tailMeshes) catGroupNode.remove(mesh);
+      for (const material of createdMaterials) material.dispose();
+      baseGeometry.dispose();
+      headGeometry.dispose();
+      tailGeometry.dispose();
+    };
   }, []);
   
-  // Animation updates
+  // Animation updates.
+  //
+  // Drives three.js node rotations / positions directly from per-frame timer refs. The
+  // previous implementation maintained a parallel `animState` React state object and
+  // called setAnimState() inside useFrame whenever any timer moved by > 0.01s — which
+  // is every frame in practice. That forced a React re-render every frame for a
+  // component that has no render-time-dependent JSX (the mesh tree is static), wasting
+  // reconciler work and violating the ARCHITECTURE.md rule against React state in
+  // useFrame hot paths.
   useFrame((_, delta) => {
     if (!group.current || !catGroup.current || !bodyGroup.current) return;
-    
-    const newAnimState = { ...animState };
-    let stateChanged = false;
-    
-    // Get references to mesh parts more safely
-    const bodyMesh = bodyGroup.current;
-    const headMesh = catGroup.current.children.find(child => 
+
+    // Find mesh handles by their geometric role. These positional checks are inherited
+    // from the previous implementation — the JSX places head at (0, 0.5, 0.6) and tail
+    // at (0, 0.3, -0.7), so the y/z filters below uniquely identify each.
+    const headMesh = catGroup.current.children.find(child =>
       child.type === 'Mesh' && child.position.y > 0.4 && child.position.z > 0.5
-    ) as THREE.Mesh;
-    const tailMesh = catGroup.current.children.find(child => 
+    ) as THREE.Mesh | undefined;
+    const tailMesh = catGroup.current.children.find(child =>
       child.type === 'Mesh' && child.position.z < -0.6
-    ) as THREE.Mesh;
-    
-    if (isMoving && bodyMesh && headMesh && tailMesh) {
+    ) as THREE.Mesh | undefined;
+
+    if (isMoving && headMesh && tailMesh) {
       const animSpeed = isRunning ? 10 : 5;
-      const oldWalkTime = newAnimState.walkTime;
-      newAnimState.walkTime += delta * animSpeed;
-      if (newAnimState.walkTime !== oldWalkTime) stateChanged = true;
-      
-      const walkCycle = Math.sin(newAnimState.walkTime);
-      
-      // Body animation - animate the main body mesh in bodyGroup
-      const actualBody = group.current;
-      if (actualBody) {
-        // Keep body at fixed height
-        actualBody.position.y = 0.2;
-      }
-      
+      walkTimeRef.current += delta * animSpeed;
+
+      const walkCycle = Math.sin(walkTimeRef.current);
+
+      // Keep body at fixed height during the walk cycle.
+      group.current.position.y = 0.2;
+
       // Head bobbing
-      if (headMesh && headMesh.rotation) {
-        const headRotation = isRunning ? 0.15 : 0.1;
-        headMesh.rotation.x = walkCycle * headRotation;
-      }
-      
+      const headRotationAmount = isRunning ? 0.15 : 0.1;
+      headMesh.rotation.x = walkCycle * headRotationAmount;
+
       // Tail wagging
-      if (tailMesh && tailMesh.rotation) {
-        const tailWagSpeed = isRunning ? 3 : 2;
-        const tailWagAmount = isRunning ? 0.3 : 0.2;
-        const oldTailRotation = newAnimState.tailRotation;
-        newAnimState.tailRotation = Math.sin(newAnimState.walkTime * tailWagSpeed) * tailWagAmount;
-        if (newAnimState.tailRotation !== oldTailRotation) stateChanged = true;
-        tailMesh.rotation.z = newAnimState.tailRotation;
-      }
+      const tailWagSpeed = isRunning ? 3 : 2;
+      const tailWagAmount = isRunning ? 0.3 : 0.2;
+      tailMesh.rotation.z = Math.sin(walkTimeRef.current * tailWagSpeed) * tailWagAmount;
     }
-    
+
     if (isAttacking) {
-      const oldAttackTime = newAnimState.attackTime;
-      newAnimState.attackTime += delta * 10;
-      if (newAnimState.attackTime !== oldAttackTime) stateChanged = true;
-      
-      const attackPhase = Math.min(1, (newAnimState.attackTime % 1) * 2);
-      const attackOffset = attackPhase < 0.5 
-        ? attackPhase * 2 
+      attackTimeRef.current += delta * 10;
+      const attackPhase = Math.min(1, (attackTimeRef.current % 1) * 2);
+      const attackOffset = attackPhase < 0.5
+        ? attackPhase * 2
         : 1 - ((attackPhase - 0.5) * 2);
-      
+
       catGroup.current.position.z = attackOffset * 0.3;
-      
-      if (newAnimState.walkTime !== 0) {
-        newAnimState.walkTime = 0;
-        stateChanged = true;
-      }
-    } else if (isDefending && bodyMesh && headMesh && tailMesh) {
-      const oldDefendTime = newAnimState.defendTime;
-      newAnimState.defendTime += delta * 5;
-      if (newAnimState.defendTime !== oldDefendTime) stateChanged = true;
-      
-      const actualBody = group.current;
-      if (actualBody) {
-        actualBody.position.y = 0.15;
-      }
-      
-      if (headMesh && headMesh.rotation) {
-        headMesh.rotation.x = 0.2;
-      }
-      
-      if (tailMesh && tailMesh.rotation) {
-        tailMesh.rotation.x = 0.5;
-      }
-      
-      const defendPhase = Math.sin(newAnimState.defendTime * 3);
+      walkTimeRef.current = 0;
+    } else if (isDefending && headMesh && tailMesh) {
+      defendTimeRef.current += delta * 5;
+      group.current.position.y = 0.15;
+      headMesh.rotation.x = 0.2;
+      tailMesh.rotation.x = 0.5;
+      const defendPhase = Math.sin(defendTimeRef.current * 3);
       catGroup.current.rotation.y = defendPhase * 0.1;
     } else {
-      if (newAnimState.attackTime !== 0) {
-        newAnimState.attackTime = 0;
-        stateChanged = true;
-      }
-      if (newAnimState.defendTime !== 0) {
-        newAnimState.defendTime = 0;
-        stateChanged = true;
-      }
+      attackTimeRef.current = 0;
+      defendTimeRef.current = 0;
       catGroup.current.position.z = 0;
       catGroup.current.rotation.y = 0;
     }
-    
-    // Idle animation
-    if (!isMoving && !isJumping && !isAttacking && !isDefending && bodyMesh && tailMesh) {
-      const oldWalkTime = newAnimState.walkTime;
-      newAnimState.walkTime += delta;
-      if (newAnimState.walkTime !== oldWalkTime) stateChanged = true;
-      
-      
-      const actualBody = group.current;
-      if (actualBody) {
-        // Keep body at fixed height during idle
-        actualBody.position.y = 0.2;
-      }
-      
-      if (tailMesh && tailMesh.rotation) {
-        const oldTailRotation = newAnimState.tailRotation;
-        newAnimState.tailRotation = Math.sin(newAnimState.walkTime * 0.5) * 0.1;
-        if (newAnimState.tailRotation !== oldTailRotation) stateChanged = true;
-        tailMesh.rotation.z = newAnimState.tailRotation;
-      }
-    }
-    
-    // Update animation state if significant changes occurred
-    if (stateChanged && (
-      Math.abs(newAnimState.walkTime - animState.walkTime) > 0.01 ||
-      Math.abs(newAnimState.tailRotation - animState.tailRotation) > 0.001 ||
-      Math.abs(newAnimState.attackTime - animState.attackTime) > 0.01 ||
-      Math.abs(newAnimState.defendTime - animState.defendTime) > 0.01
-    )) {
-      setAnimState(newAnimState);
+
+    // Idle animation — slow tail swish when nothing else is happening.
+    if (!isMoving && !isJumping && !isAttacking && !isDefending && tailMesh) {
+      walkTimeRef.current += delta;
+      group.current.position.y = 0.2;
+      tailMesh.rotation.z = Math.sin(walkTimeRef.current * 0.5) * 0.1;
     }
   });
 

@@ -238,10 +238,31 @@ struct ComboState {
     std::string lastComboName = "";
     int consecutiveHits = 0;
 
+    // Queue for an attack character whose swing has STARTED but hasn't yet
+    // connected. The melee/projectile passes commit it via commitQueuedAttack()
+    // the moment a hit actually lands; whiff-swings let the queue expire
+    // silently when the next swing overwrites it or when comboWindow elapses
+    // via update(). The dual-state design fixes the combo-cheese bug where a
+    // player could grind the damage multiplier up to 2.0x by swinging at thin
+    // air — pre-fix `addAttack` advanced comboStep on every input event, so
+    // ten missed swings produced the same multiplier as ten landed hits.
+    // Setting hasQueuedAttack to false (no queue) is the post-commit / no-
+    // pending state; '\0' is the sentinel character meaning "no attack
+    // character has been seen on this entity yet" but is unused on the hot
+    // path — hasQueuedAttack is the authoritative gate.
+    char queuedAttackChar = '\0';
+    bool hasQueuedAttack = false;
+
     /**
-     * Start new combo or continue existing
-     * @param attackType Type of attack (L=light, H=heavy, S=special)
-     * @return true if combo continues, false if reset
+     * Start new combo or continue existing.
+     *
+     * @param attackType Type of attack (L=light, H=heavy, S=special).
+     * @return true if combo continues, false if the cap was just reached.
+     *
+     * Direct combo advancement: every call increments comboStep regardless of
+     * whether the swing connects. Prefer queueAttack/commitQueuedAttack for
+     * hit-gated advancement; this path stays for tests and any future scripted
+     * sequence that wants to manually walk the combo machine.
      */
     bool addAttack(char attackType) {
         // Reset if timer expired
@@ -263,6 +284,40 @@ struct ComboState {
             return false;
         }
 
+        return true;
+    }
+
+    /**
+     * Record that a swing has STARTED with the given attack character. The
+     * combo step is NOT advanced until commitQueuedAttack() fires from a
+     * landed-hit callsite (CombatSystem::processMeleeAttacks /
+     * CombatSystem::updateProjectiles). Overwrites any prior pending queue —
+     * starting a fresh swing before the previous one resolved means the
+     * earlier swing whiffed and its combo credit is forfeit.
+     */
+    void queueAttack(char attackType) {
+        queuedAttackChar = attackType;
+        hasQueuedAttack = true;
+    }
+
+    /**
+     * Commit a queued swing into the combo machine. Idempotent within one
+     * swing: the first landed hit advances the combo; subsequent hits on the
+     * same swing (e.g. cleave damage to a second enemy) see hasQueuedAttack
+     * already cleared and skip the advance, preserving the 1-step-per-swing
+     * contract regardless of how many targets the swing connects with.
+     *
+     * @return true if a queued attack existed and was committed, false if
+     *         there was no queue (called outside a swing, or the swing's
+     *         combo credit was already taken by an earlier hit).
+     */
+    bool commitQueuedAttack() {
+        if (!hasQueuedAttack) {
+            return false;
+        }
+        const char attackChar = queuedAttackChar;
+        hasQueuedAttack = false;
+        addAttack(attackChar);
         return true;
     }
 

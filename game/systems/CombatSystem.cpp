@@ -298,8 +298,32 @@ void CombatSystem::performAttack(CatEngine::Entity entity, const std::string& at
         return;
     }
 
+    // QUEUE the attack instead of immediately advancing the combo.
+    //
+    // Pre-fix behaviour: this method was called from the input/AI path the
+    // instant a swing started and unconditionally bumped comboStep via
+    // `addAttack(attackChar)`. A player could grind the combo damage
+    // multiplier from 1.0x at step 1 up to 2.0x at step 4 by mashing
+    // light-attack into empty air — no enemy needed, no hit needed. The
+    // first real swing on a real target then landed pre-multiplied 2.0x
+    // damage despite no consecutive HITS having actually occurred.
+    //
+    // Post-fix behaviour: the swing intent is QUEUED on ComboState; the
+    // melee pass (processMeleeAttacks) commits it on the first connected
+    // hit via commitQueuedAttack(). A whiff-swing leaves the queue pending
+    // until either the next swing overwrites it (queueAttack replaces) or
+    // ComboState::update() expires it via the comboWindow timer. The combo
+    // damage multiplier now reflects actual landed hits, which is the
+    // contract a third-person action game owes the player.
+    //
+    // Note we still fire onComboHit here. The callback's contract is "an
+    // attack input occurred" (used by the HUD's combo-step ticker which
+    // wants to flash on input, not on hit) and inverting that contract
+    // would silently break HUD feedback while fixing damage. Damage cheese
+    // is fixed because the combo MULTIPLIER reads from comboStep at hit
+    // time, and that step isn't advanced until commit.
     char attackChar = attackType[0];
-    comboComp->state.addAttack(attackChar);
+    comboComp->state.queueAttack(attackChar);
 
     if (onComboHit) {
         onComboHit(entity, comboComp->state.comboStep);
@@ -638,9 +662,21 @@ void CombatSystem::processMeleeAttacks() {
             // Get combo multiplier
             float damageMultiplier = getCurrentDamageMultiplier(attacker);
 
+            // Track whether the swing has committed its combo credit yet for
+            // THIS swing. The combo machine advances once per swing, on the
+            // first hit that lands — subsequent cleave hits on the same swing
+            // (a wide melee arc clipping two dogs side-by-side) do NOT each
+            // bump the combo counter, which would otherwise double-credit a
+            // single swing and re-introduce a softer version of the cheese
+            // the queueAttack/commitQueuedAttack pair was designed to kill.
+            // The flag lives on the stack here, not on the entity, because
+            // the per-swing scope is exactly one iteration of the outer
+            // forEach<CombatComponent> body.
+            bool comboCreditedThisSwing = false;
+
             // Find all potential targets
             ecs_->forEach<HealthComponent, Engine::Transform>(
-                [this, attacker, combat, transform, damageMultiplier](
+                [this, attacker, combat, transform, damageMultiplier, &comboCreditedThisSwing](
                     CatEngine::Entity target,
                     HealthComponent* targetHealth,
                     Engine::Transform* targetTransform
@@ -685,10 +721,30 @@ void CombatSystem::processMeleeAttacks() {
                     // the magic system via applyDamageWithType (DOTs, spell
                     // bolts) which routes through a different callsite. A
                     // future fire-sword enchantment would override this with
-                    // an explicit DamageType; for now the default keeps the
-                    // legacy white-yellow hit-burst on every melee swing.
+                    // an explicit DamageType; the default keeps the legacy
+                    // white-yellow hit-burst on every melee swing.
                     applyDamage(attacker, target, finalDamage,
                                 targetTransform->position, DamageType::Physical);
+
+                    // Commit the queued combo step on the FIRST landed hit of
+                    // this swing. The hit-gate is what turns the combo system
+                    // from "every swing input bumps the multiplier" (the
+                    // pre-fix cheese path where a player ground combo×2.0
+                    // against thin air) into "only landed hits build combo".
+                    // commitQueuedAttack() is idempotent inside one swing via
+                    // hasQueuedAttack — the comboCreditedThisSwing flag is a
+                    // belt-and-suspenders cleave guard so the inner forEach's
+                    // second target (cleave on a side-by-side dog pair) is
+                    // unambiguously a no-op even if a future refactor changes
+                    // the commit semantics.
+                    if (!comboCreditedThisSwing) {
+                        auto* attackerComboComp =
+                            ecs_->getComponent<ComboComponent>(attacker);
+                        if (attackerComboComp != nullptr) {
+                            attackerComboComp->state.commitQueuedAttack();
+                        }
+                        comboCreditedThisSwing = true;
+                    }
 
                     // Enhanced hit info. Note: applyDamage() above ALREADY
                     // fires onHitCallback_ from its internal callsite
@@ -831,10 +887,28 @@ void CombatSystem::updateProjectiles(float dt) {
                     // Apply damage. Bow projectiles are Physical by default;
                     // future enchanted-arrow / staff-bolt paths can override
                     // by carrying a DamageType field on the Projectile struct
-                    // and forwarding it here. For now the default keeps the
-                    // legacy white-yellow hit-burst on arrow strikes.
+                    // and forwarding it here. The default keeps the legacy
+                    // white-yellow hit-burst on arrow strikes.
                     applyDamage(projectile.owner, target, finalDamage,
                                 projectile.position, DamageType::Physical);
+
+                    // Commit the queued combo step on the projectile's first
+                    // landed hit. Matches the melee path: pre-fix
+                    // performAttack() advanced combo at the bowstring-release
+                    // moment, so an arrow whiffing into a tree still counted
+                    // toward the multiplier. The combo timer (0.5 s default
+                    // ComboState::comboWindow) is comfortably longer than
+                    // bow flight time at 30 m/s over the 15 m attackRange
+                    // (0.5 s travel) so a hit-gated commit still resolves
+                    // within the window in the steady-state case. A
+                    // projectile that flies past 15 m without hitting
+                    // expires its combo credit silently via the comboWindow
+                    // timer — which is the right user-facing behaviour for
+                    // a missed shot.
+                    if (auto* projectileOwnerComboComp =
+                            ecs_->getComponent<ComboComponent>(projectile.owner)) {
+                        projectileOwnerComboComp->state.commitQueuedAttack();
+                    }
 
                     // Enhanced hit info — same double-fire-with-richer-fields
                     // pattern as the melee callsite above. damageType matches

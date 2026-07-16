@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -167,16 +168,32 @@ public:
     void Reset();
 
     /**
-     * @brief Enable or disable profiling
-     * @param enabled True to enable, false to disable
+     * @brief Enable or disable profiling.
+     *
+     * Disabling does NOT silently leave half-open scopes in the thread
+     * contexts. When SetEnabled(false) is called mid-frame with active
+     * PushScope() calls outstanding, every subsequent ProfileScope dtor
+     * would otherwise call PopScope() while m_Enabled is false (which
+     * early-returns), leaving the scope stack permanently unbalanced. The
+     * next time profiling is re-enabled, the stack still contains the stale
+     * entries from the previous "active" run and they get popped against
+     * unrelated Push calls, producing nonsense durations and crashing
+     * cross-thread when scopeStack ends up with an entry whose timestamp
+     * is from a totally different frame.
+     *
+     * Fix: when disabling, drop every thread context's scope stack on the
+     * floor (we cannot synthesise an end-time for a scope we no longer
+     * care about) and reset the GPU CPU-fallback active-query map. Stats
+     * already recorded are kept — disabling is meant to stop COLLECTION,
+     * not erase history.
      */
-    void SetEnabled(bool enabled) { m_Enabled = enabled; }
+    void SetEnabled(bool enabled);
 
     /**
      * @brief Check if profiling is enabled
      * @return True if enabled
      */
-    bool IsEnabled() const { return m_Enabled; }
+    bool IsEnabled() const { return m_Enabled.load(std::memory_order_relaxed); }
 
     // ========================================================================
     // GPU Profiling Interface (Vulkan VkQueryPool-backed)
@@ -284,7 +301,23 @@ private:
     ProfilerContext& GetThreadContext();
     void MergeThreadStats();
 
-    bool m_Enabled;
+    // Atomic so concurrent ProfileScope ctors/dtors on worker threads can
+    // observe SetEnabled() without a torn read. We use memory_order_relaxed
+    // on the hot path — the cost of a missed enable/disable edge for a
+    // single sample is zero (the very next scope picks up the new value)
+    // and a relaxed read on every PushScope/PopScope avoids serializing
+    // every worker through a fence.
+    std::atomic<bool> m_Enabled;
+
+    // CPU-fallback timestamp map and the merged-timestamps output vector
+    // are touched by every thread that calls BeginGPUQuery/EndGPUQuery
+    // without a command buffer (engine startup, tool code, hot-reload).
+    // The map operations are not lock-free, so we serialize them with a
+    // dedicated mutex; m_StatsMutex protects a different domain (merged
+    // CPU scope stats) and using it here would create false sharing
+    // between the GPU-fallback path and EndFrame().
+    mutable std::mutex m_GPUQueryMutex;
+
     uint64_t m_FrameNumber;
     TimePoint m_FrameStartTime;
 

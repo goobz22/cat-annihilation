@@ -32,7 +32,14 @@ struct DeviceProperties {
     bool canMapHostMemory;
     bool unifiedAddressing;
     bool concurrentKernels;
-    bool asyncEngineCount;
+    // Number of asynchronous copy engines. CUDA returns 0 (no overlap), 1
+    // (single copy engine — overlap one direction of host<->device with
+    // compute), or 2 (dual copy engine — overlap host->device AND
+    // device->host with compute simultaneously). Previously typed as `bool`,
+    // which silently collapsed 1 and 2 to `true` and discarded the
+    // distinction the renderer's interop pipeline needs to decide between
+    // single-buffered and double-buffered upload paths.
+    int asyncEngineCount;
     int pciDeviceId;
     int pciDomainId;
     int pciBusId;

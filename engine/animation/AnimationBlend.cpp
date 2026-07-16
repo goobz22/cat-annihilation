@@ -84,6 +84,27 @@ void AnimationBlend::linearBlendMasked(const std::vector<Transform>& poseA,
     }
 }
 
+// Safe scale-ratio that collapses a zero-or-negative reference axis to the
+// no-op multiplier 1.0. Why this exists: the additive-blend formula
+//
+//     outScale = baseScale * (1 + (additive/reference - 1) * weight)
+//
+// divides by every component of the reference pose's scale. glTF rigs that
+// pin a degenerate bone (a vestigial helper, a zero-scale "constraint
+// socket") to scale=0 on one or more axes would otherwise produce inf/nan
+// in the delta, which propagates into the per-vertex skinning matrix and
+// blows up the entire skinned mesh. Clamping the reference axis to a
+// positive epsilon would silently warp the additive amount; substituting
+// the unit no-op makes the bug visible (the delta becomes "no additive
+// scale on this axis" rather than NaN-poisoning the whole pose) without
+// hiding the upstream rig issue.
+static inline float safeScaleRatio(float additive, float reference) {
+    if (std::abs(reference) < Math::EPSILON) {
+        return 1.0f;
+    }
+    return additive / reference;
+}
+
 void AnimationBlend::additiveBlend(const std::vector<Transform>& basePose,
                                   const std::vector<Transform>& additivePose,
                                   const std::vector<Transform>& additiveReferencePose,
@@ -98,16 +119,29 @@ void AnimationBlend::additiveBlend(const std::vector<Transform>& basePose,
         // Compute additive delta
         Transform delta;
         delta.position = (additivePose[i].position - additiveReferencePose[i].position) * blendFactor;
-        delta.rotation = additiveReferencePose[i].rotation.inverse() * additivePose[i].rotation;
+        // Pre-normalize the reference and additive rotations before
+        // composing the delta. Importers don't always guarantee unit
+        // quaternions (Meshy GLBs in particular ship channels with
+        // |q| up to ~1.0007 from compressed-keyframe interpolation);
+        // multiplying inverse() by additive without normalising scales
+        // the resulting delta quaternion by the product of those small
+        // length errors, and once the slerp(identity, delta, t)
+        // partial-application term is then post-multiplied onto the
+        // base rotation EVERY frame the error compounds — visible as a
+        // slow "shrinking" or "growing" of the rotation magnitude after
+        // a few seconds of additive blend with non-zero weight.
+        const Quaternion refRot = additiveReferencePose[i].rotation.normalized();
+        const Quaternion addRot = additivePose[i].rotation.normalized();
+        delta.rotation = (refRot.inverse() * addRot).normalized();
         delta.scale = vec3(
-            (additivePose[i].scale.x / additiveReferencePose[i].scale.x - 1.0f) * blendFactor + 1.0f,
-            (additivePose[i].scale.y / additiveReferencePose[i].scale.y - 1.0f) * blendFactor + 1.0f,
-            (additivePose[i].scale.z / additiveReferencePose[i].scale.z - 1.0f) * blendFactor + 1.0f
+            (safeScaleRatio(additivePose[i].scale.x, additiveReferencePose[i].scale.x) - 1.0f) * blendFactor + 1.0f,
+            (safeScaleRatio(additivePose[i].scale.y, additiveReferencePose[i].scale.y) - 1.0f) * blendFactor + 1.0f,
+            (safeScaleRatio(additivePose[i].scale.z, additiveReferencePose[i].scale.z) - 1.0f) * blendFactor + 1.0f
         );
 
         // Apply to base pose
         outPose[i].position = basePose[i].position + delta.position;
-        outPose[i].rotation = basePose[i].rotation * Quaternion::slerp(Quaternion::identity(), delta.rotation, blendFactor);
+        outPose[i].rotation = (basePose[i].rotation * Quaternion::slerp(Quaternion::identity(), delta.rotation, blendFactor)).normalized();
         outPose[i].scale = vec3(
             basePose[i].scale.x * delta.scale.x,
             basePose[i].scale.y * delta.scale.y,
@@ -127,19 +161,22 @@ void AnimationBlend::additiveBlendMasked(const std::vector<Transform>& basePose,
     for (size_t i = 0; i < boneCount; ++i) {
         float weight = mask.getWeight(i);
 
-        // Compute additive delta
+        // Compute additive delta. Same normalization + zero-reference
+        // safety as additiveBlend — see the explanatory comments there.
         Transform delta;
         delta.position = (additivePose[i].position - additiveReferencePose[i].position) * weight;
-        delta.rotation = additiveReferencePose[i].rotation.inverse() * additivePose[i].rotation;
+        const Quaternion refRot = additiveReferencePose[i].rotation.normalized();
+        const Quaternion addRot = additivePose[i].rotation.normalized();
+        delta.rotation = (refRot.inverse() * addRot).normalized();
         delta.scale = vec3(
-            (additivePose[i].scale.x / additiveReferencePose[i].scale.x - 1.0f) * weight + 1.0f,
-            (additivePose[i].scale.y / additiveReferencePose[i].scale.y - 1.0f) * weight + 1.0f,
-            (additivePose[i].scale.z / additiveReferencePose[i].scale.z - 1.0f) * weight + 1.0f
+            (safeScaleRatio(additivePose[i].scale.x, additiveReferencePose[i].scale.x) - 1.0f) * weight + 1.0f,
+            (safeScaleRatio(additivePose[i].scale.y, additiveReferencePose[i].scale.y) - 1.0f) * weight + 1.0f,
+            (safeScaleRatio(additivePose[i].scale.z, additiveReferencePose[i].scale.z) - 1.0f) * weight + 1.0f
         );
 
         // Apply to base pose
         outPose[i].position = basePose[i].position + delta.position;
-        outPose[i].rotation = basePose[i].rotation * Quaternion::slerp(Quaternion::identity(), delta.rotation, weight);
+        outPose[i].rotation = (basePose[i].rotation * Quaternion::slerp(Quaternion::identity(), delta.rotation, weight)).normalized();
         outPose[i].scale = vec3(
             basePose[i].scale.x * delta.scale.x,
             basePose[i].scale.y * delta.scale.y,
@@ -156,11 +193,20 @@ void AnimationBlend::computeAdditivePose(const std::vector<Transform>& pose,
 
     for (size_t i = 0; i < boneCount; ++i) {
         outAdditivePose[i].position = pose[i].position - referencePose[i].position;
-        outAdditivePose[i].rotation = referencePose[i].rotation.inverse() * pose[i].rotation;
+        // Normalize before composing the delta. A reference / pose pair
+        // that came in from an importer with |q| != 1 would otherwise
+        // bleed length error into every subsequent additive evaluation —
+        // see the comment block in AnimationBlend::additiveBlend for the
+        // detail. computeAdditivePose feeds AdditiveBlendNode::evaluate,
+        // so the delta lifetime is across every frame the additive node
+        // is active.
+        const Quaternion refRot = referencePose[i].rotation.normalized();
+        const Quaternion poseRot = pose[i].rotation.normalized();
+        outAdditivePose[i].rotation = (refRot.inverse() * poseRot).normalized();
         outAdditivePose[i].scale = vec3(
-            pose[i].scale.x / referencePose[i].scale.x,
-            pose[i].scale.y / referencePose[i].scale.y,
-            pose[i].scale.z / referencePose[i].scale.z
+            safeScaleRatio(pose[i].scale.x, referencePose[i].scale.x),
+            safeScaleRatio(pose[i].scale.y, referencePose[i].scale.y),
+            safeScaleRatio(pose[i].scale.z, referencePose[i].scale.z)
         );
     }
 }

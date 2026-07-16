@@ -8,7 +8,9 @@
 #include "../../game/components/EnemyComponent.hpp"
 #include "../../game/components/ProjectileComponent.hpp"
 
+#include <cmath>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <iomanip>
 
@@ -330,10 +332,82 @@ bool JsonValue::has(const std::string& key) const {
     return type_ == Type::Object && objectValue_.find(key) != objectValue_.end();
 }
 
+namespace {
+
+// Escape a string for JSON output per RFC 8259 §7. Without this, any node name
+// or scene name containing a quote, backslash, or control char produces
+// non-parseable JSON: e.g. setName("My\"Scene") would emit `"My"Scene"` which
+// is two adjacent strings followed by garbage. The parser already handles the
+// inverse direction, so escaping here closes the save/load round-trip.
+std::string escapeJsonString(const std::string& input) {
+    std::string output;
+    output.reserve(input.size() + 2);
+    for (char raw : input) {
+        const unsigned char byte = static_cast<unsigned char>(raw);
+        switch (raw) {
+            case '"':  output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\n': output += "\\n";  break;
+            case '\t': output += "\\t";  break;
+            case '\r': output += "\\r";  break;
+            case '\b': output += "\\b";  break;
+            case '\f': output += "\\f";  break;
+            default:
+                if (byte < 0x20) {
+                    // Non-printable control characters must be emitted as \u00XX
+                    // to keep the output strictly valid JSON.
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", byte);
+                    output += buf;
+                } else {
+                    output += raw;
+                }
+                break;
+        }
+    }
+    return output;
+}
+
+// Format a numeric JsonValue with enough precision to round-trip a double
+// (and therefore any float) losslessly. setprecision(6) + std::fixed silently
+// truncated transforms like vec3(0.1234567f, ...) to 0.123457 on save, then
+// loaded a value that no longer equals the original — a corruption that
+// only surfaces several scene-reloads in as drift accumulates.
+//
+// We use the shortest representation (%.17g) for non-integer doubles so that
+// "1.0" doesn't bloat to "1.00000000000000000", and emit integer values as
+// integers so entity IDs (uint64_t packed into a double) stay diff-friendly.
+std::string formatJsonNumber(double value) {
+    if (std::isnan(value) || std::isinf(value)) {
+        // RFC 8259 forbids NaN/Inf — emit 0 rather than producing invalid JSON
+        // the parser would silently turn back into 0 anyway.
+        return "0";
+    }
+    // Integer fast-path: anything representable exactly as int64 prints as
+    // a base-10 integer with no decimal point. This keeps Entity.id columns
+    // (gen << 32 | index) compact and stable across saves.
+    if (value >= -9007199254740992.0 && value <= 9007199254740992.0) {
+        double rounded = std::trunc(value);
+        if (rounded == value) {
+            std::ostringstream integerStream;
+            integerStream << static_cast<long long>(rounded);
+            return integerStream.str();
+        }
+    }
+    // %.17g is the canonical "round-trip a double" specifier — std::stod will
+    // reconstruct an identical double from the string. Using %g (not %f) drops
+    // trailing zeros and chooses scientific notation only when shorter.
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.17g", value);
+    return buf;
+}
+
+} // namespace
+
 std::string JsonValue::toString(int indent) const {
     std::ostringstream ss;
-    std::string indentStr(indent * 2, ' ');
-    std::string nextIndentStr((indent + 1) * 2, ' ');
+    std::string indentStr(static_cast<size_t>(indent) * 2, ' ');
+    std::string nextIndentStr(static_cast<size_t>(indent + 1) * 2, ' ');
 
     switch (type_) {
         case Type::Null:
@@ -345,11 +419,11 @@ std::string JsonValue::toString(int indent) const {
             break;
 
         case Type::Number:
-            ss << std::fixed << std::setprecision(6) << numberValue_;
+            ss << formatJsonNumber(numberValue_);
             break;
 
         case Type::String:
-            ss << "\"" << stringValue_ << "\"";
+            ss << "\"" << escapeJsonString(stringValue_) << "\"";
             break;
 
         case Type::Array:
@@ -372,15 +446,26 @@ std::string JsonValue::toString(int indent) const {
             if (objectValue_.empty()) {
                 ss << "{}";
             } else {
+                // Sort keys for deterministic output. std::unordered_map gives
+                // implementation-defined iteration order, which makes byte-diff
+                // tests and content-addressable storage (e.g. asset hashing)
+                // produce spurious churn on rebuild. A std::map view at
+                // serialization-time costs O(n log n) once per save and erases
+                // an entire class of "scene file changed but data didn't" bugs.
+                std::map<std::string, const JsonValue*> sortedKeys;
+                for (const auto& [key, value] : objectValue_) {
+                    sortedKeys.emplace(key, &value);
+                }
                 ss << "{\n";
                 size_t i = 0;
-                for (const auto& [key, value] : objectValue_) {
-                    ss << nextIndentStr << "\"" << key << "\": " << value.toString(indent + 1);
-                    if (i < objectValue_.size() - 1) {
+                for (const auto& [key, valuePtr] : sortedKeys) {
+                    ss << nextIndentStr << "\"" << escapeJsonString(key) << "\": "
+                       << valuePtr->toString(indent + 1);
+                    if (i < sortedKeys.size() - 1) {
                         ss << ",";
                     }
                     ss << "\n";
-                    i++;
+                    ++i;
                 }
                 ss << indentStr << "}";
             }
@@ -604,6 +689,38 @@ std::unique_ptr<Scene> SceneSerializer::loadFromString(const std::string& json) 
     const JsonValue& sceneGraph = root["sceneGraph"];
     for (size_t i = 0; i < sceneGraph.size(); ++i) {
         deserializeNode(sceneGraph[i], scene->getECS(), scene->getRootNode());
+    }
+
+    // Patch cross-component Entity references using the remap built during
+    // deserializeEntity. Without this pass an EnemyComponent::target loaded
+    // from disk still holds the entity ID from the save — that handle's
+    // generation counter is stale in the fresh ECS, so isAlive() returns
+    // false and AI silently snaps to "no target" on every scene load. The
+    // header doc-comment promised this remap years before the body did it.
+    auto remapEntity = [this](Entity& reference) {
+        if (!reference.isValid()) {
+            return;
+        }
+        auto it = entityRemap_.find(reference.id);
+        if (it != entityRemap_.end()) {
+            reference = it->second;
+        } else {
+            // A reference that doesn't resolve in this scene must not silently
+            // point at a random entity — null it so isAlive() correctly
+            // reports "no target" and gameplay systems can re-acquire.
+            reference = NULL_ENTITY;
+        }
+    };
+
+    ECS& ecs = scene->getECS();
+    for (const auto& [originalId, newEntity] : entityRemap_) {
+        if (auto* enemy = ecs.getComponent<CatGame::EnemyComponent>(newEntity)) {
+            remapEntity(enemy->target);
+        }
+        if (auto* projectile = ecs.getComponent<CatGame::ProjectileComponent>(newEntity)) {
+            remapEntity(projectile->owner);
+            remapEntity(projectile->homingTarget);
+        }
     }
 
     return scene;

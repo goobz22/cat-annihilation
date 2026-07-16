@@ -155,31 +155,82 @@ struct Ray {
         return intersectsTriangle(v0, v1, v2, t);
     }
 
-    // AABB intersection (defined here to avoid circular dependency)
+    // AABB intersection — slab test, defined here to avoid circular dependency.
+    //
+    // The classic IEEE-754 trick (1.0f / 0.0f -> +inf, sign-preserved) does
+    // most of the work for us, but it has one degenerate case that produces
+    // NaN: when direction.{axis} is exactly zero AND origin.{axis} lies
+    // exactly on a slab edge, the slab intercept evaluates to (0 - 0) *
+    // (+/-inf) = 0 * inf = NaN, which then poisons every downstream
+    // std::min/std::max (the result of min(NaN, x) is implementation-defined
+    // and routinely returns NaN). A NaN tMin/tMax slips past the final
+    // `tMax >= tMin && tMax >= 0` comparison too — both comparisons evaluate
+    // false against NaN, so the function reports MISS for a ray that is
+    // physically touching the AABB along that axis. That's a silent
+    // false-negative in raycast-against-axis-aligned-occluders code paths
+    // (e.g., picking, broadphase culling, projectile-vs-wall).
+    //
+    // Fix: detect parallel-to-axis rays explicitly. If direction.{axis} is
+    // ~0, the ray either skims past the slab forever (origin outside slab,
+    // immediate miss) or is fully inside the slab on that axis (no constraint
+    // contribution -> set tNear=-inf, tFar=+inf so the per-axis min/max
+    // operations leave the other axes' tighter bounds alone). On the
+    // non-parallel axes we keep the IEEE-754 +/-inf trick — it correctly
+    // preserves slab-direction sign without a divide-by-zero branch.
     bool intersectsAABB(const vec3& aabbMin, const vec3& aabbMax, float& tMin, float& tMax) const {
-        vec3 invDir(
-            std::abs(direction.x) > Math::EPSILON ? 1.0f / direction.x : Math::INFINITY_F,
-            std::abs(direction.y) > Math::EPSILON ? 1.0f / direction.y : Math::INFINITY_F,
-            std::abs(direction.z) > Math::EPSILON ? 1.0f / direction.z : Math::INFINITY_F
-        );
+        float tNearX, tFarX, tNearY, tFarY, tNearZ, tFarZ;
 
-        vec3 t0 = (aabbMin - origin) * invDir;
-        vec3 t1 = (aabbMax - origin) * invDir;
+        if (std::abs(direction.x) > Math::EPSILON) {
+            const float invX = 1.0f / direction.x;
+            const float t0 = (aabbMin.x - origin.x) * invX;
+            const float t1 = (aabbMax.x - origin.x) * invX;
+            tNearX = std::min(t0, t1);
+            tFarX  = std::max(t0, t1);
+        } else if (origin.x < aabbMin.x || origin.x > aabbMax.x) {
+            // Ray parallel to YZ plane and entirely outside the X slab —
+            // no possible intersection regardless of the other axes.
+            tMin = Math::INFINITY_F;
+            tMax = -Math::INFINITY_F;
+            return false;
+        } else {
+            // Ray is inside the X slab for all t — let the other axes
+            // determine the actual entry/exit parameters.
+            tNearX = -Math::INFINITY_F;
+            tFarX  =  Math::INFINITY_F;
+        }
 
-        vec3 tNear = vec3(
-            std::min(t0.x, t1.x),
-            std::min(t0.y, t1.y),
-            std::min(t0.z, t1.z)
-        );
+        if (std::abs(direction.y) > Math::EPSILON) {
+            const float invY = 1.0f / direction.y;
+            const float t0 = (aabbMin.y - origin.y) * invY;
+            const float t1 = (aabbMax.y - origin.y) * invY;
+            tNearY = std::min(t0, t1);
+            tFarY  = std::max(t0, t1);
+        } else if (origin.y < aabbMin.y || origin.y > aabbMax.y) {
+            tMin = Math::INFINITY_F;
+            tMax = -Math::INFINITY_F;
+            return false;
+        } else {
+            tNearY = -Math::INFINITY_F;
+            tFarY  =  Math::INFINITY_F;
+        }
 
-        vec3 tFar = vec3(
-            std::max(t0.x, t1.x),
-            std::max(t0.y, t1.y),
-            std::max(t0.z, t1.z)
-        );
+        if (std::abs(direction.z) > Math::EPSILON) {
+            const float invZ = 1.0f / direction.z;
+            const float t0 = (aabbMin.z - origin.z) * invZ;
+            const float t1 = (aabbMax.z - origin.z) * invZ;
+            tNearZ = std::min(t0, t1);
+            tFarZ  = std::max(t0, t1);
+        } else if (origin.z < aabbMin.z || origin.z > aabbMax.z) {
+            tMin = Math::INFINITY_F;
+            tMax = -Math::INFINITY_F;
+            return false;
+        } else {
+            tNearZ = -Math::INFINITY_F;
+            tFarZ  =  Math::INFINITY_F;
+        }
 
-        tMin = std::max(tNear.x, std::max(tNear.y, tNear.z));
-        tMax = std::min(tFar.x, std::min(tFar.y, tFar.z));
+        tMin = std::max(tNearX, std::max(tNearY, tNearZ));
+        tMax = std::min(tFarX,  std::min(tFarY,  tFarZ));
 
         return tMax >= tMin && tMax >= 0.0f;
     }

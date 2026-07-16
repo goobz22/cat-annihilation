@@ -4,6 +4,7 @@
 #include "../Camera.hpp"
 #include <cstring>
 #include <array>
+#include <string>
 
 namespace CatEngine::Renderer {
 
@@ -267,10 +268,17 @@ void SkyboxPass::CreatePipelines() {
         vertexBinding.stride = sizeof(float) * 3;
         vertexBinding.inputRate = RHI::VertexInputRate::Vertex;
 
+        // WHY RGB32_SFLOAT (not RGBA32_SFLOAT): SKYBOX_VERTICES is a tightly
+        // packed vec3 array (stride 12 B). RGBA32_SFLOAT advertises a 16-byte
+        // attribute, which causes the vertex fetcher to read past the end of
+        // each vec3 slot — at best it sprays the .w lane with the next vertex's
+        // .x, at worst it over-reads the buffer on the final vertex and gets
+        // flagged by validation as a "vertex buffer bounds violation". RGB32
+        // matches the actual stride and the GLSL `layout(location = 0) in vec3`.
         RHI::VertexAttribute positionAttr{};
         positionAttr.location = 0;
         positionAttr.binding = 0;
-        positionAttr.format = RHI::TextureFormat::RGBA32_SFLOAT; // vec3
+        positionAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
         positionAttr.offset = 0;
 
         pipelineDesc.vertexInput.bindings = {vertexBinding};
@@ -306,7 +314,7 @@ void SkyboxPass::CreatePipelines() {
         RHI::PipelineDesc pipelineDesc{};
         // pipelineDesc.shaders = {skyboxVertShader_.get(), atmosphereFragShader_.get()};
 
-        // Same vertex input as cubemap
+        // Same vertex input as cubemap — see the RGB32 reasoning there.
         RHI::VertexBinding vertexBinding{};
         vertexBinding.binding = 0;
         vertexBinding.stride = sizeof(float) * 3;
@@ -315,7 +323,7 @@ void SkyboxPass::CreatePipelines() {
         RHI::VertexAttribute positionAttr{};
         positionAttr.location = 0;
         positionAttr.binding = 0;
-        positionAttr.format = RHI::TextureFormat::RGBA32_SFLOAT; // vec3
+        positionAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
         positionAttr.offset = 0;
 
         pipelineDesc.vertexInput.bindings = {vertexBinding};
@@ -393,8 +401,17 @@ void SkyboxPass::CreateUniformBuffers() {
     bufferDesc.usage = RHI::BufferUsage::Uniform;
     bufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
 
+    // WHY local std::string: BufferDesc::debugName is a non-owning const char*.
+    // The previous one-liner
+    //     bufferDesc.debugName = ("SkyboxUniformBuffer_" + std::to_string(i)).c_str();
+    // produced a pointer into a temporary string that died at the end of the
+    // full-expression — every CreateBuffer call read freed memory while
+    // copying the label into VulkanBuffer::m_DebugName. Holding the name in a
+    // local that outlives the call closes the lifetime window.
+    std::string bufferName;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        bufferDesc.debugName = ("SkyboxUniformBuffer_" + std::to_string(i)).c_str();
+        bufferName = "SkyboxUniformBuffer_" + std::to_string(i);
+        bufferDesc.debugName = bufferName.c_str();
         uniformBuffers_[i].reset(rhi_->CreateBuffer(bufferDesc));
     }
 }

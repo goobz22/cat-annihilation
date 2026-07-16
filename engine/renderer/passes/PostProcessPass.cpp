@@ -3,6 +3,7 @@
 #include "../../rhi/vulkan/VulkanShader.hpp"
 #include <cstring>
 #include <algorithm>
+#include <string>
 
 namespace CatEngine::Renderer {
 
@@ -144,6 +145,17 @@ void PostProcessPass::CreateRenderTargets(uint32_t width, uint32_t height) {
     uint32_t mipWidth = width / 2;
     uint32_t mipHeight = height / 2;
 
+    // WHY local string storage: RHI::TextureDesc::debugName is a non-owning
+    // `const char*`. The previous code wrote
+    //     bloomDesc.debugName = ("BloomDownsample_" + std::to_string(i)).c_str();
+    // which materialised a temporary `std::string`, took a pointer into its
+    // buffer, then let that string die at the end of the full-expression — so
+    // CreateTexture read a dangling pointer (often producing a corrupted /
+    // truncated debug label, occasionally a heap-use-after-free under ASAN).
+    // Holding the names in stack-local std::strings that outlive the
+    // CreateTexture call closes the lifetime gap.
+    std::string downsampleName;
+    std::string upsampleName;
     for (uint32_t i = 0; i < bloomSettings_.downsamplePasses && i < MAX_BLOOM_MIPS; ++i) {
         mipWidth = std::max(1u, mipWidth);
         mipHeight = std::max(1u, mipHeight);
@@ -159,12 +171,14 @@ void PostProcessPass::CreateRenderTargets(uint32_t width, uint32_t height) {
         bloomDesc.mipLevels = 1;
         bloomDesc.arrayLayers = 1;
         bloomDesc.sampleCount = 1;
-        bloomDesc.debugName = ("BloomDownsample_" + std::to_string(i)).c_str();
+        downsampleName = "BloomDownsample_" + std::to_string(i);
+        bloomDesc.debugName = downsampleName.c_str();
 
         bloomDownsampleTextures_[i].reset(rhi_->CreateTexture(bloomDesc));
 
         // Upsample texture
-        bloomDesc.debugName = ("BloomUpsample_" + std::to_string(i)).c_str();
+        upsampleName = "BloomUpsample_" + std::to_string(i);
+        bloomDesc.debugName = upsampleName.c_str();
         bloomUpsampleTextures_[i].reset(rhi_->CreateTexture(bloomDesc));
 
         mipWidth /= 2;
@@ -326,8 +340,13 @@ void PostProcessPass::CreateUniformBuffers() {
     bufferDesc.usage = RHI::BufferUsage::Uniform;
     bufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
 
+    // WHY local string: BufferDesc::debugName is a non-owning const char*. The
+    // string must outlive the CreateBuffer call so the Vulkan backend can copy
+    // it into VulkanBuffer::m_DebugName before the buffer is dropped.
+    std::string uniformName;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        bufferDesc.debugName = ("PostProcessUniformBuffer_" + std::to_string(i)).c_str();
+        uniformName = "PostProcessUniformBuffer_" + std::to_string(i);
+        bufferDesc.debugName = uniformName.c_str();
         uniformBuffers_[i].reset(rhi_->CreateBuffer(bufferDesc));
     }
 }

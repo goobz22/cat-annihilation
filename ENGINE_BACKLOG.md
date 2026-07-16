@@ -600,9 +600,40 @@ minimal*.
 The game is a harness for the engine, not a shippable product. These items
 exist only where the harness is too thin to exercise a subsystem it should.
 
-- [ ] **Wave-difficulty curve.**
+- [x] **Wave-difficulty curve.**
   Replace the linear ramp with a dense/sparse curve aligned to the combo
   system's ramp — gives the particle sim more variety to render.
+  → [game/systems/WaveDifficulty.hpp](game/systems/WaveDifficulty.hpp), [game/systems/WaveSystem.cpp](game/systems/WaveSystem.cpp)
+  > note (2026-05-16): Landed `game/systems/WaveDifficulty.hpp` as a
+  > header-only pure-function module (same shape as RibbonTrail.hpp /
+  > SimplexNoise.hpp — `<cmath>` + `<algorithm>` only, no ECS / System /
+  > CUDA coupling). Curve:
+  > `enemyCount(N) = base + (N-1)*mul + amp * sin(2π·N/period)` and
+  > `healthMul(N)  = 1.0  + (N-1)*hpPer + hpAmp * cos(2π·N/period)`. The
+  > 90° phase offset between sin (count) and cos (hp) means dense waves
+  > coincide with EASY enemies and sparse waves coincide with TOUGH
+  > enemies — a 3-wave rhythm (period=3 matches the combo system's
+  > 3-input attack chains) that visibly cycles density states for the
+  > particle sim instead of the old monotonic ramp. Both formulas clamp
+  > at `minEnemyCount` / `minHealthScaling` floors so aggressive amplitudes
+  > can't produce 0-enemy waves or sub-baseline hp. Linear opt-out
+  > (`amp=0`) is bit-exact against the pre-curve
+  > `static_cast<int>(base + (N-1)*mul)` formula at WaveSystem.cpp:354
+  > (truncation, NOT rounding, to preserve golden-image reproducibility).
+  > `WaveSystem::calculateEnemyCount` / `calculateHealthScaling` now
+  > construct a `WaveDifficultyConfig` from existing `WaveConfig` fields
+  > and delegate to the module — no public API change, no caller-site
+  > change. 6 Catch2 cases / 91 assertions in
+  > `tests/unit/test_wave_difficulty.cpp` cover: linear opt-out bit-exact
+  > match across waves 1..20, dense/sparse spread ≥ 2 enemies across a
+  > 3-wave cycle, detrended-series correlation < 0.5 (the 90° phase
+  > decorrelation invariant), min floors clamp aggressive amplitudes,
+  > 100-wave linear trend still grows, pure-function determinism
+  > (1000-call reproducibility), edge cases (wave=1, period=0,
+  > period<0, wave=10000). Test suite grew 22571→22662 assertions and
+  > 280→286 cases, all green. cat-test-gate --quick green
+  > (compile-check passed in 95.5s, full game ninja-build rebuilt
+  > clean).
 
 - [ ] **Quest/dialog save-load round-trip.**
   The quest system is scaffolded but doesn't survive a save/load. Hook it

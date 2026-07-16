@@ -1,0 +1,16 @@
+{
+  "ts": "2026-05-16T15:41:51.836Z",
+  "ok": true,
+  "exitCode": 0,
+  "stages": [
+    {
+      "name": "compile-check",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 95519,
+      "summary": "passed (95.5s)"
+    }
+  ],
+  "gitSha": "270423d",
+  "invocation": "--quick --json"
+}

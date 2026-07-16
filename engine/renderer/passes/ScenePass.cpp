@@ -1838,8 +1838,8 @@ bool ScenePass::EnsureModelGpuMesh(const CatEngine::Model* model) {
             // without an authored UV (TEXCOORD_0 accessor missing), so this
             // copy is safe regardless of asset completeness. Meshy GLBs
             // ship a real texcoord0 per vertex; older hand-authored .gltf
-            // placeholders default to zero, which the fragment shader
-            // recognises and falls back to flat tint for.
+            // assets without a TEXCOORD_0 accessor default to zero, which
+            // the fragment shader recognises and falls back to flat tint for.
             packedVertices.push_back(vertex.texcoord0.x);
             packedVertices.push_back(vertex.texcoord0.y);
         }
@@ -2450,15 +2450,15 @@ bool ScenePass::CreateRibbonPipelineAndBuffers() {
     //      `kTestParticles * 6`. Sub-task (b) will lift that clamp once
     //      live particles are flowing.
     //
-    // Cap chosen at 1024 ribbon particles for now: ≤48 KB vertex buffer,
-    // ≤24 KB index buffer — trivial in VRAM and small enough to host-visible
-    // map without measurable cost. The full game-cap of 1,000,000 (see
-    // ParticleSystem::Config::maxParticles) would allocate 192 MB of host-
-    // visible memory at this stage, which is wasteful when only 12 verts
-    // are written; sub-task (a) re-allocates as DEVICE_LOCAL+external-memory
-    // at the larger cap once the CUDA interop path is wiring real particles
-    // in. A single-knob bump here at that point is the only buffer change
-    // needed.
+    // Cap chosen at 1024 ribbon particles at this iteration: ≤48 KB vertex
+    // buffer, ≤24 KB index buffer — trivial in VRAM and small enough to
+    // host-visible map without measurable cost. The full game-cap of
+    // 1,000,000 (see ParticleSystem::Config::maxParticles) would allocate
+    // 192 MB of host-visible memory at this stage, which is wasteful when
+    // only 12 verts are written; sub-task (a) re-allocates as
+    // DEVICE_LOCAL+external-memory at the larger cap once the CUDA interop
+    // path is wiring real particles in. A single-knob bump here at that
+    // point is the only buffer change needed.
     constexpr int kRibbonCap = 1024;
     m_ribbonMaxParticles = kRibbonCap;
 

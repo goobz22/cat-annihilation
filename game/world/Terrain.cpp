@@ -264,11 +264,12 @@ void Terrain::downloadFromGpu() {
     // (player + 0.75 lookAt) framing both work for cat-at-y=0, and
     // trees place at y=0 once we relax Forest's height-bounds gate.
     //
-    // This is a TEMPORARY override. Re-enabling terrain elevation needs
+    // Re-enabling terrain elevation requires three coupled changes:
     // (a) a camera framing that handles arbitrary cat.y, (b) better
     // terrain shading so the elevation reads visually, (c) a forest /
     // tree placement strategy that doesn't end up with cat trapped on
-    // hilltops. For now, flat-plane to unblock the playtest loop.
+    // hilltops. Until those three land together, the flat-plane override
+    // here keeps the playtest loop unblocked.
     std::fill(m_heightmap.begin(), m_heightmap.end(), 0.0F);
 
     // Download normals

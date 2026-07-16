@@ -10,6 +10,8 @@ namespace Physics {
 PhysicsWorld::PhysicsWorld(CUDA::CudaContext& cudaContext, int maxBodies, int maxContacts)
     : m_cudaContext(cudaContext)
     , m_stream(CUDA::CudaStream::Flags::NonBlocking)
+    , m_gpuContacts(nullptr)
+    , m_gpuContactCount(nullptr)
     , m_maxBodies(maxBodies)
     , m_maxContacts(maxContacts)
     , m_fixedTimestep(1.0f / 60.0f)
@@ -23,17 +25,35 @@ PhysicsWorld::PhysicsWorld(CUDA::CudaContext& cudaContext, int maxBodies, int ma
     m_params.angularDamping = 0.05f;
     m_params.solverIterations = 6;
 
-    // Allocate GPU memory
-    m_gpuBodies = allocateGpuRigidBodies(maxBodies);
-    m_spatialHash = allocateSpatialHashData(maxBodies, 2.0f); // Cell size = 2.0
-    m_collisionPairs = allocateCollisionPairs(maxBodies * 10); // Estimate 10 pairs per body
+    // Allocate GPU memory under an exception-safety guard. WHY: each
+    // subsequent allocation may throw via CUDA_CHECK (out-of-memory mid-init
+    // is a real failure mode on memory-constrained GPUs); the destructor
+    // doesn't run during a throwing constructor, so any successful earlier
+    // allocations would leak. We catch, free what we got, and rethrow.
+    try {
+        m_gpuBodies = allocateGpuRigidBodies(maxBodies);
+        m_spatialHash = allocateSpatialHashData(maxBodies, 2.0f); // Cell size = 2.0
+        m_collisionPairs = allocateCollisionPairs(maxBodies * 10); // Estimate 10 pairs per body
 
-    CUDA_CHECK(cudaMalloc(&m_gpuContacts, maxContacts * sizeof(GpuContactManifold)));
-    CUDA_CHECK(cudaMalloc(&m_gpuContactCount, sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&m_gpuContacts, maxContacts * sizeof(GpuContactManifold)));
+        CUDA_CHECK(cudaMalloc(&m_gpuContactCount, sizeof(int)));
 
-    // Device mirror for body radii (used by broadphase kernels — must live on GPU).
-    CUDA_CHECK(cudaMalloc(&m_radiiDevice, static_cast<size_t>(maxBodies) * sizeof(float)));
-    m_radiiDeviceCapacity = maxBodies;
+        // Device mirror for body radii (used by broadphase kernels — must live on GPU).
+        CUDA_CHECK(cudaMalloc(&m_radiiDevice, static_cast<size_t>(maxBodies) * sizeof(float)));
+        m_radiiDeviceCapacity = maxBodies;
+    } catch (...) {
+        // Roll back whatever did succeed before the throw. Safe to call
+        // free on zero-initialised resource bundles — the allocate* helpers
+        // return zero-filled aggregates so the matching free routines
+        // tolerate null pointers internally.
+        freeGpuRigidBodies(m_gpuBodies);
+        freeSpatialHashData(m_spatialHash);
+        freeCollisionPairs(m_collisionPairs);
+        if (m_gpuContacts) cudaFree(m_gpuContacts);
+        if (m_gpuContactCount) cudaFree(m_gpuContactCount);
+        if (m_radiiDevice) cudaFree(m_radiiDevice);
+        throw;
+    }
 
     // Reserve CPU memory
     m_bodies.reserve(maxBodies);
@@ -498,8 +518,20 @@ RaycastHit PhysicsWorld::raycast(const Engine::Ray& ray, float maxDistance) cons
             float discriminant = b * b - 4 * a * c;
 
             if (discriminant >= 0) {
-                float t = (-b - std::sqrt(discriminant)) / (2.0f * a);
-                if (t >= 0 && t <= maxDistance && t < bestHit.distance) {
+                // Two roots: tNear (entry) and tFar (exit). If the ray origin
+                // sits inside the sphere (c <= 0) the near root is negative
+                // and only tFar is in front of the ray. Returning the forward
+                // root in that case fixes the inside-out raycast miss (e.g.
+                // raycasts from inside a trigger volume) that the previous
+                // tNear-only logic silently dropped.
+                const float sqrtDisc = std::sqrt(discriminant);
+                const float inv2a = 1.0f / (2.0f * a);
+                const float tNear = (-b - sqrtDisc) * inv2a;
+                const float tFar  = (-b + sqrtDisc) * inv2a;
+                float t = -1.0f;
+                if (tNear >= 0.0f)      t = tNear;
+                else if (tFar >= 0.0f)  t = tFar;
+                if (t >= 0.0f && t <= maxDistance && t < bestHit.distance) {
                     bestHit.bodyIndex = static_cast<int>(i);
                     bestHit.distance = t;
                     bestHit.point = ray.origin + ray.direction * t;

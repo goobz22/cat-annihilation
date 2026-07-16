@@ -222,9 +222,17 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(VulkanDevice* device, const Pipel
     : m_Device(device)
     , m_Pipeline(VK_NULL_HANDLE)
     , m_DebugName(desc.debugName ? desc.debugName : "")
+    , m_OwnsLayout(true)
 {
-    // Create default layout from shader reflection
-    VkPipelineLayout layout = CreateDefaultLayout(desc);
+    // No descriptor sets, no push constants — produce a fresh owned
+    // VulkanPipelineLayout via the wrapper class instead of the raw
+    // CreateDefaultLayout() helper. Going through VulkanPipelineLayout
+    // ensures the VkPipelineLayout is destroyed in our destructor via
+    // m_Layout's owned unique_ptr, instead of leaking the raw handle
+    // that the previous code path produced (CreateDefaultLayout returned
+    // a VkPipelineLayout that nobody destroyed — every pipeline created
+    // through this no-layout constructor leaked one VkPipelineLayout
+    // for the entire process lifetime).
     m_Layout = std::make_unique<VulkanPipelineLayout>(
         device,
         std::vector<IRHIDescriptorSetLayout*>{},
@@ -239,9 +247,22 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(VulkanDevice* device, const Pipel
                                                VulkanPipelineLayout* layout, VkPipelineCache cache)
     : m_Device(device)
     , m_Pipeline(VK_NULL_HANDLE)
-    , m_Layout(layout)
     , m_DebugName(desc.debugName ? desc.debugName : "")
+    , m_OwnsLayout(false)
 {
+    // The caller still owns `layout`: VulkanRHI::CreateGraphicsPipeline
+    // forwards a VulkanPipelineLayout that was created via
+    // IRHIDevice::CreatePipelineLayout, and the engine destroys it via
+    // IRHIDevice::DestroyPipelineLayout — independent of the pipeline's
+    // own lifetime. We MUST NOT transfer ownership into our unique_ptr
+    // here; the previous version did (`m_Layout(layout)` in the init
+    // list) which produced a double-free at shutdown whenever a layout
+    // was shared between the pipeline and any caller that also held the
+    // raw pointer (the standard pattern in this engine). The
+    // m_OwnsLayout flag distinguishes the two construction modes so the
+    // destructor can decide whether to release or not without leaking
+    // the no-layout case's owned default.
+    m_BorrowedLayout = layout;
     CreatePipeline(desc, cache);
 }
 
@@ -256,23 +277,40 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(VulkanGraphicsPipeline&& other) n
     : m_Device(other.m_Device)
     , m_Pipeline(other.m_Pipeline)
     , m_Layout(std::move(other.m_Layout))
+    , m_BorrowedLayout(other.m_BorrowedLayout)
+    , m_OwnsLayout(other.m_OwnsLayout)
     , m_DebugName(std::move(other.m_DebugName))
 {
     other.m_Device = nullptr;
     other.m_Pipeline = VK_NULL_HANDLE;
+    other.m_BorrowedLayout = nullptr;
+    // Leave other.m_OwnsLayout as-is — the moved-from instance has
+    // a null m_Layout and a null m_BorrowedLayout, so its destructor
+    // is a no-op regardless of the flag's value.
 }
 
 VulkanGraphicsPipeline& VulkanGraphicsPipeline::operator=(VulkanGraphicsPipeline&& other) noexcept {
     if (this != &other) {
-        this->~VulkanGraphicsPipeline();
+        // Destroy our owned pipeline FIRST without invoking the dtor on
+        // `this` — calling `this->~VulkanGraphicsPipeline()` would end
+        // this object's lifetime (per the C++ standard), making the
+        // subsequent member assignments undefined behaviour. Destroying
+        // the VkPipeline directly here, then re-assigning members, keeps
+        // the object alive throughout the operation.
+        if (m_Device != nullptr && m_Pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_Device->GetVkDevice(), m_Pipeline, nullptr);
+        }
 
         m_Device = other.m_Device;
         m_Pipeline = other.m_Pipeline;
         m_Layout = std::move(other.m_Layout);
+        m_BorrowedLayout = other.m_BorrowedLayout;
+        m_OwnsLayout = other.m_OwnsLayout;
         m_DebugName = std::move(other.m_DebugName);
 
         other.m_Device = nullptr;
         other.m_Pipeline = VK_NULL_HANDLE;
+        other.m_BorrowedLayout = nullptr;
     }
     return *this;
 }
@@ -435,7 +473,15 @@ void VulkanGraphicsPipeline::CreatePipeline(const PipelineDesc& desc, VkPipeline
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_Layout->GetVkPipelineLayout();
+    // GetLayout() resolves to the owned default (m_Layout) or the
+    // caller-supplied borrow (m_BorrowedLayout) depending on which
+    // constructor was used. Using the accessor here means BOTH
+    // construction paths produce a valid VkPipelineLayout in the
+    // create-info — the bug-before-fix dereferenced m_Layout
+    // unconditionally, which was nullptr in the layout-aware
+    // constructor path and would have crashed the moment a pass with
+    // descriptor sets created its pipeline.
+    pipelineInfo.layout = GetLayout()->GetVkPipelineLayout();
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = desc.subpass;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
@@ -460,6 +506,7 @@ VulkanComputePipeline::VulkanComputePipeline(VulkanDevice* device, const Compute
     : m_Device(device)
     , m_Pipeline(VK_NULL_HANDLE)
     , m_DebugName(desc.debugName ? desc.debugName : "")
+    , m_OwnsLayout(true)
 {
     m_Layout = std::make_unique<VulkanPipelineLayout>(
         device,
@@ -475,9 +522,14 @@ VulkanComputePipeline::VulkanComputePipeline(VulkanDevice* device, const Compute
                                              VulkanPipelineLayout* layout, VkPipelineCache cache)
     : m_Device(device)
     , m_Pipeline(VK_NULL_HANDLE)
-    , m_Layout(layout)
     , m_DebugName(desc.debugName ? desc.debugName : "")
+    , m_OwnsLayout(false)
 {
+    // Caller-owned layout: store as non-owning borrow so we do NOT
+    // destroy a VkPipelineLayout that the caller's
+    // DestroyPipelineLayout() path will also destroy. Mirrors the same
+    // fix applied to VulkanGraphicsPipeline above.
+    m_BorrowedLayout = layout;
     CreatePipeline(desc, cache);
 }
 
@@ -492,23 +544,36 @@ VulkanComputePipeline::VulkanComputePipeline(VulkanComputePipeline&& other) noex
     : m_Device(other.m_Device)
     , m_Pipeline(other.m_Pipeline)
     , m_Layout(std::move(other.m_Layout))
+    , m_BorrowedLayout(other.m_BorrowedLayout)
+    , m_OwnsLayout(other.m_OwnsLayout)
     , m_DebugName(std::move(other.m_DebugName))
 {
     other.m_Device = nullptr;
     other.m_Pipeline = VK_NULL_HANDLE;
+    other.m_BorrowedLayout = nullptr;
 }
 
 VulkanComputePipeline& VulkanComputePipeline::operator=(VulkanComputePipeline&& other) noexcept {
     if (this != &other) {
-        this->~VulkanComputePipeline();
+        // See the equivalent ::operator= on VulkanGraphicsPipeline for
+        // the full rationale: calling `this->~VulkanComputePipeline()`
+        // ends the object's lifetime per the standard, making the
+        // subsequent member assignments undefined behaviour. Destroy
+        // the VkPipeline directly here, then re-assign members.
+        if (m_Device != nullptr && m_Pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_Device->GetVkDevice(), m_Pipeline, nullptr);
+        }
 
         m_Device = other.m_Device;
         m_Pipeline = other.m_Pipeline;
         m_Layout = std::move(other.m_Layout);
+        m_BorrowedLayout = other.m_BorrowedLayout;
+        m_OwnsLayout = other.m_OwnsLayout;
         m_DebugName = std::move(other.m_DebugName);
 
         other.m_Device = nullptr;
         other.m_Pipeline = VK_NULL_HANDLE;
+        other.m_BorrowedLayout = nullptr;
     }
     return *this;
 }
@@ -537,7 +602,12 @@ void VulkanComputePipeline::CreatePipeline(const ComputePipelineDesc& desc, VkPi
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.stage = vkShader->GetShaderStageCreateInfo();
-    pipelineInfo.layout = m_Layout->GetVkPipelineLayout();
+    // Use the ownership-aware accessor instead of touching m_Layout
+    // directly — the layout-aware constructor stores the caller's
+    // layout in m_BorrowedLayout, not m_Layout, so dereferencing
+    // m_Layout here would null-deref for the every-pass-with-bindings
+    // path.
+    pipelineInfo.layout = GetLayout()->GetVkPipelineLayout();
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
     VkDevice device = m_Device->GetVkDevice();

@@ -295,6 +295,15 @@ void Animator::startTransition(const std::string& targetState, float duration) {
         return;
     }
 
+    // Snapshot the current pose as the "previous" half of the blend.
+    //
+    // If a transition is already in-flight when startTransition() fires
+    // (state A->B 40% through, user requests A->C), m_currentPose holds the
+    // 40%-blended A->B intermediate. Capturing it here as m_previousPose
+    // means the new A->C blend starts from that intermediate frame instead
+    // of snapping back to the raw A pose — which would be the visible
+    // "rubber band" pop the user would otherwise see when issuing rapid
+    // state changes (e.g. holding a movement key during a pivot transition).
     m_previousStateName = m_currentStateName;
     m_previousTime = m_currentTime;
     m_previousPose = m_currentPose;
@@ -303,6 +312,23 @@ void Animator::startTransition(const std::string& targetState, float duration) {
     m_transitionDuration = duration;
     m_transitionTime = 0.0f;
     m_transitioning = true;
+
+    // Reset the target clip's playback time to 0.
+    //
+    // m_currentTime is the playback cursor of whichever state is "currently
+    // playing". Once we flip m_transitioning=true, updateTransition() reads
+    // m_currentTime as the target state's cursor (line:
+    //     m_currentTime += deltaTime * targetState->speed;
+    // followed by targetState->animation->sample(m_currentTime, ...)). If
+    // we don't zero it here, the target state's first sample lands at
+    // whatever timestamp the previous state was at — e.g. transition from
+    // walk (looped at t=0.7s) into a 0.4s attack swing samples the attack
+    // clip starting at 0.7s, which on a 0.5s-duration swing has already
+    // wrapped past the end. The visible result is the new state starting
+    // mid-animation and looking like a frame skip. The previous state's
+    // cursor is preserved in m_previousTime so updateTransition() can still
+    // sample the outgoing pose correctly during the blend.
+    m_currentTime = 0.0f;
 
     // Clear triggers after transition starts
     m_parameters.clearTriggers();

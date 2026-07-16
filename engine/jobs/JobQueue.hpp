@@ -26,13 +26,33 @@ public:
     }
 
     /**
-     * Push a job to the bottom of the queue (owner thread only)
+     * Push a job to the bottom of the queue (owner thread only).
+     *
+     * Returns true if the job was accepted, false if the queue is full.
+     *
+     * The original implementation unconditionally incremented m_bottom and
+     * wrote into m_jobs[b % QUEUE_SIZE], which silently overwrites the slot
+     * at (b % QUEUE_SIZE) whenever the live span (bottom - top) reaches
+     * QUEUE_SIZE — losing an unconsumed job AND making the queue size
+     * meaningless because (bottom - top) keeps growing past the capacity.
+     * The README's documented limitation says overflow "will block", but
+     * blocking from inside a lock_guard would deadlock against any
+     * concurrent Pop/Steal, so reporting failure to the caller is the only
+     * safe move. JobSystem callers now treat false as "queue saturated,
+     * route to another worker / fall back to inline execution".
      */
-    void Push(const Job& job) {
+    [[nodiscard]] bool Push(const Job& job) {
         std::lock_guard<std::mutex> lock(m_mutex);
+        // Live span check: bottom - top is the number of jobs currently in
+        // the ring. If it equals QUEUE_SIZE the next slot would collide with
+        // an unconsumed entry at (bottom % QUEUE_SIZE).
+        if (m_bottom - m_top >= static_cast<int64_t>(QUEUE_SIZE)) {
+            return false;
+        }
         int64_t b = m_bottom;
         m_jobs[b % QUEUE_SIZE] = job;
         m_bottom = b + 1;
+        return true;
     }
 
     /**

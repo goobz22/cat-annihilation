@@ -1,14 +1,20 @@
 #include "VulkanSync.hpp"
+// Include the REAL VulkanDevice definition. The previous TU-local
+// `class VulkanDevice { virtual VkDevice GetDevice() const = 0; };`
+// stub was a silent ODR violation: it redefined the class with a
+// vtable and a pure-virtual GetDevice(), but the rest of the engine
+// (VulkanDevice.cpp / .hpp) defines VulkanDevice as a non-polymorphic
+// concrete class whose GetDevice() is a non-virtual inline accessor.
+// At runtime any instantiation of VulkanFence / VulkanSemaphore /
+// VulkanTimelineSemaphore would read garbage memory thinking it was
+// reading a vtable slot — guaranteed crash on first use. The members
+// happened to compile fine across the boundary because no other TU
+// in this translation unit needs the real class definition.
+#include "VulkanDevice.hpp"
 #include <stdexcept>
 #include <limits>
 
 namespace CatEngine::RHI {
-
-// Forward declare VulkanDevice interface we need
-class VulkanDevice {
-public:
-    virtual VkDevice GetDevice() const = 0;
-};
 
 // ============================================================================
 // VulkanFence Implementation

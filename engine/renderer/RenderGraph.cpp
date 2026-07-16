@@ -23,12 +23,12 @@ RenderGraph::RenderGraph(RHI::IRHIDevice* device)
 }
 
 RenderGraph::~RenderGraph() {
+    // Reset() destroys non-imported resources via the device; the
+    // unique_ptr<RenderGraphPass> vector then auto-frees every pass node on
+    // destruction. No explicit `delete pass` here — pre-2026-05 used a raw
+    // new/delete pair that leaked any pass added after a hypothetical
+    // early-return slipped into Add*Pass.
     Reset();
-
-    // Clean up passes
-    for (auto* pass : passes) {
-        delete pass;
-    }
 }
 
 // ============================================================================
@@ -123,46 +123,42 @@ RHI::IRHIBuffer* RenderGraph::GetBuffer(ResourceHandle handle) {
 // Pass Declaration
 // ============================================================================
 
-RenderGraphPass* RenderGraph::AddGraphicsPass(const std::string& name) {
-    auto* pass = new RenderGraphPass(name, PassType::Graphics);
-    pass->passID = nextPassID++;
-    passes.push_back(pass);
-    passNameMap[name] = pass->passID;
+// AddPassOfType is the single allocation site for RenderGraphPass nodes. The
+// three public entry points below differ only in PassType, so funnelling them
+// through one helper keeps the unique_ptr construction + book-keeping in one
+// place and prevents a future contributor from re-introducing a raw `new`
+// path that bypasses the RAII guarantee on the passes vector.
+RenderGraphPass* RenderGraph::AddPassOfType(const std::string& name, PassType type) {
+    auto owned = std::make_unique<RenderGraphPass>(name, type);
+    RenderGraphPass* raw = owned.get();
+    raw->passID = nextPassID++;
+    passes.push_back(std::move(owned));
+    passNameMap[name] = raw->passID;
 
     isCompiled = false;
 
-    return pass;
+    return raw;
+}
+
+RenderGraphPass* RenderGraph::AddGraphicsPass(const std::string& name) {
+    return AddPassOfType(name, PassType::Graphics);
 }
 
 RenderGraphPass* RenderGraph::AddComputePass(const std::string& name) {
-    auto* pass = new RenderGraphPass(name, PassType::Compute);
-    pass->passID = nextPassID++;
-    passes.push_back(pass);
-    passNameMap[name] = pass->passID;
-
-    isCompiled = false;
-
-    return pass;
+    return AddPassOfType(name, PassType::Compute);
 }
 
 RenderGraphPass* RenderGraph::AddTransferPass(const std::string& name) {
-    auto* pass = new RenderGraphPass(name, PassType::Transfer);
-    pass->passID = nextPassID++;
-    passes.push_back(pass);
-    passNameMap[name] = pass->passID;
-
-    isCompiled = false;
-
-    return pass;
+    return AddPassOfType(name, PassType::Transfer);
 }
 
 RenderGraphPass* RenderGraph::GetPass(const std::string& name) {
     auto it = passNameMap.find(name);
     if (it != passNameMap.end()) {
         uint32_t passID = it->second;
-        for (auto* pass : passes) {
-            if (pass->passID == passID) {
-                return pass;
+        for (const auto& pass : passes) {
+            if (pass && pass->passID == passID) {
+                return pass.get();
             }
         }
     }
@@ -201,7 +197,8 @@ void RenderGraph::Execute(RHI::IRHICommandBuffer* cmdBuffer) {
     // queued immediately before the commands that observe the new state.
     for (uint32_t passIndex : executionOrder) {
         if (passIndex < passes.size()) {
-            auto* pass = passes[passIndex];
+            RenderGraphPass* pass = passes[passIndex].get();
+            if (!pass) continue;
             InsertBarriers(cmdBuffer, pass);
             pass->Execute(cmdBuffer);
         }
@@ -262,7 +259,9 @@ std::string RenderGraph::ExportToDOT() const {
     ss << "  node [shape=box];\n\n";
 
     // Add passes as nodes
-    for (const auto* pass : passes) {
+    for (const auto& passOwned : passes) {
+        const RenderGraphPass* pass = passOwned.get();
+        if (!pass) continue;
         std::string color;
         switch (pass->GetType()) {
             case PassType::Graphics: color = "lightblue"; break;
@@ -277,7 +276,9 @@ std::string RenderGraph::ExportToDOT() const {
     ss << "\n";
 
     // Add dependencies as edges
-    for (const auto* pass : passes) {
+    for (const auto& passOwned : passes) {
+        const RenderGraphPass* pass = passOwned.get();
+        if (!pass) continue;
         for (uint32_t depID : pass->GetDependencies()) {
             ss << "  pass_" << depID << " -> pass_" << pass->passID << ";\n";
         }
@@ -355,20 +356,97 @@ void RenderGraph::TopologicalSort() {
 
     if (passes.empty()) return;
 
-    // Build adjacency list
+    // ------------------------------------------------------------------
+    // Build adjacency list.
+    //
+    // We honour two edge sources:
+    //   1. EXPLICIT dependencies declared by the caller via DependsOn().
+    //   2. IMPLICIT dependencies derived from resource access patterns —
+    //      a pass that Reads/ReadWrites resource X must come after every
+    //      earlier-declared pass that Writes/ReadWrites X (read-after-write,
+    //      RAW), and a pass that Writes/ReadWrites X must come after every
+    //      earlier-declared writer of X (write-after-write, WAW) to keep
+    //      writes serialized in declaration order.
+    //
+    // Pre-2026-05 the sort honoured only explicit edges. That made the
+    // declaration order the de-facto execution order when no DependsOn was
+    // called, which happens to work for callers who declare passes in
+    // their natural producer-then-consumer order — but it silently
+    // produces "read-before-write" execution if a later pass that reads a
+    // resource happens to be declared *before* the writer. Topological
+    // sort with no edges between them is free to emit them in either
+    // order; without the implicit edges below, we get the wrong one ~50%
+    // of the time on Kahn's algorithm (FIFO queue tiebreaks by index).
+    //
+    // Last-writer tracking: scanning passes in declaration order, the
+    // most recent producer of each resource id is the only writer the
+    // next consumer needs to wait on (transitive RAW chains are covered
+    // by the producer's own WAW edge to its predecessor). This keeps the
+    // edge count linear in (passes * usages-per-pass) instead of
+    // quadratic, and matches how AMD/NVIDIA render-graph references
+    // derive their barriers.
+    // ------------------------------------------------------------------
     std::vector<std::vector<uint32_t>> adjList(passes.size());
     std::vector<uint32_t> inDegree(passes.size(), 0);
 
+    auto addEdge = [&](uint32_t fromIndex, uint32_t toIndex) {
+        if (fromIndex == toIndex) return;
+        // De-dupe — Kahn's is correct under multi-edges, but counting them
+        // would corrupt inDegree (we'd decrement once per neighbour visit,
+        // not once per distinct neighbour) and leak some nodes from the
+        // queue forever. Cheap linear scan: per-pass adjacency lists are
+        // small (a handful of edges in practice).
+        auto& adj = adjList[fromIndex];
+        for (uint32_t existing : adj) {
+            if (existing == toIndex) return;
+        }
+        adj.push_back(toIndex);
+        ++inDegree[toIndex];
+    };
+
+    // Pass 1 — explicit dependencies declared via DependsOn.
     for (size_t i = 0; i < passes.size(); ++i) {
-        const auto* pass = passes[i];
+        const RenderGraphPass* pass = passes[i].get();
+        if (!pass) continue;
         for (uint32_t depID : pass->GetDependencies()) {
-            // Find the index of the dependency
             for (size_t j = 0; j < passes.size(); ++j) {
-                if (passes[j]->passID == depID) {
-                    adjList[j].push_back(static_cast<uint32_t>(i));
-                    inDegree[i]++;
+                if (passes[j] && passes[j]->passID == depID) {
+                    addEdge(static_cast<uint32_t>(j), static_cast<uint32_t>(i));
                     break;
                 }
+            }
+        }
+    }
+
+    // Pass 2 — implicit RAW + WAW edges from resource usage. Walk passes
+    // in declaration order and track the index of the last pass that
+    // wrote (or read-wrote) each resource id. Whenever the current pass
+    // touches the resource:
+    //   - Read       requires waiting on the last writer (RAW).
+    //   - Write      requires waiting on the last writer (WAW serial
+    //                hazard) and updates the last-writer record.
+    //   - ReadWrite  is both — it reads the existing contents then
+    //                produces new contents; it must wait on the previous
+    //                writer and then become the next one.
+    // We ignore WAR (read-after-write order between a current writer and
+    // an earlier reader) because the GPU side does not need the writer to
+    // wait on a reader of stale data — the barrier-insertion pass below
+    // emits the right access-mask transition regardless.
+    std::unordered_map<uint32_t, uint32_t> lastWriterIndex;
+    for (size_t i = 0; i < passes.size(); ++i) {
+        const RenderGraphPass* pass = passes[i].get();
+        if (!pass) continue;
+        for (const auto& usage : pass->GetResourceUsages()) {
+            const uint32_t rid = usage.resource.id;
+            if (rid == 0) continue;  // sentinel — invalid handle.
+
+            auto writerIt = lastWriterIndex.find(rid);
+            if (writerIt != lastWriterIndex.end() && writerIt->second != static_cast<uint32_t>(i)) {
+                addEdge(writerIt->second, static_cast<uint32_t>(i));
+            }
+            if (usage.access == ResourceAccess::Write ||
+                usage.access == ResourceAccess::ReadWrite) {
+                lastWriterIndex[rid] = static_cast<uint32_t>(i);
             }
         }
     }
@@ -398,10 +476,13 @@ void RenderGraph::TopologicalSort() {
         }
     }
 
-    // Check for cycles
+    // Cycle fallback: a cycle means the dependency graph is unsatisfiable
+    // (typically a user-side mistake — two passes that mutually DependsOn
+    // each other, or a resource read+written by two passes in two ways
+    // that contradict). Fall back to declaration order so the graph still
+    // produces a frame rather than a black screen, and rely on validation
+    // layers / the barrier path to surface the underlying hazard.
     if (executionOrder.size() != passes.size()) {
-        // Cycle detected - this is an error
-        // In production, handle this error appropriately
         executionOrder.clear();
         for (uint32_t i = 0; i < passes.size(); ++i) {
             executionOrder.push_back(i);
@@ -410,7 +491,9 @@ void RenderGraph::TopologicalSort() {
 
     // Update execution order in passes
     for (uint32_t i = 0; i < executionOrder.size(); ++i) {
-        passes[executionOrder[i]]->executionOrder = i;
+        if (passes[executionOrder[i]]) {
+            passes[executionOrder[i]]->executionOrder = i;
+        }
     }
 }
 

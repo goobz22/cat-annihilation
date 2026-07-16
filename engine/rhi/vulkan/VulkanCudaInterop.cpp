@@ -235,7 +235,17 @@ void CudaVulkanBuffer::allocateExternalMemory() {
         throw std::runtime_error("Failed to allocate external memory for buffer");
     }
 
-    vkBindBufferMemory(m_device, m_buffer, m_memory, 0);
+    // The previous version ignored vkBindBufferMemory's VkResult. A bind
+    // failure here leaves m_memory allocated and m_buffer created but
+    // never associated — every later vkCmdCopyBuffer / cudaMemcpyAsync
+    // against this pair silently produces UB (most drivers return
+    // VK_ERROR_DEVICE_LOST under heavy load when this hits a memory-type
+    // mismatch). Throwing here lets the constructor's exception path
+    // run cleanup(), which already destroys both m_buffer and m_memory.
+    VkResult bindResult = vkBindBufferMemory(m_device, m_buffer, m_memory, 0);
+    if (bindResult != VK_SUCCESS) {
+        throw std::runtime_error("Failed to bind external buffer memory");
+    }
 }
 
 void CudaVulkanBuffer::importToCuda() {
@@ -288,7 +298,35 @@ void CudaVulkanBuffer::importToCuda() {
     externalMemDesc.handle.fd = fd;
 #endif
 
+    // CUDA_CHECK throws on error. To prevent leaking the Win32 HANDLE on
+    // the throw path, wrap the import in a try/catch that closes the
+    // handle before re-throwing. Pre-fix code only closed the handle on
+    // the success path — every cudaImportExternalMemory failure leaked
+    // a kernel HANDLE for the process lifetime. Linux's FD ownership
+    // transfers to the CUDA driver on a successful import (the FD branch
+    // intentionally has no equivalent close), so this RAII concern is
+    // Windows-only.
+#ifdef _WIN32
+    try {
+        CUDA_CHECK(cudaImportExternalMemory(&m_externalMemory, &externalMemDesc));
+    } catch (...) {
+        CloseHandle(handle);
+        throw;
+    }
+    // Per the CUDA Runtime API contract, ownership of an OpaqueWin32 HANDLE
+    // is NOT transferred to the CUDA driver after a successful import - the
+    // application owns the duplicated handle returned by
+    // vkGetMemoryWin32HandleKHR and must release it via CloseHandle. (This
+    // is the opposite of OpaqueFd on Linux, where the FD ownership IS
+    // transferred and closing it would be a use-after-free.) Without this
+    // call, every CudaVulkanBuffer constructed on Windows leaks one kernel
+    // handle for the lifetime of the process - capped only by the per-
+    // process Win32 handle limit (~16M). The CUDA SDK simpleVulkan sample
+    // closes the handle at this exact spot for the same reason.
+    CloseHandle(handle);
+#else
     CUDA_CHECK(cudaImportExternalMemory(&m_externalMemory, &externalMemDesc));
+#endif
 
     // Map buffer to CUDA pointer
     cudaExternalMemoryBufferDesc bufferDesc = {};
@@ -477,7 +515,15 @@ void CudaVulkanImage::allocateExternalMemory() {
         throw std::runtime_error("Failed to allocate external memory for image");
     }
 
-    vkBindImageMemory(m_device, m_image, m_memory, 0);
+    // Same rationale as CudaVulkanBuffer::allocateExternalMemory above —
+    // ignoring vkBindImageMemory's VkResult left m_memory / m_image in a
+    // half-bound state that produced silent UB on later
+    // vkCmdCopyImage / cudaSurface ops. Constructor exception path
+    // cleans both handles via cleanup().
+    VkResult bindResult = vkBindImageMemory(m_device, m_image, m_memory, 0);
+    if (bindResult != VK_SUCCESS) {
+        throw std::runtime_error("Failed to bind external image memory");
+    }
 }
 
 void CudaVulkanImage::importToCuda() {
@@ -534,7 +580,28 @@ void CudaVulkanImage::importToCuda() {
     externalMemDesc.handle.fd = fd;
 #endif
 
+    // Same Win32-HANDLE-on-throw guard as CudaVulkanBuffer::importToCuda:
+    // CUDA_CHECK throws on failure, and the pre-fix code only closed
+    // the HANDLE on the success path — every failed import on Windows
+    // leaked one kernel handle.
+#ifdef _WIN32
+    try {
+        CUDA_CHECK(cudaImportExternalMemory(&m_externalMemory, &externalMemDesc));
+    } catch (...) {
+        CloseHandle(handle);
+        throw;
+    }
+    // See CudaVulkanBuffer::importToCuda for the full rationale: the
+    // OpaqueWin32 HANDLE returned by vkGetMemoryWin32HandleKHR is owned by
+    // the application after cudaImportExternalMemory, so it must be closed
+    // here. CUDA holds an internal reference to the underlying kernel object
+    // for the lifetime of m_externalMemory; closing our HANDLE only releases
+    // OUR reference, not CUDA's. Linux OpaqueFd does NOT need this because
+    // FD ownership transfers to the CUDA driver on a successful import.
+    CloseHandle(handle);
+#else
     CUDA_CHECK(cudaImportExternalMemory(&m_externalMemory, &externalMemDesc));
+#endif
 
     // Map to CUDA mipmapped array
     cudaExternalMemoryMipmappedArrayDesc mipmapDesc = {};
@@ -755,7 +822,29 @@ void CudaVulkanSemaphore::importToCuda() {
     externalSemDesc.handle.fd = fd;
 #endif
 
+    // Win32-HANDLE-on-throw guard, mirroring the buffer + image
+    // importToCuda code paths: on cudaImportExternalSemaphore failure
+    // the HANDLE was leaked pre-fix because CloseHandle only ran on
+    // the success path.
+#ifdef _WIN32
+    try {
+        CUDA_CHECK(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemDesc));
+    } catch (...) {
+        CloseHandle(handle);
+        throw;
+    }
+    // Same Win32 handle-ownership rule as CudaVulkanBuffer::importToCuda
+    // applies to OpaqueWin32 SEMAPHORE handles: the application owns the
+    // HANDLE returned by vkGetSemaphoreWin32HandleKHR after a successful
+    // cudaImportExternalSemaphore and must release it. Without this close,
+    // every Vulkan-CUDA frame-sync semaphore created during engine startup
+    // (and any per-frame transient semaphores) leaks a kernel handle. On
+    // Linux, FD ownership transfers to the CUDA driver, so the FD branch
+    // intentionally does nothing.
+    CloseHandle(handle);
+#else
     CUDA_CHECK(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemDesc));
+#endif
 }
 
 void CudaVulkanSemaphore::cudaWait(cudaStream_t stream, uint64_t value) {

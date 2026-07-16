@@ -376,8 +376,8 @@ bool ForwardPass::CreatePipelines() {
     //
     // There is no particle pipeline in this revision: the project does not
     // ship a particle.vert / particle.frag today (only particle_update.comp),
-    // so the old particle-pipeline placeholders were removed rather than kept
-    // as always-null stubs that the draw loop would just skip.
+    // so the old particle-pipeline stubs were removed rather than kept as
+    // always-null bindings that the draw loop would just skip.
     const char* kForwardVertPath   = "shaders/compiled/forward.vert.spv";
     const char* kTransparentPath   = "shaders/compiled/transparent.frag.spv";
     const char* kForwardFragPath   = "shaders/compiled/forward.frag.spv";

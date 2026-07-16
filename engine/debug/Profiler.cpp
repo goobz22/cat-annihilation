@@ -56,6 +56,44 @@ Profiler::Profiler()
 {
 }
 
+void Profiler::SetEnabled(bool enabled) {
+    // Order matters: if we're being DISABLED we want every running scope to
+    // see the false flag and short-circuit BEFORE we wipe their stack
+    // (otherwise the worker mid-PopScope races us and we erase what they
+    // were about to update). If we're being ENABLED we want the flag set
+    // last so the prior frame's stale stack is gone before new scopes
+    // start pushing on top of it.
+    if (!enabled) {
+        m_Enabled.store(false, std::memory_order_seq_cst);
+
+        std::lock_guard<std::mutex> contextLock(m_ContextMutex);
+        for (auto& [threadId, context] : m_ThreadContexts) {
+            // Drop pending scopes — we can't synthesise valid end times for
+            // them. Stats already merged from previous frames stay intact.
+            context->scopeStack.clear();
+        }
+        {
+            std::lock_guard<std::mutex> gpuLock(m_GPUQueryMutex);
+            m_ActiveGPUQueries.clear();
+        }
+    } else {
+        // Belt-and-braces: clear any leftover scope state before re-enabling
+        // so a misuse pattern (disable, manipulate, re-enable) cannot leak
+        // stale entries forward into the new run.
+        {
+            std::lock_guard<std::mutex> contextLock(m_ContextMutex);
+            for (auto& [threadId, context] : m_ThreadContexts) {
+                context->scopeStack.clear();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> gpuLock(m_GPUQueryMutex);
+            m_ActiveGPUQueries.clear();
+        }
+        m_Enabled.store(true, std::memory_order_seq_cst);
+    }
+}
+
 Profiler& Profiler::Get() {
     static Profiler instance;
     return instance;
@@ -78,13 +116,13 @@ ProfilerContext& Profiler::GetThreadContext() {
 }
 
 void Profiler::BeginFrame() {
-    if (!m_Enabled) return;
+    if (!IsEnabled()) return;
 
     m_FrameStartTime = Clock::now();
 }
 
 void Profiler::EndFrame() {
-    if (!m_Enabled) return;
+    if (!IsEnabled()) return;
 
     auto frameEndTime = Clock::now();
     std::chrono::duration<double, std::milli> frameDuration = frameEndTime - m_FrameStartTime;
@@ -114,14 +152,14 @@ void Profiler::EndFrame() {
 }
 
 void Profiler::PushScope(const std::string& name) {
-    if (!m_Enabled) return;
+    if (!IsEnabled()) return;
 
     ProfilerContext& context = GetThreadContext();
     context.PushScope(name);
 }
 
 void Profiler::PopScope() {
-    if (!m_Enabled) return;
+    if (!IsEnabled()) return;
 
     ProfilerContext& context = GetThreadContext();
     context.PopScope();
@@ -232,8 +270,14 @@ void Profiler::PrintReport(bool sortByTime) const {
 }
 
 void Profiler::Reset() {
+    // Lock all three domains. Always acquire in the same order
+    // (m_ContextMutex -> m_StatsMutex -> m_GPUQueryMutex) to keep this
+    // call AB-deadlock-free against every other method that takes a
+    // subset of these locks. SetEnabled and the CPU-fallback path follow
+    // the same ordering.
     std::lock_guard<std::mutex> contextLock(m_ContextMutex);
     std::lock_guard<std::mutex> statsLock(m_StatsMutex);
+    std::lock_guard<std::mutex> gpuLock(m_GPUQueryMutex);
 
     // Reset all thread contexts
     for (auto& [threadId, context] : m_ThreadContexts) {
@@ -306,7 +350,7 @@ void Profiler::ShutdownGPU() {
 }
 
 void Profiler::BeginFrameGPU(VkCommandBuffer cmd) {
-    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+    if (!IsEnabled() || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
         return;
     }
 
@@ -333,7 +377,7 @@ void Profiler::BeginFrameGPU(VkCommandBuffer cmd) {
 }
 
 void Profiler::BeginGPUQuery(const std::string& name, VkCommandBuffer cmd) {
-    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+    if (!IsEnabled() || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
         // No initialized pool or no command buffer — downgrade to the CPU
         // path so callers don't silently lose the query.
         BeginGPUQuery(name);
@@ -364,7 +408,7 @@ void Profiler::BeginGPUQuery(const std::string& name, VkCommandBuffer cmd) {
 }
 
 void Profiler::EndGPUQuery(const std::string& name, VkCommandBuffer cmd) {
-    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
+    if (!IsEnabled() || m_GPUQueryPool == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) {
         EndGPUQuery(name);
         return;
     }
@@ -386,7 +430,7 @@ void Profiler::EndGPUQuery(const std::string& name, VkCommandBuffer cmd) {
 }
 
 void Profiler::ResolveGPUQueries() {
-    if (!m_Enabled || m_GPUQueryPool == VK_NULL_HANDLE || m_GPUQuerySlots.empty()) {
+    if (!IsEnabled() || m_GPUQueryPool == VK_NULL_HANDLE || m_GPUQuerySlots.empty()) {
         return;
     }
 
@@ -435,6 +479,12 @@ void Profiler::ResolveGPUQueries() {
     // Replace rather than append: the current frame's results fully
     // supersede anything resolved previously, and keeping old entries
     // around would grow the report output unboundedly over time.
+    //
+    // Lock m_GPUTimestamps for the swap-and-rebuild — overlay code and
+    // PrintGPUReport iterate this vector from a different thread (the
+    // ImGui-debug overlay runs alongside the render thread that drives
+    // resolves), and an in-place clear+push_back would race them.
+    std::lock_guard<std::mutex> gpuLock(m_GPUQueryMutex);
     m_GPUTimestamps.clear();
     m_GPUTimestamps.reserve(m_GPUQuerySlots.size());
 
@@ -481,37 +531,50 @@ void Profiler::ResolveGPUQueries() {
 // ----------------------------------------------------------------------------
 
 void Profiler::BeginGPUQuery(const std::string& name) {
-    if (!m_Enabled) return;
+    if (!IsEnabled()) return;
 
     auto now = Clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now.time_since_epoch()
     ).count();
 
+    // Lock m_ActiveGPUQueries — multiple worker threads call the CPU
+    // fallback path during engine startup (before the Vulkan command
+    // buffer is plumbed) and during tool code that runs off-thread.
+    // Without this lock, std::unordered_map's rehash on insert races
+    // against concurrent finds and corrupts the bucket chain.
+    std::lock_guard<std::mutex> lock(m_GPUQueryMutex);
     m_ActiveGPUQueries[name] = static_cast<uint64_t>(timestamp);
 }
 
 void Profiler::EndGPUQuery(const std::string& name) {
-    if (!m_Enabled) return;
-
-    auto it = m_ActiveGPUQueries.find(name);
-    if (it == m_ActiveGPUQueries.end()) {
-        return;
-    }
+    if (!IsEnabled()) return;
 
     auto now = Clock::now();
     auto endTimestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now.time_since_epoch()
     ).count();
 
+    std::lock_guard<std::mutex> lock(m_GPUQueryMutex);
+    auto it = m_ActiveGPUQueries.find(name);
+    if (it == m_ActiveGPUQueries.end()) {
+        return;
+    }
+
     GPUTimestamp timestamp;
     timestamp.name = name;
     timestamp.startTimestamp = it->second;
     timestamp.endTimestamp = static_cast<uint64_t>(endTimestamp);
     // CPU path reports durations already in nanoseconds, so the /1e6 here
-    // matches the GPU path's output scale (milliseconds).
+    // matches the GPU path's output scale (milliseconds). The previous
+    // implementation cast `it->second` to int64_t before subtracting,
+    // which truncated time-since-epoch values past 2^63 ns (year ~2262
+    // theoretically, but more practically: any tester who manually sets
+    // their clock or runs on an embedded board with a weird epoch could
+    // trip this — we use uint64_t arithmetic throughout to match the
+    // map's storage type and avoid an unnecessary signed cast.
     timestamp.duration =
-        static_cast<double>(endTimestamp - static_cast<int64_t>(it->second)) / 1'000'000.0;
+        static_cast<double>(endTimestamp - it->second) / 1'000'000.0;
 
     m_GPUTimestamps.push_back(timestamp);
     m_ActiveGPUQueries.erase(it);

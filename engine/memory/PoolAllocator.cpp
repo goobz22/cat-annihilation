@@ -7,7 +7,7 @@
 namespace CatEngine::Memory {
 
 PoolAllocator::PoolAllocator(size_t blockSize, size_t blockCount, bool threadSafe)
-    : Allocator(blockSize * blockCount)
+    : Allocator(std::max(blockSize, sizeof(void*)) * blockCount)
     , m_blockSize(std::max(blockSize, sizeof(void*)))
     , m_blockCount(blockCount)
     , m_memory(nullptr)
@@ -15,7 +15,13 @@ PoolAllocator::PoolAllocator(size_t blockSize, size_t blockCount, bool threadSaf
     , m_threadSafe(threadSafe)
     , m_mutex(threadSafe ? std::make_unique<std::mutex>() : nullptr)
 {
-    // Allocate aligned memory
+    // Allocate aligned memory. Original code computed Allocator(blockSize *
+    // blockCount) with the RAW caller-supplied blockSize (before the
+    // sizeof(void*) floor was applied), so an allocator constructed with
+    // blockSize=1 advertised totalSize=blockCount but actually owned
+    // blockCount * sizeof(void*) bytes. getUsedSize() would then over-report
+    // utilisation past 100%. We now pass the floored block size into the
+    // base Allocator constructor so totalSize matches reality.
     m_memory = CatEngine::aligned_alloc_compat(alignof(std::max_align_t), m_blockSize * m_blockCount);
     assert(m_memory && "Failed to allocate pool memory");
 
@@ -75,11 +81,26 @@ PoolAllocator& PoolAllocator::operator=(PoolAllocator&& other) noexcept {
 }
 
 void* PoolAllocator::allocate(size_t size, size_t alignment) {
-    if (m_threadSafe) {
-        std::lock_guard<std::mutex> lock(*m_mutex);
-        return allocate(size, alignment);
+    // Block size and alignment are fixed at construction; the per-call
+    // arguments are validated but otherwise ignored. Passing a size larger
+    // than the configured block size is a programmer error and we refuse it
+    // instead of silently returning a too-small block.
+    (void)alignment;
+    if (size > m_blockSize) {
+        return nullptr;
     }
 
+    // Public entry: lock once, dispatch to allocateLocked. Original code
+    // recursed into allocate() with the lock_guard live, which deadlocks on
+    // the non-recursive std::mutex.
+    if (m_threadSafe) {
+        std::lock_guard<std::mutex> lock(*m_mutex);
+        return allocateLocked();
+    }
+    return allocateLocked();
+}
+
+void* PoolAllocator::allocateLocked() noexcept {
     // Check if we have free blocks
     if (!m_freeList) {
         return nullptr;
@@ -103,12 +124,30 @@ void PoolAllocator::deallocate(void* ptr) {
 
     if (m_threadSafe) {
         std::lock_guard<std::mutex> lock(*m_mutex);
-        deallocate(ptr);
+        deallocateLocked(ptr);
+        return;
+    }
+    deallocateLocked(ptr);
+}
+
+void PoolAllocator::deallocateLocked(void* ptr) noexcept {
+    // Validate pointer is within our memory range
+    assert(isValidPointer(ptr) && "Invalid pointer passed to deallocate");
+    // Defensive guard in release builds: silently ignore an out-of-range
+    // pointer rather than corrupting the free list. A double-free or stray
+    // pointer would otherwise splice random memory into the list and hand
+    // the next allocate() a wild pointer to the caller.
+    if (!isValidPointer(ptr)) {
         return;
     }
 
-    // Validate pointer is within our memory range
-    assert(isValidPointer(ptr) && "Invalid pointer passed to deallocate");
+    // m_usedSize underflow guard. If the user double-frees we'd otherwise
+    // wrap the counter to a huge number; clamp to zero and skip the second
+    // decrement so the bookkeeping stays sane and a debugger sees the leak
+    // instead of a silent wraparound.
+    if (m_usedSize < m_blockSize || m_allocationCount == 0) {
+        return;
+    }
 
     // Push to free list
     *reinterpret_cast<void**>(ptr) = m_freeList;
@@ -122,10 +161,13 @@ void PoolAllocator::deallocate(void* ptr) {
 void PoolAllocator::reset() {
     if (m_threadSafe) {
         std::lock_guard<std::mutex> lock(*m_mutex);
-        reset();
+        resetLocked();
         return;
     }
+    resetLocked();
+}
 
+void PoolAllocator::resetLocked() noexcept {
     initializeFreeList();
     m_usedSize = 0;
     m_allocationCount = 0;
@@ -134,9 +176,12 @@ void PoolAllocator::reset() {
 size_t PoolAllocator::getFreeBlocks() const noexcept {
     if (m_threadSafe) {
         std::lock_guard<std::mutex> lock(*m_mutex);
-        return getFreeBlocks();
+        return getFreeBlocksLocked();
     }
+    return getFreeBlocksLocked();
+}
 
+size_t PoolAllocator::getFreeBlocksLocked() const noexcept {
     size_t count = 0;
     void* current = m_freeList;
     while (current) {

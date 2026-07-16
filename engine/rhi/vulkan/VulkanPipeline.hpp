@@ -81,8 +81,16 @@ public:
 
     // Vulkan-specific getters
     VkPipeline GetVkPipeline() const { return m_Pipeline; }
-    VulkanPipelineLayout* GetLayout() const { return m_Layout.get(); }
-    VkPipelineLayout GetVkPipelineLayout() const { return m_Layout->GetVkPipelineLayout(); }
+    VulkanPipelineLayout* GetLayout() const {
+        // When the caller supplied its own layout we hold it in
+        // m_BorrowedLayout (non-owning); otherwise we own a default in
+        // m_Layout. Unify the two access paths so call-site code never
+        // has to branch on ownership.
+        return m_OwnsLayout ? m_Layout.get() : m_BorrowedLayout;
+    }
+    VkPipelineLayout GetVkPipelineLayout() const {
+        return GetLayout()->GetVkPipelineLayout();
+    }
 
 private:
     void CreatePipeline(const PipelineDesc& desc, VkPipelineCache cache);
@@ -91,7 +99,21 @@ private:
 private:
     VulkanDevice* m_Device;
     VkPipeline m_Pipeline;
+    // Owned default-layout case — populated by the single-arg constructor
+    // (no caller-supplied layout). Destructor frees the wrapped
+    // VkPipelineLayout via VulkanPipelineLayout's own destructor.
     std::unique_ptr<VulkanPipelineLayout> m_Layout;
+    // Borrowed-layout case — non-owning pointer to a layout that the
+    // caller created and will destroy itself. Set by the layout-aware
+    // constructor; we read it only via GetLayout() / GetVkPipelineLayout().
+    // Storing as a raw pointer (vs. std::unique_ptr) is intentional: a
+    // unique_ptr would call delete on a layout the caller still believes
+    // it owns, producing the double-free that motivated this split.
+    VulkanPipelineLayout* m_BorrowedLayout = nullptr;
+    // True when m_Layout owns the layout. False when m_BorrowedLayout
+    // points to a caller-owned layout. Move semantics also propagate
+    // this flag so a moved-from instance does not free a borrowed handle.
+    bool m_OwnsLayout = true;
     std::string m_DebugName;
 };
 
@@ -119,8 +141,12 @@ public:
 
     // Vulkan-specific getters
     VkPipeline GetVkPipeline() const { return m_Pipeline; }
-    VulkanPipelineLayout* GetLayout() const { return m_Layout.get(); }
-    VkPipelineLayout GetVkPipelineLayout() const { return m_Layout->GetVkPipelineLayout(); }
+    VulkanPipelineLayout* GetLayout() const {
+        return m_OwnsLayout ? m_Layout.get() : m_BorrowedLayout;
+    }
+    VkPipelineLayout GetVkPipelineLayout() const {
+        return GetLayout()->GetVkPipelineLayout();
+    }
 
 private:
     void CreatePipeline(const ComputePipelineDesc& desc, VkPipelineCache cache);
@@ -129,7 +155,16 @@ private:
 private:
     VulkanDevice* m_Device;
     VkPipeline m_Pipeline;
+    // Same owned-vs-borrowed layout split as VulkanGraphicsPipeline (see
+    // the comment block on that class above). The layout-aware constructor
+    // populates m_BorrowedLayout with a caller-owned pointer that we must
+    // NOT free in the destructor; the single-arg constructor populates the
+    // owned m_Layout. m_OwnsLayout disambiguates the two cases at access /
+    // destruction time so we neither leak a default nor double-free a
+    // shared layout.
     std::unique_ptr<VulkanPipelineLayout> m_Layout;
+    VulkanPipelineLayout* m_BorrowedLayout = nullptr;
+    bool m_OwnsLayout = true;
     std::string m_DebugName;
 };
 

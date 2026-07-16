@@ -131,11 +131,18 @@ const Tree = ({ position, scale = 1, type = 'pine' }: { position: [number, numbe
     
     console.log('[TREE] Tree refs created successfully');
   
-    // Animate tree swaying slightly in the wind
-    useFrame((_, delta) => {
+    // Animate tree swaying slightly in the wind.
+    //
+    // Previously this used `delta` (per-frame elapsed seconds, ~0.016) as `time`, which
+    // resets every frame and produces a tiny constant rotation rather than a sine wave
+    // — the trees did not actually sway, they just sat at a fixed near-zero rotation.
+    // Using `state.clock.elapsedTime` gives a monotonically increasing time so the
+    // sin/cos calls produce real motion. The per-tree `animOffset` keeps each tree out
+    // of phase with its neighbours so the forest doesn't oscillate in lockstep.
+    useFrame((state) => {
       try {
         if (treeRef.current) {
-          const time = animOffset.current + delta * 0.5;
+          const time = animOffset.current + state.clock.elapsedTime * 0.5;
           const swayAmount = 0.01;
           treeRef.current.rotation.x = Math.sin(time) * swayAmount;
           treeRef.current.rotation.z = Math.cos(time * 0.7) * swayAmount;

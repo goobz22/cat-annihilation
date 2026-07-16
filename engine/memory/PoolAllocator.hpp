@@ -79,6 +79,15 @@ private:
     void initializeFreeList();
     bool isValidPointer(void* ptr) const noexcept;
 
+    // *Locked cores assume the caller already holds m_mutex when m_threadSafe
+    // is true. The public allocate/deallocate/reset entries used to recurse
+    // back into themselves under the lock, which deadlocks instantly on the
+    // non-recursive std::mutex.
+    void* allocateLocked() noexcept;
+    void deallocateLocked(void* ptr) noexcept;
+    void resetLocked() noexcept;
+    size_t getFreeBlocksLocked() const noexcept;
+
     size_t m_blockSize;      // Size of each block
     size_t m_blockCount;     // Total number of blocks
     void* m_memory;          // Base pointer to allocated memory

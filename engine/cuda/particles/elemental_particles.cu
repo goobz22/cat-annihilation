@@ -24,7 +24,21 @@ __device__ float fract(float x) {
 }
 
 __device__ float elementalNoise(float3 p, float time) {
-    // Simple 3D procedural noise
+    // Simple 3D procedural value noise — trilinear interpolation over the
+    // eight corners of the integer lattice cell containing `p`. The hash
+    // offsets (1, 57, 113) match the per-axis stride used to build `n`, so
+    // adjacent corners hash to neighbouring lattice cells along each axis.
+    //
+    // WHY this was buggy before: the previous implementation sampled only
+    // FOUR corners (a, b, c, d — the +Z=0 face) and passed the SAME u.y-lerp
+    // expression as BOTH arguments to the outer u.z mix:
+    //   mix(mix(mix(a,b,u.x), mix(c,d,u.x), u.y),
+    //       mix(mix(a,b,u.x), mix(c,d,u.x), u.y), u.z)
+    // — which makes the function constant along Z. Particles using this noise
+    // for turbulence (water flow, air swirl, heat rise) lost all vertical
+    // variation, producing visibly planar swirls instead of volumetric ones.
+    // Sampling four MORE corners on the +Z=1 face restores the third
+    // dimension of the field.
     float3 pt = make_float3(p.x + time * 0.1f, p.y, p.z);
 
     float3 i = make_float3(floorf(pt.x), floorf(pt.y), floorf(pt.z));
@@ -32,10 +46,17 @@ __device__ float elementalNoise(float3 p, float time) {
 
     float n = i.x + i.y * 57.0f + i.z * 113.0f;
 
+    // +Z=0 face corners (lattice cell base).
     float a = hash(n + 0.0f);
     float b = hash(n + 1.0f);
     float c = hash(n + 57.0f);
     float d = hash(n + 58.0f);
+    // +Z=1 face corners (shifted by the Z stride = 113 to land on the next
+    // integer lattice plane along Z).
+    float e = hash(n + 113.0f);
+    float g = hash(n + 114.0f);
+    float h = hash(n + 170.0f);
+    float k = hash(n + 171.0f);
 
     float3 u = make_float3(
         f.x * f.x * (3.0f - 2.0f * f.x),
@@ -43,8 +64,9 @@ __device__ float elementalNoise(float3 p, float time) {
         f.z * f.z * (3.0f - 2.0f * f.z)
     );
 
-    return mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
-               mix(mix(a, b, u.x), mix(c, d, u.x), u.y), u.z);
+    float z0 = mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    float z1 = mix(mix(e, g, u.x), mix(h, k, u.x), u.y);
+    return mix(z0, z1, u.z);
 }
 
 __device__ float3 turbulentNoise(float3 p, float time, float strength) {

@@ -19,11 +19,37 @@ std::shared_ptr<Texture> TextureLoader::Load(
         return LoadHDR(path, generateMipmaps);
     }
 
-    int width, height, channels;
+    int width = 0, height = 0, channels = 0;
     uint8_t* data = stbi_load(path.c_str(), &width, &height, &channels, 0);
 
     if (!data) {
-        throw std::runtime_error("Failed to load texture: " + path + " - " + stbi_failure_reason());
+        // stb_image's stbi_failure_reason() returns nullptr when no error
+        // has been recorded yet on this thread (e.g. file-not-found on the
+        // fopen path on some platforms exits before stb sets its
+        // thread-local reason string). Concatenating a nullptr `const char*`
+        // into std::string is undefined behaviour — `operator+(const string&,
+        // const char*)` calls `traits::length(p)` which is `strlen(nullptr)`
+        // and crashes. Coerce to a printable sentinel so the throw produces
+        // a clean diagnostic rather than a SIGSEGV during error reporting.
+        const char* stbReason = stbi_failure_reason();
+        throw std::runtime_error(
+            "Failed to load texture: " + path + " - " +
+            (stbReason != nullptr ? stbReason : "unknown stb_image error"));
+    }
+
+    // stb_image's contract for a successful decode is width > 0 AND
+    // height > 0 AND channels in {1,2,3,4}. Reject the degenerate case
+    // explicitly rather than building a Texture with width/height == 0,
+    // which would later be bound as a VkImage with a (0,0,1) extent —
+    // a Vulkan validation error at best, an undefined-behaviour image
+    // sample at worst.
+    if (width <= 0 || height <= 0 || channels <= 0 || channels > 4) {
+        stbi_image_free(data);
+        throw std::runtime_error(
+            "Failed to load texture: " + path +
+            " - stb_image returned degenerate dimensions (" +
+            std::to_string(width) + "x" + std::to_string(height) +
+            "x" + std::to_string(channels) + ")");
     }
 
     auto texture = std::make_shared<Texture>();
@@ -63,11 +89,31 @@ std::shared_ptr<Texture> TextureLoader::Load(
 }
 
 std::shared_ptr<Texture> TextureLoader::LoadHDR(const std::string& path, bool generateMipmaps) {
-    int width, height, channels;
+    int width = 0, height = 0, channels = 0;
     float* data = stbi_loadf(path.c_str(), &width, &height, &channels, 0);
 
     if (!data) {
-        throw std::runtime_error("Failed to load HDR texture: " + path + " - " + stbi_failure_reason());
+        // Same nullptr-safe handling as Load(): stbi_failure_reason() can
+        // return nullptr on certain failure paths (notably fopen-before-
+        // reason-set), and concatenating that into a std::string call walks
+        // off the end of memory in strlen(). See the long-form WHY in Load().
+        const char* stbReason = stbi_failure_reason();
+        throw std::runtime_error(
+            "Failed to load HDR texture: " + path + " - " +
+            (stbReason != nullptr ? stbReason : "unknown stb_image error"));
+    }
+
+    // Reject degenerate decodes for the same Vulkan-extent / null-image
+    // reason described in Load(). HDR images can ship 3-channel RGB
+    // (radiance .hdr) or 4-channel RGBA — anything outside {1,2,3,4} is
+    // a malformed file and we should not propagate it.
+    if (width <= 0 || height <= 0 || channels <= 0 || channels > 4) {
+        stbi_image_free(data);
+        throw std::runtime_error(
+            "Failed to load HDR texture: " + path +
+            " - stb_image returned degenerate dimensions (" +
+            std::to_string(width) + "x" + std::to_string(height) +
+            "x" + std::to_string(channels) + ")");
     }
 
     auto texture = std::make_shared<Texture>();

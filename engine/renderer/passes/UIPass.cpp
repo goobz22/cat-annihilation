@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <string>
 
 namespace CatEngine::Renderer {
 
@@ -236,6 +237,23 @@ void UIPass::EndFrame() {
 
 void UIPass::DrawQuad(const QuadDesc& desc) {
     if (!frameInProgress_) {
+        return;
+    }
+
+    // WHY this guard: the per-frame vertex / index buffers are sized at
+    // MAX_VERTICES (65536 UIVertex slots) and MAX_INDICES (98304 uint16
+    // slots). Without a cap on the CPU-side vectors, three failures cascade:
+    //   1. UploadBuffers() memcpys vertices_.data() / indices_.data() into
+    //      the GPU buffers using the vector's full size — a 70k-vertex frame
+    //      would overrun the mapped allocation and stomp neighbouring heap.
+    //   2. static_cast<uint16_t>(vertexStart + 3) truncates past 65535, so
+    //      indices silently wrap around and reference earlier quads' vertex
+    //      slots, producing visible UI corruption.
+    //   3. The index buffer is also uint16 (98304 slots), so a frame with
+    //      >16384 quads (98304/6) writes past the bound buffer.
+    // The clamp drops late draws rather than corrupting the frame; legit HUD
+    // usage at ~50 quads/frame stays well below the limit.
+    if (vertices_.size() + 4 > MAX_VERTICES || indices_.size() + 6 > MAX_INDICES) {
         return;
     }
 
@@ -633,8 +651,17 @@ void UIPass::CreateBuffers() {
     vertexBufferDesc.usage = RHI::BufferUsage::Vertex;
     vertexBufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
 
+    // WHY local std::string: BufferDesc::debugName is a non-owning const char*
+    // copied into VulkanBuffer::m_DebugName inside CreateBuffer(). Building it
+    // inline as `("UIVertexBuffer_" + std::to_string(i)).c_str()` produces a
+    // pointer into a temporary string that dies at the end of the
+    // full-expression, so the backend reads freed memory while initialising
+    // its label. Holding the name in a stack local that outlives the call
+    // closes the lifetime window.
+    std::string vertexBufferName;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        vertexBufferDesc.debugName = ("UIVertexBuffer_" + std::to_string(i)).c_str();
+        vertexBufferName = "UIVertexBuffer_" + std::to_string(i);
+        vertexBufferDesc.debugName = vertexBufferName.c_str();
         vertexBuffers_[i].reset(rhi_->CreateBuffer(vertexBufferDesc));
     }
 
@@ -644,8 +671,10 @@ void UIPass::CreateBuffers() {
     indexBufferDesc.usage = RHI::BufferUsage::Index;
     indexBufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
 
+    std::string indexBufferName;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        indexBufferDesc.debugName = ("UIIndexBuffer_" + std::to_string(i)).c_str();
+        indexBufferName = "UIIndexBuffer_" + std::to_string(i);
+        indexBufferDesc.debugName = indexBufferName.c_str();
         indexBuffers_[i].reset(rhi_->CreateBuffer(indexBufferDesc));
     }
 }
@@ -656,8 +685,11 @@ void UIPass::CreateUniformBuffers() {
     bufferDesc.usage = RHI::BufferUsage::Uniform;
     bufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible | RHI::MemoryProperty::HostCoherent;
 
+    // Same lifetime contract as CreateBuffers — see WHY note there.
+    std::string uniformBufferName;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        bufferDesc.debugName = ("UIUniformBuffer_" + std::to_string(i)).c_str();
+        uniformBufferName = "UIUniformBuffer_" + std::to_string(i);
+        bufferDesc.debugName = uniformBufferName.c_str();
         uniformBuffers_[i].reset(rhi_->CreateBuffer(bufferDesc));
     }
 }
@@ -741,14 +773,25 @@ void UIPass::UploadBuffers(uint32_t frameIndex) {
         return;
     }
 
+    // Defensive clamp: DrawQuad already gates against overflow, but
+    // AddDrawCommand is a public escape hatch that pushes a UIDrawCommand
+    // directly and could be paired with a caller that bypassed DrawQuad and
+    // appended raw vertices through some future helper. Capping the memcpy
+    // length to the actual GPU buffer size keeps a runaway producer from
+    // stomping host-visible memory beyond the buffer end. Truncation drops
+    // late vertices — visually obvious as a partial UI element — which is
+    // strictly preferable to a silent heap corruption.
+    const size_t vertexCount = std::min<size_t>(vertices_.size(), MAX_VERTICES);
+    const size_t indexCount  = std::min<size_t>(indices_.size(),  MAX_INDICES);
+
     // Upload vertices
     void* vertexData = vertexBuffers_[frameIndex]->Map();
-    std::memcpy(vertexData, vertices_.data(), vertices_.size() * sizeof(UIVertex));
+    std::memcpy(vertexData, vertices_.data(), vertexCount * sizeof(UIVertex));
     vertexBuffers_[frameIndex]->Unmap();
 
     // Upload indices
     void* indexData = indexBuffers_[frameIndex]->Map();
-    std::memcpy(indexData, indices_.data(), indices_.size() * sizeof(uint16_t));
+    std::memcpy(indexData, indices_.data(), indexCount * sizeof(uint16_t));
     indexBuffers_[frameIndex]->Unmap();
 }
 

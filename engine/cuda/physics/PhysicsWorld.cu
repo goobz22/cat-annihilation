@@ -90,12 +90,28 @@ __device__ bool intersectRaySphere(
         return false;
     }
 
-    float t = (-b - sqrtf(discriminant)) / (2.0f * a);
-    if (t >= 0) {
-        tHit = t;
+    // Two roots: tNear = entry, tFar = exit. If the ray origin sits OUTSIDE
+    // the sphere (c > 0) both roots have the same sign and tNear is the
+    // intersection. If the origin sits INSIDE the sphere (c <= 0) the two
+    // roots straddle zero — tNear is negative (the entry behind the origin)
+    // and tFar is the forward exit point, which is what gameplay raycasts
+    // want (e.g. firing from inside a trigger volume).
+    //
+    // The previous code only checked tNear, so any ray cast from inside a
+    // sphere collider silently missed even though it geometrically exits the
+    // sphere. Returning tFar in that case fixes the inside-out raycast bug.
+    const float sqrtDisc = sqrtf(discriminant);
+    const float inv2a = 1.0f / (2.0f * a);
+    const float tNear = (-b - sqrtDisc) * inv2a;
+    const float tFar  = (-b + sqrtDisc) * inv2a;
+    if (tNear >= 0.0f) {
+        tHit = tNear;
         return true;
     }
-
+    if (tFar >= 0.0f) {
+        tHit = tFar;
+        return true;
+    }
     return false;
 }
 
@@ -199,13 +215,52 @@ __global__ void raycastKernel(
         __syncthreads();
     }
 
-    // Thread 0 of each block writes block's best result
-    if (threadIdx_x == 0) {
-        // Atomic min on distance to find global best
-        float oldDist = atomicMinFloat(hitDistance, sharedBestDist[0]);
-        if (sharedBestDist[0] < oldDist) {
-            atomicExch(hitBodyIndex, sharedBestIdx[0]);
-            // Would also store hit point and normal here
+    // Thread 0 of each block reduces its block's best into the global slot.
+    //
+    // WHY the explicit CAS loop instead of atomicMinFloat+atomicExch: those
+    // two atomics are independent ops, so the following interleaving was
+    // possible across two blocks A and B:
+    //
+    //   Block A: atomicMinFloat(dist) updates dist=10  (was 1e9), returns 1e9.
+    //   Block B: atomicMinFloat(dist) updates dist=5   (was 10),  returns 10.
+    //   Block A: sees 10 < 1e9 → atomicExch(idx, A_idx).
+    //   Block B: sees 5  < 10  → atomicExch(idx, B_idx).
+    //
+    // That correctly leaves the BETTER index in idx — but reorder the two
+    // exch calls and A clobbers B's index. The classic fix: pack
+    // (distance, index) into a single 64-bit slot and atomicCAS the pair.
+    // We don't have a uint64 output slot here, so we fall back to a CAS
+    // loop that publishes both writes UNDER THE SAME atomic transaction:
+    // every loop iteration reads the current best, decides whether our
+    // block beats it, and atomicCAS-installs our distance only if no other
+    // block has narrowed it further in the meantime. After the distance
+    // CAS succeeds (our slot is now the winner) we publish the matching
+    // index — and since no other block can have a SMALLER distance than
+    // ours at that moment (they would have lost the CAS), the index is
+    // safe to write without further coordination.
+    if (threadIdx_x == 0 && sharedBestIdx[0] >= 0) {
+        const float myDist = sharedBestDist[0];
+        int* dist_as_int = reinterpret_cast<int*>(hitDistance);
+        int observedBits = *dist_as_int;
+        for (;;) {
+            const float observedDist = __int_as_float(observedBits);
+            if (myDist >= observedDist) {
+                // Another block already published a closer hit. Stop.
+                break;
+            }
+            const int desiredBits = __float_as_int(myDist);
+            const int prevBits = atomicCAS(dist_as_int, observedBits, desiredBits);
+            if (prevBits == observedBits) {
+                // We won the CAS. Publish our index in the same atomicity
+                // window — any later-arriving block that beats us will do
+                // the same CAS → exch sequence and overwrite both fields,
+                // preserving the distance/index invariant.
+                atomicExch(hitBodyIndex, sharedBestIdx[0]);
+                break;
+            }
+            // Lost the CAS; another block updated distance underneath us.
+            // Reload and re-check.
+            observedBits = prevBits;
         }
     }
 }
@@ -230,72 +285,88 @@ void gpuRaycast(
     }
 
     // Allocate output buffers
-    int* d_hitBodyIndex;
-    float* d_hitDistance;
-    float3* d_hitPoint;
-    float3* d_hitNormal;
+    int* d_hitBodyIndex = nullptr;
+    float* d_hitDistance = nullptr;
+    float3* d_hitPoint = nullptr;
+    float3* d_hitNormal = nullptr;
 
-    CUDA_CHECK(cudaMalloc(&d_hitBodyIndex, sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_hitDistance, sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_hitPoint, sizeof(float3)));
-    CUDA_CHECK(cudaMalloc(&d_hitNormal, sizeof(float3)));
+    // WHY a try/catch around the whole pipeline: every CUDA_CHECK below can
+    // throw CudaException. Previously, a throw between cudaMalloc and the
+    // trailing cudaFrees leaked all four GPU buffers — and on a hot path
+    // (collision raycasts run per-projectile per-frame) the leak compounds
+    // until the process OOMs. Catch, free what was allocated, and rethrow.
+    try {
+        CUDA_CHECK(cudaMalloc(&d_hitBodyIndex, sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_hitDistance, sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_hitPoint, sizeof(float3)));
+        CUDA_CHECK(cudaMalloc(&d_hitNormal, sizeof(float3)));
 
-    // Initialize with no hit
-    int noHit = -1;
-    CUDA_CHECK(cudaMemcpyAsync(d_hitBodyIndex, &noHit, sizeof(int),
-                               cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_hitDistance, &maxDistance, sizeof(float),
-                               cudaMemcpyHostToDevice, stream));
+        // Initialize with no hit
+        int noHit = -1;
+        CUDA_CHECK(cudaMemcpyAsync(d_hitBodyIndex, &noHit, sizeof(int),
+                                   cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_hitDistance, &maxDistance, sizeof(float),
+                                   cudaMemcpyHostToDevice, stream));
 
-    // Launch kernel
-    const int blockSize = 256;
-    const int numBlocks = (bodies.count + blockSize - 1) / blockSize;
+        // Launch kernel
+        const int blockSize = 256;
+        const int numBlocks = (bodies.count + blockSize - 1) / blockSize;
 
-    float3 rayOrigin = host_make_float3(ray.origin.x, ray.origin.y, ray.origin.z);
-    float3 rayDir = host_make_float3(ray.direction.x, ray.direction.y, ray.direction.z);
+        float3 rayOrigin = host_make_float3(ray.origin.x, ray.origin.y, ray.origin.z);
+        float3 rayDir = host_make_float3(ray.direction.x, ray.direction.y, ray.direction.z);
 
-    raycastKernel<<<numBlocks, blockSize, 0, stream>>>(
-        rayOrigin,
-        rayDir,
-        maxDistance,
-        bodies.positions,
-        bodies.rotations,
-        bodies.colliderTypes,
-        bodies.colliderParams,
-        bodies.colliderOffsets,
-        bodies.count,
-        d_hitBodyIndex,
-        d_hitDistance,
-        d_hitPoint,
-        d_hitNormal
-    );
-    CUDA_CHECK_LAST();
+        raycastKernel<<<numBlocks, blockSize, 0, stream>>>(
+            rayOrigin,
+            rayDir,
+            maxDistance,
+            bodies.positions,
+            bodies.rotations,
+            bodies.colliderTypes,
+            bodies.colliderParams,
+            bodies.colliderOffsets,
+            bodies.count,
+            d_hitBodyIndex,
+            d_hitDistance,
+            d_hitPoint,
+            d_hitNormal
+        );
+        CUDA_CHECK_LAST();
 
-    // Download results
-    int hitBodyIndex;
-    float hitDistance;
-    float3 hitPoint;
-    float3 hitNormal;
+        // Download results
+        int hitBodyIndex;
+        float hitDistance;
+        float3 hitPoint;
+        float3 hitNormal;
 
-    CUDA_CHECK(cudaMemcpyAsync(&hitBodyIndex, d_hitBodyIndex, sizeof(int),
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(&hitDistance, d_hitDistance, sizeof(float),
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(&hitPoint, d_hitPoint, sizeof(float3),
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(&hitNormal, d_hitNormal, sizeof(float3),
-                               cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(&hitBodyIndex, d_hitBodyIndex, sizeof(int),
+                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(&hitDistance, d_hitDistance, sizeof(float),
+                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(&hitPoint, d_hitPoint, sizeof(float3),
+                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(&hitNormal, d_hitNormal, sizeof(float3),
+                                   cudaMemcpyDeviceToHost, stream));
 
-    // Wait for completion
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+        // Wait for completion
+        CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // Fill output
-    hit.bodyIndex = hitBodyIndex;
-    hit.distance = hitDistance;
-    hit.point = Engine::vec3(hitPoint.x, hitPoint.y, hitPoint.z);
-    hit.normal = Engine::vec3(hitNormal.x, hitNormal.y, hitNormal.z);
+        // Fill output
+        hit.bodyIndex = hitBodyIndex;
+        hit.distance = hitDistance;
+        hit.point = Engine::vec3(hitPoint.x, hitPoint.y, hitPoint.z);
+        hit.normal = Engine::vec3(hitNormal.x, hitNormal.y, hitNormal.z);
+    } catch (...) {
+        // Free whatever did allocate, then rethrow so the caller sees the
+        // real CUDA error. cudaFree(nullptr) is a documented no-op on every
+        // CUDA Toolkit version so the early-throw case is safe.
+        if (d_hitBodyIndex) cudaFree(d_hitBodyIndex);
+        if (d_hitDistance)  cudaFree(d_hitDistance);
+        if (d_hitPoint)     cudaFree(d_hitPoint);
+        if (d_hitNormal)    cudaFree(d_hitNormal);
+        throw;
+    }
 
-    // Free buffers
+    // Free buffers — happy path.
     cudaFree(d_hitBodyIndex);
     cudaFree(d_hitDistance);
     cudaFree(d_hitPoint);

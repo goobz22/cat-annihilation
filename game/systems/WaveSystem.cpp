@@ -1,4 +1,5 @@
 #include "WaveSystem.hpp"
+#include "WaveDifficulty.hpp"
 #include "../components/EnemyComponent.hpp"
 #include "../components/HealthComponent.hpp"
 #include "../components/MovementComponent.hpp"
@@ -6,6 +7,7 @@
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Math.hpp"
 #include "../../engine/core/Logger.hpp"
+#include <algorithm>
 #include <cmath>
 #include <random>
 
@@ -88,12 +90,42 @@ void WaveSystem::updateSpawning(float dt) {
     }
 }
 
-void WaveSystem::updateInProgress(float dt) {
-    // Clean up dead enemies from tracking list
+void WaveSystem::updateInProgress(float /*dt*/) {
+    // Clean up enemies that are EITHER fully destroyed in the ECS OR still
+    // alive in the ECS but are mid-death-animation (HealthComponent.isDead is
+    // true and the entity is just running out its death-pose hold before
+    // HealthSystem reaps it). The death-pose hold is kDeathPoseHoldSeconds
+    // = 3.0 s; the pre-fix wave-completion path only filtered fully-destroyed
+    // entities via `ecs_->isAlive`, which kept dying-but-not-yet-destroyed
+    // dogs in spawnedEnemies_ for that full 3 s window — so the player had to
+    // stand around watching corpses pose before the wave UI advanced even
+    // though every enemy was already at 0 hp.
+    //
+    // The fix is to treat "no HealthComponent OR HealthComponent reports
+    // isDead" as wave-complete-relevant. A corpse can't deal damage and can't
+    // be revived (HealthSystem::revive is only callable on bespoke scripted
+    // paths that we don't fire mid-wave), so counting it as "still alive for
+    // wave purposes" was a false-positive that drove a multi-second UX dead
+    // zone after every kill streak. The corpses keep ticking through their
+    // death-pose hold on HealthSystem's clock and despawn on its schedule —
+    // that animation is intentional and unchanged; we just stop blocking the
+    // wave transition behind it.
     spawnedEnemies_.erase(
         std::remove_if(spawnedEnemies_.begin(), spawnedEnemies_.end(),
             [this](CatEngine::Entity enemy) {
-                return !ecs_->isAlive(enemy);
+                if (!ecs_->isAlive(enemy)) {
+                    return true;
+                }
+                auto* health = ecs_->getComponent<HealthComponent>(enemy);
+                if (health == nullptr) {
+                    // Belt-and-suspenders: an enemy without a HealthComponent
+                    // can't die in the health-system sense, so leaving it in
+                    // the list would stall waves indefinitely. We treat it as
+                    // already-defeated rather than have a future no-HP enemy
+                    // class accidentally freeze the wave system.
+                    return true;
+                }
+                return health->isDead;
             }),
         spawnedEnemies_.end()
     );
@@ -308,13 +340,36 @@ void WaveSystem::spawnEnemy() {
 }
 
 Engine::vec3 WaveSystem::getSpawnPosition() const {
+    // Sentinel far-from-origin fallback for the degenerate paths.
+    //
+    // The pre-fix fallback returned (0, 0, 0) on every "no ecs / no player /
+    // no transform" branch. That looks harmless until you realise spawnEnemy()
+    // is the only legitimate caller and ALSO no-ops on those conditions, so
+    // the fallback should never fire — except a future call site that adds
+    // queue-style spawn (e.g. a level editor preview, or a debug menu's "spawn
+    // 100 dogs" button) would happily call this without checking, and all 100
+    // dogs would stack at world origin. A stack of 100 colliders at (0,0,0)
+    // pegs the broadphase and visually masks any actual nav-mesh bug behind a
+    // pile of jittering capsules.
+    //
+    // Returning (1000, 1000, 1000) — well outside the 512 m terrain footprint
+    // and far above any plausible ground-snap — makes the failure obvious
+    // (entities visibly absent / off-map) instead of silently producing a
+    // dog-pile at origin. spawnEnemy()'s own isAlive() check still no-ops
+    // BEFORE this fallback in the production wave path, so this only changes
+    // the fail-loud signature for off-path callers.
+    // const (not constexpr) — Engine::vec3 isn't a literal type, but the
+    // single shared sentinel is still cheaper than re-constructing the vec3
+    // at each return site and keeps the value reviewable in one place.
+    const Engine::vec3 kFarFromOriginSentinel(1000.0f, 1000.0f, 1000.0f);
+
     if (!ecs_ || !ecs_->isAlive(playerEntity_)) {
-        return Engine::vec3(0.0f, 0.0f, 0.0f);
+        return kFarFromOriginSentinel;
     }
 
     auto* playerTransform = ecs_->getComponent<Engine::Transform>(playerEntity_);
     if (!playerTransform) {
-        return Engine::vec3(0.0f, 0.0f, 0.0f);
+        return kFarFromOriginSentinel;
     }
 
     // Random angle around player
@@ -351,12 +406,26 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
 }
 
 int WaveSystem::calculateEnemyCount(int waveNumber) const {
-    return static_cast<int>(config_.baseEnemyCount +
-           (waveNumber - 1) * config_.enemyCountMultiplier);
+    // 2026-05-16: delegate to the dense/sparse curve in WaveDifficulty.hpp
+    // (backlog ENGINE_BACKLOG.md "Wave-difficulty curve"). The previous
+    // linear formula `base + (N-1)*mul` is still available via
+    // WaveDifficulty::linearEnemyCount() for golden-image reproducibility,
+    // but the default config curves the rhythm so the particle sim sees
+    // dense / sparse / baseline / dense / sparse ... instead of a
+    // monotonic ramp.
+    WaveDifficultyConfig difficulty;
+    difficulty.baseEnemyCount = static_cast<float>(config_.baseEnemyCount);
+    difficulty.enemyCountMultiplier = config_.enemyCountMultiplier;
+    difficulty.healthScalingPerWave = config_.healthScalingPerWave;
+    return WaveDifficulty::calculateEnemyCount(waveNumber, difficulty);
 }
 
 float WaveSystem::calculateHealthScaling(int waveNumber) const {
-    return 1.0f + (waveNumber - 1) * config_.healthScalingPerWave;
+    WaveDifficultyConfig difficulty;
+    difficulty.baseEnemyCount = static_cast<float>(config_.baseEnemyCount);
+    difficulty.enemyCountMultiplier = config_.enemyCountMultiplier;
+    difficulty.healthScalingPerWave = config_.healthScalingPerWave;
+    return WaveDifficulty::calculateHealthScaling(waveNumber, difficulty);
 }
 
 bool WaveSystem::isBossWave(int waveNumber) const {

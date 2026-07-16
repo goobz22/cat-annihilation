@@ -124,15 +124,24 @@ const SimpleTerrainSystem: React.FC<SimpleTerrainSystemProps> = ({ playerPositio
     });
     }
     
-    // Update store only if biome changed
+    // Update store only if biome changed.
+    //
+    // CRITICAL: per ARCHITECTURE.md / CLAUDE.md, Zustand setState inside useFrame causes
+    // the cat to clip through terrain. Even though biome changes are rare, the rule is
+    // "no Zustand writes inside useFrame, period." We defer via setTimeout(0) — the same
+    // pattern globalWeaponXP uses in GlobalCollisionSystem.tsx — so the store mutation
+    // lands on the next microtask/macrotask boundary, OUTSIDE the R3F render frame.
     const storedBiome = useGameStore.getState().storyMode.currentBiome;
     if (storedBiome !== currentBiome) {
-      useGameStore.setState(state => ({
-        storyMode: {
-          ...state.storyMode,
-          currentBiome
-        }
-      }));
+      const nextBiome = currentBiome;
+      setTimeout(() => {
+        useGameStore.setState(state => ({
+          storyMode: {
+            ...state.storyMode,
+            currentBiome: nextBiome
+          }
+        }));
+      }, 0);
     }
   });
 
@@ -203,8 +212,10 @@ const SimpleTreesStatic = React.memo(() => {
   console.log('[SIMPLE TERRAIN] Creating static trees');
   
   const trees = useMemo(() => {
-    const treeElements = [];
-    const treeCollisionData = [];
+    // Explicit element types — without these TS infers `any[]` and the call to
+    // terrainCollisionData.staticObjects = treeCollisionData below loses its shape check.
+    const treeElements: React.ReactElement[] = [];
+    const treeCollisionData: typeof terrainCollisionData.staticObjects = [];
     
     // Add a few trees around each biome
     Object.entries(BIOMES).forEach(([biome, data]) => {

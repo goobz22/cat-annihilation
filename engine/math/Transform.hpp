@@ -112,7 +112,16 @@ public:
         return rotation.rotate(scaled).normalized();
     }
 
-    // Inverse transform
+    // Inverse transform.
+    //
+    // EXACT only for uniform scale. The stored form applies operations as
+    // forward(p) = R*(S*p) + T; the inverse therefore needs S^-1 * R^-1 * (q - T),
+    // which cannot be re-expressed as another { position, rotation, scale }
+    // record unless S commutes with R. S commutes with R iff S is uniform
+    // (S = sI). For non-uniform scale, lower to mat4 via toMatrix() and invert
+    // the matrix directly — this method approximates by ignoring the residual,
+    // which is fine for the engine's usage (uniform per-entity scale) but is
+    // NOT a general-purpose 4x4 inverse.
     Transform inverse() const {
         Quaternion invRotation = rotation.inverse();
         vec3 invScale(

@@ -71,15 +71,22 @@ public:
      */
     void UploadData(const void* data, uint64_t size, uint32_t mipLevel = 0, uint32_t arrayLayer = 0);
 
+    // Vulkan-type accessors — promoted from private to public so the
+    // companion VulkanTextureView can pull the correct VkImageViewType
+    // out of the owning texture instead of hardcoding
+    // VK_IMAGE_VIEW_TYPE_2D (which silently broke cubemap / 3D / array
+    // views before the 2026-05-16 fix). These are read-only queries that
+    // depend only on the TextureDesc captured at construction time, so
+    // exposing them does not widen the mutability surface of the class.
+    VkImageType GetVkImageType() const;
+    VkImageViewType GetVkImageViewType() const;
+    VkSampleCountFlagBits GetVkSampleCount() const;
+
 private:
     void CreateImage();
     void AllocateMemory();
     void CreateImageView();
     uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-    VkImageType GetVkImageType() const;
-    VkImageViewType GetVkImageViewType() const;
-    VkSampleCountFlagBits GetVkSampleCount() const;
 
 private:
     VulkanDevice* m_Device;

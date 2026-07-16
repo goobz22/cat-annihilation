@@ -1,5 +1,6 @@
 #include "ParticleKernels.cuh"
 #include "SimplexNoise.hpp"  // Header-only, __host__ __device__ simplex noise
+#include "../CudaError.hpp"  // CUDA_CHECK throws CudaException on non-success
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <thrust/device_ptr.h>
@@ -562,15 +563,25 @@ void permuteParticleArrays(
     float*    tmpRotation     = nullptr;
     uint32_t* tmpAlive        = nullptr;
 
-    cudaMallocAsync(&tmpPos,          f3Bytes,  stream);
-    cudaMallocAsync(&tmpPrevPos,      f3Bytes,  stream);
-    cudaMallocAsync(&tmpVel,          f3Bytes,  stream);
-    cudaMallocAsync(&tmpColor,        f4Bytes,  stream);
-    cudaMallocAsync(&tmpLifetime,     f1Bytes,  stream);
-    cudaMallocAsync(&tmpMaxLifetime,  f1Bytes,  stream);
-    cudaMallocAsync(&tmpSize,         f1Bytes,  stream);
-    cudaMallocAsync(&tmpRotation,     f1Bytes,  stream);
-    cudaMallocAsync(&tmpAlive,        u32Bytes, stream);
+    // Stream-ordered allocations are checked through CUDA_CHECK so an
+    // out-of-memory or invalid-stream error throws CudaException instead of
+    // silently leaving the temp pointer null. Previously these errors were
+    // swallowed: a failed cudaMallocAsync would leave the matching tmp*
+    // pointer at nullptr, and the subsequent thrust::gather and
+    // cudaMemcpyAsync would dereference null device pointers — manifesting
+    // as cudaErrorIllegalAddress two kernel launches later, with no link
+    // back to the original allocation failure. Stream-ordered
+    // cudaFreeAsync(nullptr, stream) is a no-op so the partial-failure
+    // cleanup at the end is still safe.
+    CUDA_CHECK(cudaMallocAsync(&tmpPos,          f3Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpPrevPos,      f3Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpVel,          f3Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpColor,        f4Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpLifetime,     f1Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpMaxLifetime,  f1Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpSize,         f1Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpRotation,     f1Bytes,  stream));
+    CUDA_CHECK(cudaMallocAsync(&tmpAlive,        u32Bytes, stream));
 
     auto policy = thrust::cuda::par.on(stream);
     auto idxBegin = indices;

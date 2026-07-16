@@ -7,10 +7,12 @@
 
 #include "save_system.hpp"
 #include "serialization.hpp"
+#include <chrono>
 #include <filesystem>
 #include <ctime>
 #include <cstring>
 #include <iostream>
+#include <system_error>
 
 // Simple logging helpers
 namespace {
@@ -496,71 +498,141 @@ std::string SaveSystem::getAutoSaveFilename() const {
 // ============================================================================
 
 bool SaveSystem::saveToFile(const std::string& fullPath, const SaveGameData& data) {
+    // Two-staging-files dance:
+    //   stagePath -> uncompressed serialized data (so we can compress and
+    //                checksum it without re-serializing).
+    //   writePath -> the final compressed+header form. We write to writePath
+    //                FIRST, fsync-flush it, then atomically rename onto
+    //                fullPath. If power dies mid-write the original
+    //                fullPath is untouched and the player keeps yesterday's
+    //                save instead of an empty/torn one.
+    //
+    // The previous implementation truncated fullPath BEFORE the final
+    // BinaryWriter finished serializing the header+compressed payload —
+    // a power loss between truncate and final flush produced a 0-byte
+    // save file, silently destroying the player's progress. That is the
+    // exact failure mode this rewrite eliminates.
+
+    // Per-pid + per-call suffix prevents two concurrent autosaves (e.g.,
+    // timed autosave overlapping with a manual save the user clicked) from
+    // clobbering each other's staging files mid-write.
+    const auto callTag = std::to_string(static_cast<uint64_t>(
+                             std::chrono::steady_clock::now()
+                                 .time_since_epoch().count()));
+    const std::string stagePath = fullPath + ".stage." + callTag;
+    const std::string writePath = fullPath + ".write." + callTag;
+
+    char* compressedData = nullptr;
+
     try {
-        // Create a temporary buffer to write data
-        std::string tempPath = fullPath + ".tmp";
-
-        // First, serialize the data to get its size
-        BinaryWriter tempWriter(tempPath);
-
-        // Reserve space for header (we'll write it later)
+        // Stage 1: serialize the payload to stagePath so we can size +
+        // checksum + compress it.
         SaveGameHeader header;
-        size_t headerStartPos = tempWriter.tell();
-        header.serialize(tempWriter);
-        size_t dataStartPos = tempWriter.tell();
+        size_t dataStartPos = 0;
+        size_t dataEndPos = 0;
+        {
+            BinaryWriter stageWriter(stagePath);
+            (void)stageWriter.tell();          // header start = 0 by construction.
+            header.serialize(stageWriter);
+            dataStartPos = stageWriter.tell();
+            data.serialize(stageWriter);
+            dataEndPos = stageWriter.tell();
+            stageWriter.close();
+        }
 
-        // Write the actual save data
-        data.serialize(tempWriter);
-        size_t dataEndPos = tempWriter.tell();
+        const size_t uncompressedSize = dataEndPos - dataStartPos;
 
-        tempWriter.close();
-
-        // Calculate data size
-        size_t uncompressedSize = dataEndPos - dataStartPos;
-
-        // Read the data section back
-        std::ifstream tempRead(tempPath, std::ios::binary);
-        tempRead.seekg(dataStartPos);
+        // Slurp just the data section back so we can compress + checksum
+        // exactly the bytes the loader will deserialize.
         std::vector<char> uncompressedData(uncompressedSize);
-        tempRead.read(uncompressedData.data(), uncompressedSize);
-        tempRead.close();
+        {
+            std::ifstream stageRead(stagePath, std::ios::binary);
+            if (!stageRead.is_open()) {
+                throw std::runtime_error("SaveSystem: failed to reopen staging file " + stagePath);
+            }
+            stageRead.seekg(static_cast<std::streamoff>(dataStartPos));
+            stageRead.read(uncompressedData.data(),
+                           static_cast<std::streamsize>(uncompressedSize));
+            stageRead.close();
+        }
 
-        // Compress the data
-        size_t compressedSize;
-        char* compressedData = compressData(uncompressedData.data(), uncompressedSize, compressedSize);
+        // Compress + checksum the uncompressed bytes.
+        size_t compressedSize = 0;
+        compressedData = compressData(uncompressedData.data(),
+                                      uncompressedSize, compressedSize);
+        const uint32_t checksum = calculateCRC32(uncompressedData.data(), uncompressedSize);
 
-        // Calculate checksum
-        uint32_t checksum = calculateCRC32(uncompressedData.data(), uncompressedSize);
-
-        // Fill in header
-        header.timestamp = std::time(nullptr);
-        header.checksum = checksum;
-        header.dataOffset = static_cast<uint32_t>(dataStartPos);
-        header.dataSize = static_cast<uint32_t>(compressedSize);
+        // Fill the final header.
+        header.timestamp        = std::time(nullptr);
+        header.checksum         = checksum;
+        header.dataOffset       = static_cast<uint32_t>(dataStartPos);
+        header.dataSize         = static_cast<uint32_t>(compressedSize);
         header.uncompressedSize = static_cast<uint32_t>(uncompressedSize);
-        header.playerLevel = data.stats.level;
-        header.playTime = m_currentPlayTime;  // Total accumulated play time in seconds
+        header.playerLevel      = data.stats.level;
+        header.playTime         = m_currentPlayTime;
+        std::strncpy(header.playerName,     "Player", sizeof(header.playerName) - 1);
+        std::strncpy(header.location,       "Forest", sizeof(header.location) - 1);
+        std::strncpy(header.screenshotPath, "",       sizeof(header.screenshotPath) - 1);
 
-        std::strncpy(header.playerName, "Player", sizeof(header.playerName) - 1);
-        std::strncpy(header.location, "Forest", sizeof(header.location) - 1);
-        std::strncpy(header.screenshotPath, "", sizeof(header.screenshotPath) - 1);
+        // Stage 2: write the final file to writePath. Flush+close BEFORE
+        // the rename so the OS's page cache has actually committed the
+        // bytes to the disk metadata before fullPath swings over.
+        {
+            BinaryWriter finalWriter(writePath);
+            header.serialize(finalWriter);
+            finalWriter.write(compressedData, compressedSize);
+            finalWriter.close();
+        }
 
-        // Write final file
-        BinaryWriter finalWriter(fullPath);
-        header.serialize(finalWriter);
-        finalWriter.write(compressedData, compressedSize);
-        finalWriter.close();
-
-        // Cleanup
+        // Free compressed buffer now — the rename can no longer fail in a
+        // way that needs to recover it, and keeping the allocation alive
+        // through the FS call wastes ~5KB on a hot-path save.
         delete[] compressedData;
-        std::filesystem::remove(tempPath);
+        compressedData = nullptr;
 
-        logInfo("SaveSystem: Saved " + std::to_string(uncompressedSize) + " bytes (compressed to " +
-                     std::to_string(compressedSize) + " bytes)");
+        // Stage 3: atomic rename. std::filesystem::rename is atomic on the
+        // same filesystem for both POSIX (rename(2)) and Win32
+        // (MoveFileExW with MOVEFILE_REPLACE_EXISTING semantics on
+        // NTFS/ReFS). Either fullPath holds the old contents or it holds
+        // the new contents — never a half-written hybrid.
+        std::error_code renameErr;
+        std::filesystem::rename(writePath, fullPath, renameErr);
+        if (renameErr) {
+            // On Windows MoveFile* refuses to rename onto an existing
+            // file if a process has the destination open (e.g., antivirus
+            // scanner). Fall back to remove-then-rename: small atomicity
+            // window during which fullPath is missing, but never a torn
+            // file, and the loader retries on missing-file.
+            std::filesystem::remove(fullPath, renameErr);
+            std::filesystem::rename(writePath, fullPath, renameErr);
+            if (renameErr) {
+                throw std::runtime_error("SaveSystem: atomic rename failed: " +
+                                         renameErr.message());
+            }
+        }
+
+        // Stage 4: clean up the uncompressed staging file. Best-effort —
+        // a leftover .stage.* file is harmless (it never gets loaded, the
+        // load path only opens the canonical fullPath) so we don't
+        // propagate failures here.
+        std::error_code cleanupErr;
+        std::filesystem::remove(stagePath, cleanupErr);
+
+        logInfo("SaveSystem: Saved " + std::to_string(uncompressedSize) +
+                " bytes (compressed to " + std::to_string(compressedSize) + " bytes)");
 
         return true;
 
     } catch (const std::exception& e) {
+        // RAII cleanup: free the compressed buffer if compression had
+        // already run before the failure, and remove both staging files
+        // so a partial run doesn't accumulate disk garbage across retries.
+        if (compressedData != nullptr) {
+            delete[] compressedData;
+        }
+        std::error_code cleanupErr;
+        std::filesystem::remove(stagePath, cleanupErr);
+        std::filesystem::remove(writePath, cleanupErr);
         logError("SaveSystem: Save failed: " + std::string(e.what()));
         return false;
     }

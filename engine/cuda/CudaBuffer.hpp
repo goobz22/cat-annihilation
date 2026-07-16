@@ -337,6 +337,26 @@ private:
         m_capacity = count;
     }
 
+    // Free a raw pointer using the allocator that matches m_memoryType. Kept
+    // local to the class so the destructor path, the move-assign path, and
+    // the reallocate-on-exception cleanup path all funnel through one
+    // implementation — adding a new MemoryType only requires updating this
+    // one helper instead of three identical switches.
+    void freeRaw(T* ptr) noexcept {
+        if (ptr == nullptr) return;
+        switch (m_memoryType) {
+            case MemoryType::Device:
+                cudaFree(ptr);
+                break;
+            case MemoryType::Pinned:
+                cudaFreeHost(ptr);
+                break;
+            case MemoryType::Managed:
+                cudaFree(ptr);
+                break;
+        }
+    }
+
     void reallocate(size_t newCapacity) {
         T* newPtr = nullptr;
         size_t bytes = newCapacity * sizeof(T);
@@ -354,22 +374,24 @@ private:
                 break;
         }
 
-        // Copy old data if exists
+        // Copy old data if exists. WHY the try/catch: if cudaMemcpy throws
+        // via CUDA_CHECK (e.g. cudaErrorIllegalAddress because the source
+        // pointer was clobbered by a stray kernel) the freshly-allocated
+        // newPtr would otherwise leak — we've already exited the new-alloc
+        // switch but haven't published newPtr into m_ptr yet, so neither the
+        // destructor nor a subsequent free() can find it. Free it explicitly
+        // before re-throwing so RAII holds the line even on partial failures.
         if (m_ptr != nullptr && m_size > 0) {
-            CUDA_CHECK(cudaMemcpy(newPtr, m_ptr, m_size * sizeof(T), cudaMemcpyDefault));
-
-            // Free old memory
-            switch (m_memoryType) {
-                case MemoryType::Device:
-                    cudaFree(m_ptr);
-                    break;
-                case MemoryType::Pinned:
-                    cudaFreeHost(m_ptr);
-                    break;
-                case MemoryType::Managed:
-                    cudaFree(m_ptr);
-                    break;
+            try {
+                CUDA_CHECK(cudaMemcpy(newPtr, m_ptr, m_size * sizeof(T), cudaMemcpyDefault));
+            } catch (...) {
+                freeRaw(newPtr);
+                throw;
             }
+
+            // Free old memory — funnelled through the type-aware helper
+            // (was three duplicate switches inlined here previously).
+            freeRaw(m_ptr);
         }
 
         m_ptr = newPtr;

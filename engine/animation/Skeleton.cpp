@@ -149,40 +149,143 @@ bool Skeleton::isAncestor(int ancestor, int descendant) const {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Hierarchy-respecting world-transform walk.
+//
+// The previous implementation iterated bone indices in array order and used
+// the parent's world transform ONLY when `bone.parentIndex < i` — meaning a
+// bone whose parent appeared LATER in the bone array was silently treated as
+// a root (its local transform became its world transform, with no parent
+// composition). This held while every consumer happened to emit bones in
+// parent-before-child order (glTF nodes traversed depth-first from the
+// scene root usually do), but it broke as soon as:
+//
+//   * a skeleton was re-rooted via removeBone() (parent indices get
+//     shifted, and the post-removal walk no longer respects topological
+//     order — a former child of the removed bone can sit at an index whose
+//     surviving parent is at a higher index);
+//   * an importer added bones out-of-order (Meshy auto-rigger sometimes
+//     emits secondary chains — tail, ear — after the main spine, and a few
+//     of those secondary chains' roots end up at indices preceding their
+//     parent's index in the GLB);
+//   * gameplay code splices an extra IK / attachment bone late in the array
+//     and parents existing bones to it (the "weapon socket" pattern).
+//
+// All three are real cases for this engine, so the walk now resolves the
+// hierarchy explicitly: each bone is computed only once its parent has
+// been computed, regardless of array order. We track a per-bone "resolved"
+// flag and loop until every bone is settled. The inner pass touches each
+// unresolved bone once, so the total work is O(boneCount * depth) in the
+// worst case — for a ~37-bone Meshy cat rig with depth 6, that is ~220
+// touches per frame, still well below the per-vertex skinning cost.
+//
+// Cycles (which Skeleton::isValid() rejects) cannot reach this code in
+// practice; the safety break-out below guarantees we don't spin forever
+// even if a corrupt skeleton slips through.
+// ---------------------------------------------------------------------------
+
 void Skeleton::computeWorldTransforms(const std::vector<Transform>& localTransforms,
                                      std::vector<mat4>& outWorldTransforms) const {
-    outWorldTransforms.resize(m_bones.size());
+    const size_t boneCount = m_bones.size();
+    outWorldTransforms.resize(boneCount);
 
-    for (size_t i = 0; i < m_bones.size(); ++i) {
-        const Bone& bone = m_bones[i];
+    if (boneCount == 0) {
+        return;
+    }
 
-        mat4 localMatrix = (i < localTransforms.size())
-            ? localTransforms[i].toMatrix()
-            : mat4::identity();
+    std::vector<char> resolved(boneCount, 0);
+    size_t remaining = boneCount;
+    // Outer loop bound by boneCount: every iteration must resolve at least
+    // one bone (any chain has a root, the root resolves first, then its
+    // children, ...). If a pass resolves nothing we have a malformed
+    // hierarchy (forward parent reference / cycle) and we bail out instead
+    // of looping forever.
+    for (size_t pass = 0; pass < boneCount && remaining > 0; ++pass) {
+        bool progress = false;
+        for (size_t i = 0; i < boneCount; ++i) {
+            if (resolved[i]) {
+                continue;
+            }
+            const Bone& bone = m_bones[i];
+            const mat4 localMatrix = (i < localTransforms.size())
+                ? localTransforms[i].toMatrix()
+                : mat4::identity();
 
-        if (bone.parentIndex >= 0 && bone.parentIndex < static_cast<int>(i)) {
-            outWorldTransforms[i] = outWorldTransforms[bone.parentIndex] * localMatrix;
-        } else {
-            outWorldTransforms[i] = localMatrix;
+            if (bone.parentIndex < 0 ||
+                bone.parentIndex >= static_cast<int>(boneCount)) {
+                outWorldTransforms[i] = localMatrix;
+                resolved[i] = 1;
+                --remaining;
+                progress = true;
+            } else if (resolved[static_cast<size_t>(bone.parentIndex)]) {
+                outWorldTransforms[i] = outWorldTransforms[bone.parentIndex] * localMatrix;
+                resolved[i] = 1;
+                --remaining;
+                progress = true;
+            }
+        }
+        if (!progress) {
+            // Malformed hierarchy — emit the unresolved bones as roots so
+            // downstream skinning does not read uninitialized matrices.
+            for (size_t i = 0; i < boneCount; ++i) {
+                if (resolved[i]) continue;
+                outWorldTransforms[i] = (i < localTransforms.size())
+                    ? localTransforms[i].toMatrix()
+                    : mat4::identity();
+            }
+            break;
         }
     }
 }
 
 void Skeleton::computeWorldTransforms(const std::vector<Transform>& localTransforms,
                                      std::vector<Transform>& outWorldTransforms) const {
-    outWorldTransforms.resize(m_bones.size());
+    const size_t boneCount = m_bones.size();
+    outWorldTransforms.resize(boneCount);
 
-    for (size_t i = 0; i < m_bones.size(); ++i) {
-        const Bone& bone = m_bones[i];
+    if (boneCount == 0) {
+        return;
+    }
 
-        Transform localTransform = (i < localTransforms.size())
-            ? localTransforms[i]
-            : Transform::identity();
+    // Same topological-resolve scheme as the mat4 overload above. We keep
+    // the two overloads as separate bodies (rather than a templated helper)
+    // because mat4 and Transform compose with different operators — and the
+    // hot path is short enough that duplication costs less in clarity than
+    // a generic helper would in trace-readability when stepping through.
+    std::vector<char> resolved(boneCount, 0);
+    size_t remaining = boneCount;
+    for (size_t pass = 0; pass < boneCount && remaining > 0; ++pass) {
+        bool progress = false;
+        for (size_t i = 0; i < boneCount; ++i) {
+            if (resolved[i]) {
+                continue;
+            }
+            const Bone& bone = m_bones[i];
+            const Transform localTransform = (i < localTransforms.size())
+                ? localTransforms[i]
+                : Transform::identity();
 
-        if (bone.parentIndex >= 0 && bone.parentIndex < static_cast<int>(i)) {
-            outWorldTransforms[i] = outWorldTransforms[bone.parentIndex] * localTransform;
-        } else {
-            outWorldTransforms[i] = localTransform;
+            if (bone.parentIndex < 0 ||
+                bone.parentIndex >= static_cast<int>(boneCount)) {
+                outWorldTransforms[i] = localTransform;
+                resolved[i] = 1;
+                --remaining;
+                progress = true;
+            } else if (resolved[static_cast<size_t>(bone.parentIndex)]) {
+                outWorldTransforms[i] = outWorldTransforms[bone.parentIndex] * localTransform;
+                resolved[i] = 1;
+                --remaining;
+                progress = true;
+            }
+        }
+        if (!progress) {
+            for (size_t i = 0; i < boneCount; ++i) {
+                if (resolved[i]) continue;
+                outWorldTransforms[i] = (i < localTransforms.size())
+                    ? localTransforms[i]
+                    : Transform::identity();
+            }
+            break;
         }
     }
 }

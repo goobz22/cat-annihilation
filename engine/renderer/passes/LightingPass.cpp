@@ -273,23 +273,31 @@ void LightingPass::UpdateDirectionalLight(const DirectionalLight& light) {
 }
 
 void LightingPass::UpdatePointLights(const PointLight* lights, uint32_t count) {
-    if (!m_PointLightBuffer || count == 0) {
+    if (!m_PointLightBuffer) {
         return;
     }
 
+    // Bug fix: the prior `count == 0` early-out skipped the count-buffer
+    // update too, which meant transitioning from N>0 lights down to zero
+    // left the GPU still seeing the previous frame's count. The lighting
+    // shader would iterate up to that stale count over a (now stale)
+    // light buffer and apply ghost contributions from lights that the
+    // game thinks it removed. Always refresh the count buffer; only
+    // skip the light-array copy when there's nothing to copy.
     m_PointLightCount = std::min(count, MAX_POINT_LIGHTS);
 
-    // Update point light buffer
-    void* data = m_RHI->MapBuffer(m_PointLightBuffer);
-    if (data) {
-        memcpy(data, lights, sizeof(PointLight) * m_PointLightCount);
-        m_RHI->UnmapBuffer(m_PointLightBuffer);
+    if (m_PointLightCount > 0 && lights != nullptr) {
+        void* data = m_RHI->MapBuffer(m_PointLightBuffer);
+        if (data) {
+            memcpy(data, lights, sizeof(PointLight) * m_PointLightCount);
+            m_RHI->UnmapBuffer(m_PointLightBuffer);
+        }
     }
 
     // Update count buffer
-    data = m_RHI->MapBuffer(m_LightCountBuffer);
-    if (data) {
-        uint32_t* counts = static_cast<uint32_t*>(data);
+    void* countData = m_RHI->MapBuffer(m_LightCountBuffer);
+    if (countData) {
+        uint32_t* counts = static_cast<uint32_t*>(countData);
         counts[0] = m_PointLightCount;
         counts[1] = m_SpotLightCount;
         m_RHI->UnmapBuffer(m_LightCountBuffer);
@@ -297,23 +305,28 @@ void LightingPass::UpdatePointLights(const PointLight* lights, uint32_t count) {
 }
 
 void LightingPass::UpdateSpotLights(const SpotLight* lights, uint32_t count) {
-    if (!m_SpotLightBuffer || count == 0) {
+    if (!m_SpotLightBuffer) {
         return;
     }
 
+    // Same "count==0 must still refresh the count buffer" rationale as
+    // UpdatePointLights above — see that function for the full bug
+    // description. Removing N spots without writing the new zero count
+    // would otherwise leave the lighting shader reading stale data.
     m_SpotLightCount = std::min(count, MAX_SPOT_LIGHTS);
 
-    // Update spot light buffer
-    void* data = m_RHI->MapBuffer(m_SpotLightBuffer);
-    if (data) {
-        memcpy(data, lights, sizeof(SpotLight) * m_SpotLightCount);
-        m_RHI->UnmapBuffer(m_SpotLightBuffer);
+    if (m_SpotLightCount > 0 && lights != nullptr) {
+        void* data = m_RHI->MapBuffer(m_SpotLightBuffer);
+        if (data) {
+            memcpy(data, lights, sizeof(SpotLight) * m_SpotLightCount);
+            m_RHI->UnmapBuffer(m_SpotLightBuffer);
+        }
     }
 
     // Update count buffer
-    data = m_RHI->MapBuffer(m_LightCountBuffer);
-    if (data) {
-        uint32_t* counts = static_cast<uint32_t*>(data);
+    void* countData = m_RHI->MapBuffer(m_LightCountBuffer);
+    if (countData) {
+        uint32_t* counts = static_cast<uint32_t*>(countData);
         counts[0] = m_PointLightCount;
         counts[1] = m_SpotLightCount;
         m_RHI->UnmapBuffer(m_LightCountBuffer);

@@ -43,10 +43,24 @@ void JobSystem::Initialize(uint32_t numWorkers) {
 }
 
 void JobSystem::Shutdown() {
-    // Wait for all jobs to complete
+    // Drain all submitted work before signalling workers to stop. WaitForAll
+    // now also waits for jobs that have an external counter (see SubmitJob),
+    // so by the time we get past it every submitted job has executed and the
+    // worker queues are empty.
     WaitForAll();
 
-    // Stop all workers
+    // Signal every worker to exit its loop BEFORE we start joining. Doing it
+    // in a separate pass is what closes the thread-leak window: the original
+    // code called Stop() (which both clears m_running and joins) sequentially
+    // per worker — so worker[0]'s join blocked until worker[0] picked up the
+    // running=false flag, while workers[1..N] kept spinning the whole time.
+    // The set+join split lets all workers observe the stop flag in parallel
+    // and exit in roughly one yield-cycle, eliminating the slow serial wait.
+    for (auto& worker : m_workers) {
+        if (worker) {
+            worker->RequestStop();
+        }
+    }
     for (auto& worker : m_workers) {
         if (worker) {
             worker->Stop();
@@ -61,21 +75,65 @@ void JobSystem::SubmitJob(const Job& job) {
         return;
     }
 
-    // Increment active jobs counter if this job has no external counter
-    if (!job.counter) {
-        m_activeJobs.fetch_add(1, std::memory_order_relaxed);
+    // Always track every submitted job in m_activeJobs, regardless of whether
+    // the caller supplied an external counter. The original code only
+    // incremented for counter-less jobs, which meant Shutdown()'s WaitForAll
+    // call could return while jobs that had a user counter were still queued
+    // — the worker would then be stopped mid-flight and the work silently
+    // dropped. We bump the system-wide counter on submit and decrement after
+    // the job finishes; the user's external counter is decremented separately
+    // by Job::Execute, so both observables stay independent.
+    m_activeJobs.fetch_add(1, std::memory_order_relaxed);
 
-        // Wrap the job to decrement our internal counter
-        Job wrappedJob = job;
-        auto originalFunc = job.function;
-        wrappedJob.function = [this, originalFunc]() {
+    Job wrappedJob = job;
+    auto originalFunc = job.function;
+    // The wrapper has to run regardless of whether the original throws, so we
+    // can't naively wrap "originalFunc(); m_activeJobs--;" — an uncaught
+    // exception would leak the active-jobs count and hang Shutdown forever.
+    // A try/catch with re-throw keeps the count balanced even if the user
+    // function explodes.
+    wrappedJob.function = [this, originalFunc]() {
+        try {
             originalFunc();
+        } catch (...) {
             m_activeJobs.fetch_sub(1, std::memory_order_release);
-        };
+            throw;
+        }
+        m_activeJobs.fetch_sub(1, std::memory_order_release);
+    };
 
-        GetNextWorker()->SubmitJob(wrappedJob);
-    } else {
-        GetNextWorker()->SubmitJob(job);
+    // Try the round-robin worker first; if its ring is saturated, walk
+    // remaining workers before falling back to inline execution. Inline-fallback
+    // is the load-shed path used by every mature job system (Intel TBB,
+    // Embassy, Doom 2016's task lib): better to run the job on the calling
+    // thread than to spin/block from a hot path.
+    const uint32_t workerCount = static_cast<uint32_t>(m_workers.size());
+    if (workerCount == 0) {
+        // No workers configured: run inline so the user counter still gets
+        // decremented (Job::Execute handles it).
+        wrappedJob.function();
+        if (job.counter) {
+            job.counter->fetch_sub(1, std::memory_order_release);
+        }
+        return;
+    }
+
+    for (uint32_t attempt = 0; attempt < workerCount; ++attempt) {
+        WorkerThread* worker = GetNextWorker();
+        if (worker && worker->SubmitJob(wrappedJob)) {
+            // Successful enqueue: Job::Execute on the worker side will decrement
+            // the user counter (if any) AND our wrapper decrements m_activeJobs.
+            return;
+        }
+    }
+
+    // Every worker's queue is full. Run inline rather than dropping the job.
+    // The wrapper takes care of m_activeJobs bookkeeping; Job::Execute()
+    // semantics for the user counter are inlined here because we already
+    // unwrapped the function.
+    wrappedJob.function();
+    if (job.counter) {
+        job.counter->fetch_sub(1, std::memory_order_release);
     }
 }
 

@@ -84,6 +84,14 @@ public:
     void resetPeakUsage() noexcept;
 
 private:
+    // allocateLocked / resetLocked are the work-doing cores extracted out of
+    // the public allocate() / reset() entry points. Splitting them is required
+    // for correctness: the public entries used to recurse with the mutex held,
+    // which deadlocks on std::mutex (non-recursive). The *Locked variants
+    // assume the caller already holds m_mutex when m_threadSafe is true.
+    void* allocateLocked(size_t size, size_t alignment) noexcept;
+    void resetLocked() noexcept;
+
     void* m_memory;          // Base pointer to allocated memory
     size_t m_currentOffset;  // Current allocation offset
     size_t m_peakUsage;      // Peak memory usage

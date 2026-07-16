@@ -378,6 +378,14 @@ void ClusteredLighting::buildClusterGrid(const mat4& inverseProjection) {
     const float nearPlane = m_nearPlane;
     const float farPlane = m_farPlane;
 
+    // Bail out early on degenerate camera params — `log(far/near)` below
+    // would be NaN / -inf and every cluster AABB would contain NaN
+    // bounds, which would silently poison every cluster cull on the
+    // CPU-side debug path.
+    if (nearPlane <= 0.0f || farPlane <= nearPlane) {
+        return;
+    }
+
     // For each cluster in the grid
     for (uint32_t z = 0; z < CLUSTER_GRID_Z; ++z) {
         for (uint32_t y = 0; y < CLUSTER_GRID_Y; ++y) {
@@ -421,17 +429,47 @@ void ClusteredLighting::buildClusterGrid(const mat4& inverseProjection) {
                 // Build AABB in view space
                 AABB viewSpaceAABB;
 
-                // Transform corners and build AABB
+                // Transform corners and build AABB.
+                //
+                // Guards on .w and .z: the perspective-divide step
+                // (nearView / nearView.w) blows up when w == 0, which can
+                // happen if the caller passed in a non-invertible
+                // projection (e.g. an uninitialised mat4{} or an ortho
+                // matrix at z=0 plane). Similarly the depth-rescale step
+                // (nearPoint = .xyz() * (minDepth / |nearView.z|))
+                // divides by zero when the unprojected corner lies on
+                // the camera plane, which can occur with a clipped
+                // infinite-far projection. Both checks fall back to a
+                // small epsilon so the AABB stays bounded rather than
+                // becoming a NaN poison pill that propagates through
+                // every later cluster cull.
+                constexpr float kHomogeneousEps = 1e-6f;
+                constexpr float kDepthEps       = 1e-6f;
                 for (int i = 0; i < 4; ++i) {
                     vec4 nearView = inverseProjection * nearCorners[i];
-                    nearView = nearView / nearView.w;
+                    const float nearW = std::abs(nearView.w) > kHomogeneousEps
+                                            ? nearView.w
+                                            : kHomogeneousEps;
+                    nearView = nearView / nearW;
 
                     vec4 farView = inverseProjection * farCorners[i];
-                    farView = farView / farView.w;
+                    const float farW = std::abs(farView.w) > kHomogeneousEps
+                                            ? farView.w
+                                            : kHomogeneousEps;
+                    farView = farView / farW;
 
-                    // Interpolate to actual depth bounds
-                    vec3 nearPoint = nearView.xyz() * (minDepth / std::abs(nearView.z));
-                    vec3 farPoint = farView.xyz() * (maxDepth / std::abs(farView.z));
+                    // Interpolate to actual depth bounds. |.z| guards
+                    // against the on-camera-plane degeneracy described
+                    // above; cluster cells just past the near plane are
+                    // pinned to a clamp value rather than +/-inf.
+                    const float nearZ = std::abs(nearView.z) > kDepthEps
+                                            ? std::abs(nearView.z)
+                                            : kDepthEps;
+                    const float farZ  = std::abs(farView.z) > kDepthEps
+                                            ? std::abs(farView.z)
+                                            : kDepthEps;
+                    vec3 nearPoint = nearView.xyz() * (minDepth / nearZ);
+                    vec3 farPoint  = farView.xyz()  * (maxDepth / farZ);
 
                     viewSpaceAABB.expand(nearPoint);
                     viewSpaceAABB.expand(farPoint);
@@ -498,6 +536,19 @@ uint32_t ClusteredLighting::getZSliceFromDepth(float linearDepth) const {
 
 float ClusteredLighting::computeZSlice(float depth) const {
     // Logarithmic distribution: slice = log(depth/near) / log(far/near) * numSlices
+    //
+    // Defensive against bad camera parameters:
+    //   - near <= 0 would make std::log(far/near) produce NaN / -inf
+    //     (log of a non-positive value).
+    //   - far <= near would make logRatio <= 0 and either flip the
+    //     mapping or divide by zero.
+    //   - depth <= near returns slice 0; depth >= far returns the
+    //     last slice; both clamps happen before the log call so a
+    //     fragment whose linear depth lies outside the camera's
+    //     declared range can't NaN-poison the cluster lookup.
+    if (m_nearPlane <= 0.0f || m_farPlane <= m_nearPlane) {
+        return 0.0f;
+    }
     if (depth <= m_nearPlane) {
         return 0.0f;
     }
@@ -505,8 +556,11 @@ float ClusteredLighting::computeZSlice(float depth) const {
         return static_cast<float>(CLUSTER_GRID_Z - 1);
     }
 
-    float logRatio = std::log(m_farPlane / m_nearPlane);
-    float logDepth = std::log(depth / m_nearPlane);
+    const float logRatio = std::log(m_farPlane / m_nearPlane);
+    if (logRatio <= 0.0f) {
+        return 0.0f;
+    }
+    const float logDepth = std::log(depth / m_nearPlane);
     return (logDepth / logRatio) * static_cast<float>(CLUSTER_GRID_Z);
 }
 
@@ -758,8 +812,15 @@ void ClusteredLighting::updateClusterParams() {
         m_screenHeight > 0 ? 1.0f / static_cast<float>(m_screenHeight) : 0.0f
     );
 
-    float logRatio = std::log(m_farPlane / m_nearPlane);
-    float clusterScale = (logRatio != 0.0f)
+    // Guard against degenerate camera parameters: near <= 0 or far <= near
+    // would feed std::log a non-positive ratio and yield NaN / -inf in the
+    // cluster scale factor, silently corrupting every fragment's cluster
+    // lookup. Fall back to a 1:1 (no-op) scale rather than uploading NaN.
+    float logRatio = 0.0f;
+    if (m_nearPlane > 0.0f && m_farPlane > m_nearPlane) {
+        logRatio = std::log(m_farPlane / m_nearPlane);
+    }
+    float clusterScale = (logRatio > 0.0f)
         ? static_cast<float>(CLUSTER_GRID_Z) / logRatio
         : 0.0f;
 

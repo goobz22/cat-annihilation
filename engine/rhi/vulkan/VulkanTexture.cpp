@@ -552,13 +552,46 @@ VulkanTextureView::VulkanTextureView(VulkanDevice* device, VulkanTexture* textur
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = texture->GetVkImage();
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // Could be derived from texture type
+    // Derive the view type from the texture's underlying TextureType
+    // instead of hardcoding VK_IMAGE_VIEW_TYPE_2D. The hardcoded path
+    // failed validation (and on some drivers crashed) for every
+    // cubemap, 3D, 1D, or array texture the engine creates — the
+    // shadow-map cascade array, the skybox cubemap, and any 3D fog
+    // volume all need their correct view type or vkCreateImageView
+    // returns VK_ERROR_INITIALIZATION_FAILED. VulkanTexture already
+    // exposes GetVkImageViewType() for exactly this; we just have to
+    // call it instead of pretending every texture is 2D.
+    viewInfo.viewType = texture->GetVkImageViewType();
     viewInfo.format = ToVkFormat(format);
     viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
     viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
     viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
     viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    // Pick the aspect mask from the format. A depth/stencil view created
+    // with ASPECT_COLOR_BIT triggers VUID-VkImageViewCreateInfo-image-01018
+    // and on most drivers fails the create call entirely. Mirror the
+    // logic used by VulkanTexture::CreateImageView so a freshly-allocated
+    // depth attachment and a manually-created view of the same image
+    // produce identical aspect masks.
+    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    switch (format) {
+        case TextureFormat::D16_UNORM:
+        case TextureFormat::D32_SFLOAT:
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+            break;
+        case TextureFormat::D24_UNORM_S8_UINT:
+        case TextureFormat::D32_SFLOAT_S8_UINT:
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            break;
+        case TextureFormat::S8_UINT:
+            aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
+            break;
+        default:
+            aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            break;
+    }
+    viewInfo.subresourceRange.aspectMask = aspect;
     viewInfo.subresourceRange.baseMipLevel = baseMipLevel;
     viewInfo.subresourceRange.levelCount = mipLevelCount;
     viewInfo.subresourceRange.baseArrayLayer = baseArrayLayer;

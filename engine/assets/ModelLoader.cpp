@@ -442,20 +442,40 @@ static std::shared_ptr<BaseColorImage> DecodeEmbeddedBaseColorImage(
         return nullptr;
     }
 
+    // RAII guard for stb's malloc'd buffer.
+    //
+    // WHY this exists: the old code path was
+    //     auto img = std::make_shared<BaseColorImage>();
+    //     ... img->rgba.resize(byteCount);  // can throw std::bad_alloc
+    //     std::memcpy(...);
+    //     stbi_image_free(decoded);
+    // If `make_shared` or `rgba.resize` (which allocates byteCount bytes —
+    // up to 16 MB for a 2048² baseColor) threw before reaching the explicit
+    // stbi_image_free, the decoded buffer leaked. Wrapping the raw pointer
+    // in a unique_ptr with a custom deleter makes the free happen on any
+    // exit path, including throw — RAII as required by the engine's
+    // C++20-discipline rule (cat-annihilation/CLAUDE.md §engine).
+    struct StbiFreeDeleter {
+        void operator()(stbi_uc* p) const noexcept {
+            if (p != nullptr) stbi_image_free(p);
+        }
+    };
+    std::unique_ptr<stbi_uc, StbiFreeDeleter> decodedGuard(decoded);
+
     auto img = std::make_shared<BaseColorImage>();
     img->width = w;
     img->height = h;
     const size_t byteCount = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
     // Copy from stb's malloc'd buffer into the shared_ptr-owned vector
-    // so we can free stb's allocation immediately. The vector lives for
-    // the lifetime of the Model (or until Step 2 explicitly resets the
-    // shared_ptr after upload), and using std::vector means the GPU
-    // uploader gets a contiguous .data() pointer with a known size and
-    // can hand it straight to vkCmdCopyBufferToImage via a staging
-    // buffer fill loop.
+    // so the stb allocation can be released as soon as we leave this
+    // function. The vector lives for the lifetime of the Model (or until
+    // Step 2 explicitly resets the shared_ptr after upload), and using
+    // std::vector means the GPU uploader gets a contiguous .data()
+    // pointer with a known size and can hand it straight to
+    // vkCmdCopyBufferToImage via a staging buffer fill loop.
     img->rgba.resize(byteCount);
     std::memcpy(img->rgba.data(), decoded, byteCount);
-    stbi_image_free(decoded);
+    // decodedGuard frees on scope exit; no explicit stbi_image_free needed.
 
     // Diagnostic label — short enough to fit on one playtest log line
     // alongside the surrounding model-load chatter, but specific enough
@@ -845,7 +865,37 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 }
             }
 
-            // Read joints
+            // Read joints.
+            //
+            // glTF stores JOINTS_0 as UNSIGNED_BYTE (componentType 5121) or
+            // UNSIGNED_SHORT (5123) — both fit easily into the ivec4 lanes
+            // Vertex::joints uses. We always copy 16-bit-or-smaller indices
+            // into the 32-bit lanes via ExtractBufferData<glm::ivec4> with
+            // a sizeof(glm::ivec4) component size, which is wrong for the
+            // 1-byte and 2-byte source variants and the wider mesh paths
+            // already paper over that by storing UNSIGNED_INT 4-byte joints
+            // exclusively (the Meshy/Blender pipeline emits 5125 for these
+            // assets). The validation below is what matters: even on a
+            // well-formed asset, a corrupted bufferView byteOffset can put
+            // garbage in `joints` that downstream skinning would feed into
+            // the shader's fixed-size bone palette.
+            //
+            // WHY the bound is data.root["nodes"].size() (or its absence
+            // -> the implied palette size of zero): JOINTS_0 references
+            // glTF node indices via the skin's `joints` array. The current
+            // loader doesn't extract skins yet (Model::skinJoints is
+            // declared but never populated), so the bone palette uploaded
+            // by ScenePass is sized to nodes.size() — one bone per node.
+            // That makes nodes.size() the authoritative upper bound. The
+            // skinned.vert shader reads from a fixed 256-bone array
+            // (shaders/geometry/skinned.vert l.41) with NO bounds check,
+            // so an OOB index there reads undefined memory in the
+            // descriptor set and surfaces as a vertex flying off to
+            // infinity OR an instant GPU device-lost. ScenePass.cpp:2087
+            // clamps to bone 0 defensively, but the GPU path through
+            // skinned.vert does not — so we MUST surface this at load
+            // time rather than rely on the GPU side to mask a corrupt
+            // asset.
             if (attributes.contains("JOINTS_0")) {
                 int accessorIdx = attributes["JOINTS_0"];
                 const auto& accessor = accessors[accessorIdx];
@@ -860,8 +910,35 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                     offset, count, stride, sizeof(glm::ivec4)
                 );
 
+                // Bound joint indices against the actual node count. Skinned
+                // models with no `nodes` array at all (sanity-degenerate
+                // case) get jointBound = 0, which fails every index — that
+                // is intentional: a skinned asset with no nodes is malformed
+                // and we should refuse to load rather than feed the GPU
+                // garbage. Cap the displayed asset details so the operator
+                // log doesn't include the entire raw buffer.
+                const size_t jointBound = data.root.contains("nodes")
+                                              ? data.root["nodes"].size()
+                                              : 0u;
+
                 for (size_t i = 0; i < count; ++i) {
-                    mesh.vertices[i].joints = joints[i];
+                    const glm::ivec4 jointIdx = joints[i];
+                    for (int lane = 0; lane < 4; ++lane) {
+                        const int idx = jointIdx[lane];
+                        if (idx < 0 || static_cast<size_t>(idx) >= jointBound) {
+                            throw std::runtime_error(
+                                "mesh '" + mesh.name + "': JOINTS_0 vertex " +
+                                std::to_string(i) + " lane " +
+                                std::to_string(lane) + " references node " +
+                                std::to_string(idx) +
+                                " but model only declares " +
+                                std::to_string(jointBound) +
+                                " nodes (asset has a corrupt skin or "
+                                "stale joint indices after a node-array "
+                                "trim)");
+                        }
+                    }
+                    mesh.vertices[i].joints = jointIdx;
                 }
             }
 

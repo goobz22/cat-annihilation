@@ -9,10 +9,27 @@
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
+#include <bit>
 #include "../math/Vector.hpp"
 #include "../math/Quaternion.hpp"
 
 namespace Engine {
+
+// Save files are written and read in NATIVE byte order with no per-field
+// swap. Every platform the engine ships on (x86_64 Windows / Linux, AArch64
+// macOS / iOS / Android, x86 emulator) is little-endian in default
+// configuration, but C++20 doesn't make that an automatic guarantee — and a
+// silent endianness divergence between writer and reader would corrupt
+// quaternion rotations and stat values in ways that don't tripfire the
+// CRC32 (the CRC matches what was written regardless of bit ordering, so
+// the integrity check passes and the gibberish player state ships). Guard
+// at compile time so a future BE target (a hypothetical PS3-style toolchain
+// or a SPARC port) refuses to build until somebody wires up the byte-swap
+// helpers, rather than silently producing incompatible save files.
+static_assert(std::endian::native == std::endian::little,
+              "Engine::BinaryWriter/Reader assumes little-endian host. "
+              "Add explicit byte-swapping in write()/read() before "
+              "targeting a big-endian platform.");
 
 /**
  * Binary writer for save file serialization

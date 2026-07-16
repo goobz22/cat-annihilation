@@ -4,6 +4,7 @@
 #include "../math/AABB.hpp"
 #include "../rhi/RHITypes.hpp"
 #include "MeshOptimizer.hpp"
+#include <cmath>     // std::fabs in GenerateTangents — degenerate-UV guard
 #include <vector>
 #include <cstdint>
 
@@ -298,7 +299,26 @@ public:
             Engine::vec2 uv1 = v1.uv0 - v0.uv0;
             Engine::vec2 uv2 = v2.uv0 - v0.uv0;
 
-            float r = 1.0f / (uv1.x * uv2.y - uv2.x * uv1.y);
+            // The Lengyel tangent solve divides by the 2x2 UV-edge
+            // determinant. A degenerate UV mapping (collinear texcoords,
+            // a triangle authored with all three vertices stamped at the
+            // same UV — common in placeholder/unwrapped GLBs) collapses
+            // that determinant to ~zero. Pre-2026-05 we divided
+            // unconditionally and produced ±infinity / NaN tangents,
+            // which then propagated through normalize() to a 0-length
+            // tangent that the orthogonalize step below silently kept,
+            // poisoning the vertex with a NaN-handedness tangent that
+            // normal-mapping shaders flip-inside-out at draw time.
+            // Skip the contribution for any degenerate triangle — the
+            // surrounding well-formed triangles still drive the
+            // accumulator and produce a finite tangent at the shared
+            // vertex.
+            const float denom = uv1.x * uv2.y - uv2.x * uv1.y;
+            constexpr float kDegenerateUVThreshold = 1e-8f;
+            if (std::fabs(denom) < kDegenerateUVThreshold) {
+                continue;
+            }
+            const float r = 1.0f / denom;
             Engine::vec3 sdir((pos1 * uv2.y - pos2 * uv1.y) * r);
             Engine::vec3 tdir((pos2 * uv1.x - pos1 * uv2.x) * r);
 
@@ -369,12 +389,27 @@ private:
     void OptimizeWith(OptimizeFn fn) {
         if (indices.empty() || vertices.empty()) return;
         const uint32_t vertexCount = static_cast<uint32_t>(vertices.size());
+        const size_t totalIndices = indices.size();
         if (submeshes.empty()) {
-            fn(indices.data(), indices.size(), vertexCount,
+            fn(indices.data(), totalIndices, vertexCount,
                MeshOptimizer::kDefaultCacheSize);
         } else {
+            // Bounds-check every submesh range before handing the pointer
+            // to the reorderer — the optimizer writes back into the index
+            // buffer in-place using the count we pass, so a submesh with
+            // `indexOffset + indexCount > indices.size()` (corrupt GLB,
+            // hand-built unit-test mesh, mid-import truncation) would
+            // scribble past the buffer end. Skipping the bad submesh is
+            // strictly safer than aborting the whole optimize: the rest
+            // of the mesh still gets the cache-friendly reordering, and
+            // the bad submesh stays in its original (still-valid) order.
             for (const auto& sub : submeshes) {
                 if (sub.indexCount == 0) continue;
+                const size_t end = static_cast<size_t>(sub.indexOffset) +
+                                   static_cast<size_t>(sub.indexCount);
+                if (sub.indexOffset >= totalIndices || end > totalIndices) {
+                    continue;
+                }
                 fn(indices.data() + sub.indexOffset, sub.indexCount, vertexCount,
                    MeshOptimizer::kDefaultCacheSize);
             }

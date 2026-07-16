@@ -474,6 +474,23 @@ VkSurfaceFormatKHR VulkanSwapchain::ChooseSurfaceFormat(const std::vector<VkSurf
         }
     }
 
+    // VulkanDevice::IsDeviceSuitable rejects any physical device with
+    // zero surface formats, so on the happy path this vector is never
+    // empty by the time we reach here. Defend against the corner case
+    // anyway — a future caller could route a non-vetted physical device
+    // through ChooseSurfaceFormat, and `availableFormats[0]` on an empty
+    // std::vector is undefined behaviour (operator[] does NOT bounds-
+    // check, unlike .at()). Returning a sentinel UNDEFINED format makes
+    // the caller's vkCreateSwapchainKHR call fail loudly with
+    // VK_ERROR_INITIALIZATION_FAILED instead of silently constructing
+    // a VkSwapchainCreateInfoKHR with whatever garbage memory happened
+    // to live past the std::vector's end pointer.
+    if (availableFormats.empty()) {
+        VkSurfaceFormatKHR fallback{};
+        fallback.format = VK_FORMAT_UNDEFINED;
+        fallback.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        return fallback;
+    }
     // Fallback to first available
     return availableFormats[0];
 }

@@ -95,9 +95,12 @@ const TerrainCollisionSystem = () => {
       }
     });
     
-    // Update position if needed
+    // Update position if needed. setPlayerPosition takes Partial<IPosition>, not positional
+    // args — passing (newX, newZ, rotation) silently no-op'd because spreading a number into
+    // an object yields no useful keys, so the system was a no-op for the entire lifetime of
+    // the story scene. We pass an object so the corrected x/z actually lands in the store.
     if (newX !== x || newZ !== z) {
-      setPosition(newX, newZ, player.position.rotation);
+      setPosition({ x: newX, z: newZ });
     }
   });
   

@@ -81,8 +81,36 @@ VulkanDescriptorPool::VulkanDescriptorPool(
 }
 
 VulkanDescriptorPool::~VulkanDescriptorPool() {
+    // Order is load-bearing: the C++ VulkanDescriptorSet wrappers MUST
+    // be deleted BEFORE the VkDescriptorPool itself. The VkDescriptorSet
+    // handles inside those wrappers become invalid the instant
+    // vkDestroyDescriptorPool runs (the Vulkan spec implicitly frees
+    // every set the pool allocated). If the wrappers were leaked here
+    // (the pre-fix behaviour) every IRHIDescriptorPool destruction
+    // dropped its allocated-set list on the floor, leaking the heap
+    // memory backing each VulkanDescriptorSet C++ object plus its
+    // std::vector / std::string members. Pools that the renderer
+    // recreates on swapchain resize compounded the leak across the
+    // session.
+    //
+    // We deliberately do NOT issue vkFreeDescriptorSets here — that's
+    // redundant work the driver will do anyway during
+    // vkDestroyDescriptorPool, and on
+    // VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT pools (which is
+    // what we use; see the create-info above) the per-set free call is
+    // identical to letting the pool destroy implicitly clean them up.
+    // The wrapper destructors run zero Vulkan calls on their own (see
+    // VulkanDescriptorSet::~VulkanDescriptorSet — only m_allocatedSets
+    // bookkeeping cleanup), so the order is purely a C++-side memory-
+    // ownership concern.
+    for (auto* set : m_allocatedSets) {
+        delete set;
+    }
+    m_allocatedSets.clear();
+
     if (m_pool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device->GetDevice(), m_pool, nullptr);
+        m_pool = VK_NULL_HANDLE;
     }
 }
 

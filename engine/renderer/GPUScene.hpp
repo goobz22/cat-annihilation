@@ -309,6 +309,17 @@ private:
     // Indirect draw commands
     std::vector<IndirectDrawCommand> indirectCommands;
 
+    // Packed instance order produced by BuildIndirectDrawCommands and
+    // consumed by UpdateInstanceBuffer. Entry k holds the index into
+    // `instances` whose GPUData should land at GPU instance-buffer slot k.
+    // We keep this on the side (rather than mutating `instances`) because
+    // the public API exposes stable instance IDs and the instances vector
+    // is the authoritative storage for queries by ID — re-ordering it
+    // would invalidate `MeshInstance*` pointers callers may be holding.
+    // The vector is rebuilt every BuildIndirectDrawCommands call; size is
+    // bounded by `visibleInstances.size()`.
+    std::vector<uint32_t> packedInstanceOrder;
+
     // Buffer dirty flags
     bool instanceBufferDirty = true;
     bool materialBufferDirty = true;

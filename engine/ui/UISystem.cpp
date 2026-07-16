@@ -43,10 +43,34 @@ void UISystem::Initialize(Input* input, u32 screenWidth, u32 screenHeight) {
 void UISystem::Shutdown() {
     if (!m_initialized) return;
 
+    // Fire OnFocusLost / OnMouseExit before clearing pointers.
+    //
+    // WHY the order matters: widgets register lifecycle-bound resources
+    // in their gain/lose callbacks (text-input fields stop capturing
+    // keystrokes, drag-handles release pointer locks, custom widgets may
+    // cancel pending tweens). Tearing down the UISystem without ever
+    // firing the lost-half of the pair leaks those subscriptions —
+    // they were already invariant-broken by the asymmetric SetFocusedWidget
+    // path that ALWAYS fired both callbacks, so quitting via Shutdown
+    // would silently skip the OnFocusLost a widget had every reason to
+    // expect. Same rationale for OnMouseExit on the hovered widget.
+    //
+    // We route through SetFocusedWidget(nullptr) rather than zeroing
+    // m_focusedWidget directly so the exact same callback path runs as
+    // any normal focus change — if a future refactor adds bookkeeping
+    // to the focus transition (e.g. an animation system observer list),
+    // Shutdown picks it up for free without a parallel update here.
+    if (m_focusedWidget != nullptr) {
+        SetFocusedWidget(nullptr);
+    }
+    if (m_hoveredWidget != nullptr) {
+        m_hoveredWidget->m_isHovered = false;
+        m_hoveredWidget->OnMouseExit();
+        m_hoveredWidget = nullptr;
+    }
+
     m_modalWidget.reset();
     m_root.reset();
-    m_focusedWidget = nullptr;
-    m_hoveredWidget = nullptr;
     m_pressedWidget = nullptr;
 
     m_initialized = false;

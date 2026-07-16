@@ -504,9 +504,10 @@ void CatAnnihilation::createHitParticleEmitter() {
     // spell, or frost projectile. Per-element variants (fire = orange,
     // frost = pale-blue, storm = white-cyan, light = yellow-white) are
     // a natural follow-on once we want the elemental magic system to be
-    // visually distinguishable mid-combat — for now, "every hit looks
-    // the same and every kill looks different" is the right legibility
-    // contract because death is the rarer + more meaningful event.
+    // visually distinguishable mid-combat. Until that lands, "every hit
+    // looks the same and every kill looks different" is the right
+    // legibility contract because death is the rarer + more meaningful
+    // event.
     CatEngine::CUDA::ParticleEmitter hitEmitter;
     hitEmitter.enabled = false;  // Dormant; re-enabled per spawnHitParticles call.
     hitEmitter.shape = CatEngine::CUDA::EmissionShape::Sphere;

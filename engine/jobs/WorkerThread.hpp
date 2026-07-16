@@ -31,14 +31,25 @@ public:
     void Start();
 
     /**
+     * Signal the worker to exit its loop without joining. Use this on every
+     * worker first when shutting down a pool so they all observe the stop
+     * flag in parallel; otherwise Stop()'s join blocks workers[1..N] from
+     * even seeing the flag until earlier workers have already exited.
+     */
+    void RequestStop();
+
+    /**
      * Stop the worker thread gracefully
      */
     void Stop();
 
     /**
-     * Submit a job to this worker's queue
+     * Submit a job to this worker's queue. Returns false if the worker's
+     * 4096-slot ring is full; the caller (JobSystem) is responsible for
+     * retrying on another worker or running the job inline to avoid losing
+     * work.
      */
-    void SubmitJob(const Job& job);
+    [[nodiscard]] bool SubmitJob(const Job& job);
 
     /**
      * Try to steal a job from this worker's queue

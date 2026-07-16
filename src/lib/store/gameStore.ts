@@ -611,7 +611,7 @@ const createInitialState = () => {
         ...initialCatStats,
         level: savedPlayerProgress.catLevel,
         xp: savedPlayerProgress.catXp,
-        xpToNextLevel: calculateXPNeeded(savedPlayerProgress.catLevel + 1)
+        xpToNextLevel: calculateCatXPForLevel(savedPlayerProgress.catLevel + 1)
       };
     }
     

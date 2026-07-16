@@ -29,21 +29,40 @@ void WorkerThread::Start() {
     });
 }
 
-void WorkerThread::Stop() {
-    if (!m_running.load(std::memory_order_acquire)) {
-        return; // Not running
-    }
-
+void WorkerThread::RequestStop() {
+    // Just clear the running flag and request the jthread stop token. The
+    // worker loop polls m_running every iteration; this lets us release every
+    // worker in the pool roughly simultaneously instead of serialising the
+    // signals behind each Stop()'s join. Idempotent — safe to call before
+    // Stop().
     m_running.store(false, std::memory_order_release);
-
     if (m_thread.joinable()) {
         m_thread.request_stop();
+    }
+}
+
+void WorkerThread::Stop() {
+    // RequestStop() is idempotent, so calling it here lets Stop() be used
+    // standalone (single-worker shutdown) without needing the two-phase
+    // dance JobSystem::Shutdown uses.
+    RequestStop();
+
+    if (m_thread.joinable()) {
+        // Join unconditionally: this is the line that fixes the thread-leak
+        // bug. Original code guarded join() behind an m_running check that
+        // had already been flipped to false earlier on the same call path,
+        // which meant a second invocation (e.g. ~WorkerThread after explicit
+        // Stop()) would skip join() and let the OS handle the dangling
+        // jthread — undefined behaviour if it's still running.
         m_thread.join();
     }
 }
 
-void WorkerThread::SubmitJob(const Job& job) {
-    m_queue.Push(job);
+bool WorkerThread::SubmitJob(const Job& job) {
+    // Propagate Push's overflow signal up to JobSystem so it can route the
+    // job to a different worker or run it inline. Original swallowed Push's
+    // return and silently lost work when the 4096-slot ring filled up.
+    return m_queue.Push(job);
 }
 
 std::optional<Job> WorkerThread::StealJob() {

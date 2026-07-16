@@ -5,7 +5,14 @@
 #include "../math/Quaternion.hpp"
 #include "../math/Frustum.hpp"
 #include "../math/Ray.hpp"
-#include "../core/Input.hpp"
+
+// Forward-declare Engine::Input so this header is host-test-build-safe.
+// Including <Input.hpp> here would transitively pull in <GLFW/glfw3.h>,
+// which the no-GPU test runner cannot link against. The full definition
+// is required by FPSCameraController::Update (which samples keyboard +
+// mouse state every frame); that method is now defined out-of-line in
+// Camera.cpp where the full Input.hpp include is local to the .cpp.
+namespace Engine { class Input; }
 
 namespace CatEngine::Renderer {
 
@@ -112,11 +119,39 @@ public:
      * @param aspect Aspect ratio (width / height)
      * @param near Near clip plane
      * @param far Far clip plane
+     *
+     * Validates the inputs and falls back to safe defaults on degenerate
+     * arguments. A perspective projection's near plane must be strictly
+     * positive — the reverse-Z + standard projection formulas both divide
+     * by near at the matrix-construction step (1/(near-far) for standard,
+     * near/(far-near) for reverse-Z), and a 0 or negative near produces
+     * either an infinite/NaN matrix that wrecks the rest of the frame or
+     * a flipped-handedness projection that culls everything in front of
+     * the camera. Far must also exceed near; a swap or equal value
+     * collapses the depth range to a single plane and every fragment
+     * after that draws at the same depth. Pre-2026-05 the setter accepted
+     * any inputs unconditionally and the bugs only surfaced on the GPU
+     * side as "the world is black / inverted / inside-out".
      */
     void SetPerspective(float fov, float aspect, float near, float far) {
         projectionType = ProjectionType::Perspective;
         fieldOfView = fov;
-        aspectRatio = aspect;
+        // Aspect must be finite and positive — a zero or negative aspect
+        // ratio (typical edge case: minimized window reports w=0 or h=0)
+        // would zero out the x scale of the projection and collapse the
+        // view to a vertical line. Clamp to a tiny positive value so
+        // recovery is automatic when the window is restored.
+        aspectRatio = (aspect > 0.0f) ? aspect : 1.0f;
+
+        // Order-correct, positive-near, non-degenerate-range. We accept
+        // the caller's intent if it's at all valid, otherwise clamp.
+        constexpr float kMinNearPlane = 1e-4f;
+        if (!(near > 0.0f)) {
+            near = kMinNearPlane;
+        }
+        if (!(far > near)) {
+            far = near + 1.0f;
+        }
         nearPlane = near;
         farPlane = far;
         projectionMatrixDirty = true;
@@ -192,9 +227,22 @@ public:
     // ========================================================================
 
     /**
-     * Set near and far clip planes
+     * Set near and far clip planes.
+     *
+     * Same validation as SetPerspective — for perspective cameras a 0 or
+     * negative near divides by zero in the projection matrix; for ortho
+     * cameras the range still needs near < far so the depth mapping
+     * doesn't invert. We clamp here so a hot-reloaded gameplay tuning
+     * value never lands in projection-matrix math.
      */
     void SetClipPlanes(float near, float far) {
+        constexpr float kMinNearPlane = 1e-4f;
+        if (projectionType == ProjectionType::Perspective && !(near > 0.0f)) {
+            near = kMinNearPlane;
+        }
+        if (!(far > near)) {
+            far = near + 1.0f;
+        }
         nearPlane = near;
         farPlane = far;
         projectionMatrixDirty = true;
@@ -500,28 +548,15 @@ public:
      * Per-frame tick. If an Input source is bound via SetInput(), samples
      * keyboard + mouse and applies FPS controls. Otherwise this is a no-op
      * and callers should use UpdateFPS() with explicit inputs.
+     *
+     * Defined out-of-line in Camera.cpp so the only TU that needs
+     * <GLFW/glfw3.h> in its include graph is Camera.cpp itself — keeping
+     * Camera.hpp host-test-build-safe. The Input forward declaration above
+     * is sufficient to compile every other inline method (everything
+     * else here only deals in `Engine::Input*` pointers, not field/method
+     * access on the type).
      */
-    void Update(float deltaTime) {
-        if (!input) {
-            return;
-        }
-
-        // Keyboard -> local move vector: x = right, y = up, z = forward
-        Engine::vec3 moveInput(0.0f);
-        if (input->isKeyDown(Engine::Input::Key::W)) moveInput.z += 1.0f;
-        if (input->isKeyDown(Engine::Input::Key::S)) moveInput.z -= 1.0f;
-        if (input->isKeyDown(Engine::Input::Key::D)) moveInput.x += 1.0f;
-        if (input->isKeyDown(Engine::Input::Key::A)) moveInput.x -= 1.0f;
-        if (input->isKeyDown(Engine::Input::Key::Space)) moveInput.y += 1.0f;
-        if (input->isKeyDown(Engine::Input::Key::LeftControl)) moveInput.y -= 1.0f;
-
-        // Mouse delta (GLFW-style: +x right, +y down; yaw turns right when mouse moves right)
-        double dx = 0.0, dy = 0.0;
-        input->getMouseDelta(dx, dy);
-        Engine::vec2 mouseDelta(static_cast<float>(dx), static_cast<float>(dy));
-
-        UpdateFPS(deltaTime, moveInput, mouseDelta);
-    }
+    void Update(float deltaTime);
 
     /**
      * Input-agnostic FPS update.

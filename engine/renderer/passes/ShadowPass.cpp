@@ -36,10 +36,30 @@ void ShadowPass::Execute(RHI::IRHICommandBuffer* commandBuffer, uint32_t frameIn
         return;
     }
 
+    // Bounds-check the per-frame uniform buffer index. A frameIndex >=
+    // MAX_FRAMES_IN_FLIGHT (or a missing buffer) would be a configuration
+    // error from the caller, but a hard out-of-range deref here would
+    // crash the renderer while the actual bug lives elsewhere. Bail out
+    // silently and let the renderer's debug overlay surface the missed
+    // frame, which is the same contract the other passes use.
+    if (frameIndex >= MAX_FRAMES_IN_FLIGHT || !uniformBuffers_[frameIndex]) {
+        return;
+    }
+
     // Update uniform buffer with cascade data
     void* data = uniformBuffers_[frameIndex]->Map();
     std::memcpy(data, &cascadeUniforms_, sizeof(ShadowUniforms));
     uniformBuffers_[frameIndex]->Unmap();
+
+    // Pipeline null-guard. CreatePipeline() can leave pipeline_ unset when
+    // the SPIR-V blobs are missing on disk (e.g. shaders not compiled
+    // yet), and BindPipeline(nullptr) is a Vulkan validation error that
+    // crashes the frame. Silently skip the draws — the SPIR-V load
+    // failure is already logged once at Setup() time, and the renderer's
+    // HUD shows the disabled pass.
+    if (!pipeline_) {
+        return;
+    }
 
     // Begin render pass for shadow atlas
     RHI::ClearValue clearValue;
@@ -300,17 +320,46 @@ void ShadowPass::CalculateCascadeFrustum(uint32_t cascadeIndex, const Camera* ca
         maxZ *= zMultiplier;
     }
 
+    // Defensive: if the frustum-corner pass produced a degenerate AABB
+    // (most commonly the null-camera fallback at lines above, which zeroes
+    // every corner and leaves min == max == 0), `width/height/depth`
+    // collapse to zero and projMatrix[0/5/10] become +/-inf. Floor each
+    // extent at a small positive value so the orthographic matrix is at
+    // worst harmless rather than NaN-poisoning every cascade matrix.
+    constexpr float kMinExtent = 1e-3f;
+    if (maxX - minX < kMinExtent) { maxX = minX + kMinExtent; }
+    if (maxY - minY < kMinExtent) { maxY = minY + kMinExtent; }
+    if (maxZ - minZ < kMinExtent) { maxZ = minZ + kMinExtent; }
+
     // Build orthographic projection matrix (column-major)
     float width = maxX - minX;
     float height = maxY - minY;
     float depth = maxZ - minZ;
 
-    // Snap to texel grid to reduce shadow edge swimming
-    float texelSize = width / static_cast<float>(CASCADE_RESOLUTION);
-    minX = std::floor(minX / texelSize) * texelSize;
-    maxX = std::floor(maxX / texelSize) * texelSize;
-    minY = std::floor(minY / texelSize) * texelSize;
-    maxY = std::floor(maxY / texelSize) * texelSize;
+    // Snap min/max to a per-axis texel grid in light-space units so that
+    // small sub-texel camera motion does not shift each shadow texel's
+    // world coverage — the classic "shadow swimming" artifact. Why two
+    // independent texel sizes: the cascade AABB is rarely square (the
+    // camera's frustum slice projected onto an arbitrary light direction
+    // rarely produces equal X and Y extents), so deriving one texelSize
+    // from X alone would over-snap Y on tall-and-thin slices and
+    // under-snap Y on short-and-wide ones, leaving residual swimming on
+    // whichever axis lost.
+    //
+    // Why floor(min) AND ceil(max) (not floor both): flooring both shifts
+    // the entire AABB by less than one texel each frame — which is fine
+    // for translation stability — but ALSO shrinks the AABB on the max
+    // side, eventually cropping out shadow casters that were on the
+    // boundary. ceil(max) preserves the extent while keeping the bounds
+    // texel-aligned. The chosen pair is the standard CSM snap
+    // (https://learn.microsoft.com/en-us/windows/win32/dxtecharts/
+    //  cascaded-shadow-maps).
+    const float texelSizeX = width  / static_cast<float>(CASCADE_RESOLUTION);
+    const float texelSizeY = height / static_cast<float>(CASCADE_RESOLUTION);
+    minX = std::floor(minX / texelSizeX) * texelSizeX;
+    maxX = std::ceil (maxX / texelSizeX) * texelSizeX;
+    minY = std::floor(minY / texelSizeY) * texelSizeY;
+    maxY = std::ceil (maxY / texelSizeY) * texelSizeY;
 
     width = maxX - minX;
     height = maxY - minY;
@@ -428,7 +477,13 @@ void ShadowPass::CreatePipeline() {
     RHI::VertexAttribute positionAttr{};
     positionAttr.location = 0;
     positionAttr.binding = 0;
-    positionAttr.format = RHI::TextureFormat::RGBA32_SFLOAT; // vec3 position
+    // Format MUST match the binding's stride: vec3 position = 12 bytes per
+    // vertex (RGB32_SFLOAT), not 16 (RGBA32_SFLOAT). The mismatched 16-byte
+    // attribute against a 12-byte stride would have made the vertex fetcher
+    // read the next vertex's bytes as the 4th channel of the previous one
+    // — a Vulkan validation error and silently-corrupt depth output on
+    // drivers that don't enforce strict attribute-vs-stride matching.
+    positionAttr.format = RHI::TextureFormat::RGB32_SFLOAT;
     positionAttr.offset = 0;
 
     pipelineDesc.vertexInput.bindings = {vertexBinding};
