@@ -250,6 +250,15 @@ void CatAnnihilation::initializeSystems() {
 
     levelingSystem_ = std::make_unique<LevelingSystem>();
     levelingSystem_->initialize();
+    // Bridge the leveling system's level-up callback onto the event bus.
+    // The LevelUpEvent SUBSCRIBER (onLevelUp: +max HP, sound, HUD banner)
+    // has existed since the event was defined, but nothing ever PUBLISHED
+    // the event — so the player's max HP stayed flat for an entire run
+    // while the web reference grows +20 per cat level (the single biggest
+    // survival-progression gap in docs/parity/PARITY_MATRIX.md).
+    levelingSystem_->setLevelUpCallback([this](int newLevel) {
+        eventBus_.publish(LevelUpEvent(newLevel - 1, newLevel));
+    });
 
     questSystem_ = std::make_unique<QuestSystem>(40);
     questSystem_->init(&ecs_);
@@ -348,9 +357,14 @@ void CatAnnihilation::initializeSystems() {
                 // kills rises but XP climbs" than a fully green dashboard
                 // hiding a missed component.
                 std::string enemyTypeName = "Dog";
-                int xpReward = 10;
+                // Web parity: every kill grants a flat 5 cat XP
+                // (LocalEnemySystem.tsx:637 addCatXP(5)); the per-type
+                // scoreValue keeps feeding the SCORE display only.
+                int xpReward = WebParity::kEnabled ? WebParity::kXpPerKill : 10;
                 if (auto* enemy = ecs_.getComponent<EnemyComponent>(entity)) {
-                    xpReward = enemy->scoreValue;
+                    if constexpr (!WebParity::kEnabled) {
+                        xpReward = enemy->scoreValue;
+                    }
                     switch (enemy->type) {
                         case EnemyType::Dog:     enemyTypeName = "Dog";     break;
                         case EnemyType::BigDog:  enemyTypeName = "BigDog";  break;
@@ -375,6 +389,25 @@ void CatAnnihilation::initializeSystems() {
                     xpReward,
                     enemyPosition});
             } else if (entity == playerEntity_) {
+                // Nine Lives (cat level 15 unlock): a lethal hit is
+                // cancelled once and the cat revives at 30% max HP
+                // (gameStore.ts damagePlayer:677-687). The native leveling
+                // system has carried canRevive/useRevive since the ability
+                // was written, but the death path never consulted it — at
+                // L15+ a web cat cheats death once, a native cat just died.
+                if (levelingSystem_ != nullptr && levelingSystem_->canRevive() &&
+                    healthSystem_ != nullptr) {
+                    auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
+                    const float maxHealth =
+                        healthComp != nullptr ? healthComp->maxHealth : 100.0f;
+                    float reviveHealth = 0.0f;
+                    levelingSystem_->useRevive(reviveHealth, maxHealth);
+                    healthSystem_->revive(playerEntity_, reviveHealth);
+                    Engine::Logger::info(
+                        "[death] Nine Lives! Player revived at " +
+                        std::to_string(reviveHealth) + "/" + std::to_string(maxHealth));
+                    return;
+                }
                 Engine::Logger::info("[death] Player died, → GameOver");
                 setState(GameState::GameOver);
             }
@@ -3379,8 +3412,23 @@ void CatAnnihilation::onLevelUp(const LevelUpEvent& event) {
     if (ecs_.isAlive(playerEntity_)) {
         auto* healthComp = ecs_.getComponent<HealthComponent>(playerEntity_);
         if (healthComp != nullptr) {
-            healthComp->maxHealth += GameplayConfig::Player::HEALTH_PER_LEVEL;
-            healthComp->currentHealth = healthComp->maxHealth; // Full heal on level up
+            if constexpr (WebParity::kEnabled) {
+                // Web semantics (gameStore.ts addCatXP): +20 max HP per cat
+                // level, and the CURRENT health scales by the pre-raise
+                // ratio (never shrinking) — a wounded cat stays
+                // proportionally wounded, it is not fully healed.
+                const float healthRatio =
+                    healthComp->maxHealth > 0.0f
+                        ? healthComp->currentHealth / healthComp->maxHealth
+                        : 1.0f;
+                healthComp->maxHealth += WebParity::kLevelUpHealthBonus;
+                healthComp->currentHealth =
+                    std::max(healthComp->currentHealth,
+                             std::ceil(healthComp->maxHealth * healthRatio));
+            } else {
+                healthComp->maxHealth += GameplayConfig::Player::HEALTH_PER_LEVEL;
+                healthComp->currentHealth = healthComp->maxHealth; // Full heal on level up
+            }
         }
     }
 

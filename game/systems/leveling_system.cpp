@@ -246,8 +246,14 @@ bool LevelingSystem::canRevive() const {
 void LevelingSystem::useRevive(float& currentHealth, float maxHealth) {
     if (!canRevive()) return;
 
-    // Revive at 50% HP
-    currentHealth = maxHealth * 0.5f;
+    // Web parity: the reference revives at floor(30% of max HP)
+    // (gameStore.ts:679 NINE_LIVES_REVIVE_PERCENT). The pre-parity native
+    // tuning was a friendlier 50%.
+    if constexpr (WebParity::kEnabled) {
+        currentHealth = std::floor(maxHealth * WebParity::kNineLivesRevivePercent);
+    } else {
+        currentHealth = maxHealth * 0.5f;
+    }
     stats_.abilities.nineLivesUsed = true;
 }
 

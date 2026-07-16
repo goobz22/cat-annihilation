@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../config/WebParityConfig.hpp"
+
 #include <cstdint>
 #include <map>
 #include <string>
@@ -157,10 +159,24 @@ struct DiscoveryXPRewards {
 
 /**
  * Get XP required for cat to reach next level
- * @param currentLevel Current cat level (1-50)
+ * @param currentLevel Current cat level (1-50; 1-99 under web parity)
  * @return XP required to level up, or -1 if max level
+ *
+ * Under web parity the hand-authored CAT_XP_TABLE is bypassed for the
+ * threejs reference curve (gameConfig.ts calculateCatXPForLevel, the
+ * RuneScape-shaped sum). LevelingSystem::addXP uses subtract-and-carry
+ * bookkeeping, so feeding it the DIFFERENCE total(L+1) - total(L)
+ * reproduces the web's cumulative-total comparison exactly — the same
+ * kills produce the same level-up moments on both builds.
  */
 inline int64_t getCatXPToNextLevel(int currentLevel) {
+    if constexpr (WebParity::kEnabled) {
+        if (currentLevel >= 99) {
+            return -1; // Web MAX_LEVEL is 99
+        }
+        return static_cast<int64_t>(WebParity::catXpForLevel(currentLevel + 1) -
+                                    WebParity::catXpForLevel(currentLevel));
+    }
     auto it = CAT_XP_TABLE.find(currentLevel);
     if (it != CAT_XP_TABLE.end()) {
         return it->second;

@@ -13,6 +13,7 @@
 #include "catch.hpp"
 
 #include "config/WebParityConfig.hpp"
+#include "systems/xp_tables.hpp"
 
 using namespace CatGame;
 
@@ -85,4 +86,22 @@ TEST_CASE("progression rewards match the web store", "[web-parity]") {
     for (int level = 2; level <= 30; ++level) {
         CHECK(WebParity::catXpForLevel(level + 1) > WebParity::catXpForLevel(level));
     }
+}
+
+TEST_CASE("leveling thresholds consume the web curve under parity", "[web-parity]") {
+    // LevelingSystem::addXP does subtract-and-carry against
+    // getCatXPToNextLevel, so the per-level threshold must equal the web
+    // curve's DIFFERENCE total(L+1) - total(L) for the two accounting
+    // styles to level up on the same kill. Level 1 -> 2 costs 104 XP
+    // (see catXpForLevel spot-check above), i.e. 21 kills at 5 XP each.
+    CHECK(getCatXPToNextLevel(1) == 104);
+    for (int level = 1; level <= 40; ++level) {
+        CHECK(getCatXPToNextLevel(level) ==
+              static_cast<int64_t>(WebParity::catXpForLevel(level + 1) -
+                                   WebParity::catXpForLevel(level)));
+    }
+    // Web MAX_LEVEL is 99 — the curve must terminate there, not at the
+    // native table's level 50.
+    CHECK(getCatXPToNextLevel(98) > 0);
+    CHECK(getCatXPToNextLevel(99) == -1);
 }

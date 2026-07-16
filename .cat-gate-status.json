@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-16T08:00:20.470Z",
+  "ts": "2026-07-16T08:13:04.665Z",
   "ok": false,
   "exitCode": 1,
   "stages": [
@@ -7,24 +7,24 @@
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 45,
+      "durationMs": 37,
       "summary": "passed (0.0s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 32,
+      "durationMs": 35,
       "summary": "passed (0.0s)"
     },
     {
       "name": "cat-verify",
       "ok": false,
       "exitCode": 2,
-      "durationMs": 61198,
-      "summary": "exit 2 (expected 0); tail=se, \"gitSha\": \"3e1fce7\", \"durationMs\": 34136, \"exitCode\": 0, \"framesObserved\": 26, \"fpsMin\": 0, \"fpsAvg\": 54.30769230769231, \"fpsMax\": 62, \"ppmPath\": \"C:/tmp/state/cat-verify-1784188759330.ppm\", \"ppmW\": 1920, \"ppmH\": 1061, \"distinctColors\": 752, \"topColor\": \"61,121,61\", \"topColorPct\": 0.992661698868"
+      "durationMs": 33645,
+      "summary": "exit 2 (expected 0); tail={ \"evidenceId\": 4, \"passes\": false, \"gitSha\": \"54697b4\", \"durationMs\": 33399, \"exitCode\": 0, \"framesObserved\": 29, \"fpsMin\": 56, \"fpsAvg\": 59.275862068965516, \"fpsMax\": 60, \"ppmPath\": \"C:/tmp/state/cat-verify-1784189551082.ppm\", \"ppmW\": 1920, \"ppmH\": 1061, \"distinctColors\": 659, \"topColor\": \"170,193"
     }
   ],
-  "gitSha": "3e1fce7",
+  "gitSha": "54697b4",
   "invocation": "--json"
 }
