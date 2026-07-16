@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 // stb_image is the same library TextureLoader.cpp implements (with the
@@ -725,6 +726,121 @@ std::vector<T> ModelLoader::ExtractBufferData(
     return result;
 }
 
+namespace {
+
+// glTF componentType constants (glTF 2.0 spec §3.6.2.2). Named so the
+// dispatch code below reads as the spec table instead of magic numbers.
+constexpr int kGltfUnsignedByte = 5121;
+constexpr int kGltfUnsignedShort = 5123;
+constexpr int kGltfUnsignedInt = 5125;
+constexpr int kGltfFloat = 5126;
+
+// Guard for attributes the engine only consumes as 32-bit floats
+// (POSITION / NORMAL / TANGENT / TEXCOORD_*). ExtractBufferData is a raw
+// memcpy with no notion of the source component width, so a non-float
+// accessor on these paths would be silently reinterpreted as garbage
+// geometry — the exact failure shape that took out every rigged Meshy
+// asset when u8 JOINTS_0 lanes were read as i32 (2026-07-16). Refusing to
+// load converts a subtle visual corruption into an actionable load error
+// naming the attribute and the offending encoding.
+void RequireFloatComponents(const nlohmann::json& accessor,
+                            const char* attributeName,
+                            const std::string& meshName) {
+    const int componentType = accessor["componentType"];
+    if (componentType != kGltfFloat) {
+        throw std::runtime_error(
+            "mesh '" + meshName + "': " + attributeName +
+            " uses componentType " + std::to_string(componentType) +
+            " but this loader only supports FLOAT (5126) for " +
+            attributeName + "; re-export the asset with float attributes");
+    }
+}
+
+// Widens per-vertex JOINTS_0 lanes into the 32-bit ivec4 lanes
+// Vertex::joints uses. glTF permits UNSIGNED_BYTE and UNSIGNED_SHORT for
+// joints; UNSIGNED_INT is accepted too for robustness against
+// non-conforming exporters. Per-element memcpy (rather than one bulk copy)
+// is what makes the width conversion correct: the Meshy/Blender rig
+// pipeline emits tightly-packed u8vec4 streams, and bulk-copying those as
+// i32x4 packed four vertices' joints into one lane — indices like
+// 0x03020100 — which the bound check below then rejected, so the player
+// cat and all four dog variants fell back to placeholder boxes.
+// `stride == 0` means tightly packed per spec; glTF requires accessor
+// byteOffsets be aligned to the component size, so the memcpy never reads
+// past a misaligned boundary.
+template <typename SourceLaneT>
+std::vector<glm::ivec4> WidenJointLanes(const uint8_t* src, size_t count, size_t stride) {
+    const size_t step = stride == 0 ? 4 * sizeof(SourceLaneT) : stride;
+    std::vector<glm::ivec4> result(count);
+    for (size_t i = 0; i < count; ++i) {
+        SourceLaneT lanes[4];
+        std::memcpy(lanes, src + i * step, sizeof(lanes));
+        result[i] = glm::ivec4(static_cast<int>(lanes[0]), static_cast<int>(lanes[1]),
+                               static_cast<int>(lanes[2]), static_cast<int>(lanes[3]));
+    }
+    return result;
+}
+
+std::vector<glm::ivec4> ExtractJointIndices(const uint8_t* bufferData, size_t offset,
+                                            size_t count, size_t stride, int componentType,
+                                            const std::string& meshName) {
+    const uint8_t* src = bufferData + offset;
+    switch (componentType) {
+        case kGltfUnsignedByte:  return WidenJointLanes<uint8_t>(src, count, stride);
+        case kGltfUnsignedShort: return WidenJointLanes<uint16_t>(src, count, stride);
+        case kGltfUnsignedInt:   return WidenJointLanes<uint32_t>(src, count, stride);
+        default:
+            throw std::runtime_error(
+                "mesh '" + meshName + "': JOINTS_0 componentType " +
+                std::to_string(componentType) +
+                " is not a legal glTF joint encoding (expected 5121, 5123, or 5125)");
+    }
+}
+
+// Converts normalized fixed-point WEIGHTS_0 lanes to floats. glTF's
+// normalized-accessor rule maps [0, numeric-max] onto [0.0, 1.0], so 255
+// (u8) and 65535 (u16) both decode to exactly 1.0 — preserving the
+// "weights sum to 1" invariant the skinning palette relies on.
+template <typename SourceLaneT>
+std::vector<glm::vec4> NormalizeWeightLanes(const uint8_t* src, size_t count, size_t stride) {
+    constexpr float scale = 1.0f / static_cast<float>(std::numeric_limits<SourceLaneT>::max());
+    const size_t step = stride == 0 ? 4 * sizeof(SourceLaneT) : stride;
+    std::vector<glm::vec4> result(count);
+    for (size_t i = 0; i < count; ++i) {
+        SourceLaneT lanes[4];
+        std::memcpy(lanes, src + i * step, sizeof(lanes));
+        result[i] = glm::vec4(lanes[0] * scale, lanes[1] * scale,
+                              lanes[2] * scale, lanes[3] * scale);
+    }
+    return result;
+}
+
+std::vector<glm::vec4> ExtractWeights(const uint8_t* bufferData, size_t offset,
+                                      size_t count, size_t stride, int componentType,
+                                      const std::string& meshName) {
+    const uint8_t* src = bufferData + offset;
+    switch (componentType) {
+        case kGltfFloat: {
+            // Already the in-memory format — copy honoring the stride.
+            const size_t step = stride == 0 ? sizeof(glm::vec4) : stride;
+            std::vector<glm::vec4> result(count);
+            for (size_t i = 0; i < count; ++i) {
+                std::memcpy(&result[i], src + i * step, sizeof(glm::vec4));
+            }
+            return result;
+        }
+        case kGltfUnsignedByte:  return NormalizeWeightLanes<uint8_t>(src, count, stride);
+        case kGltfUnsignedShort: return NormalizeWeightLanes<uint16_t>(src, count, stride);
+        default:
+            throw std::runtime_error(
+                "mesh '" + meshName + "': WEIGHTS_0 componentType " +
+                std::to_string(componentType) +
+                " is not a legal glTF weight encoding (expected 5126, or normalized 5121/5123)");
+    }
+}
+
+} // namespace
+
 void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
     if (!data.root.contains("meshes")) {
         return;
@@ -766,6 +882,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("POSITION")) {
                 int accessorIdx = attributes["POSITION"];
                 const auto& accessor = accessors[accessorIdx];
+                RequireFloatComponents(accessor, "POSITION", mesh.name);
                 const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
@@ -787,6 +904,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("NORMAL")) {
                 int accessorIdx = attributes["NORMAL"];
                 const auto& accessor = accessors[accessorIdx];
+                RequireFloatComponents(accessor, "NORMAL", mesh.name);
                 const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
@@ -808,6 +926,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TANGENT")) {
                 int accessorIdx = attributes["TANGENT"];
                 const auto& accessor = accessors[accessorIdx];
+                RequireFloatComponents(accessor, "TANGENT", mesh.name);
                 const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
@@ -829,6 +948,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TEXCOORD_0")) {
                 int accessorIdx = attributes["TEXCOORD_0"];
                 const auto& accessor = accessors[accessorIdx];
+                RequireFloatComponents(accessor, "TEXCOORD_0", mesh.name);
                 const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
@@ -849,6 +969,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             if (attributes.contains("TEXCOORD_1")) {
                 int accessorIdx = attributes["TEXCOORD_1"];
                 const auto& accessor = accessors[accessorIdx];
+                RequireFloatComponents(accessor, "TEXCOORD_1", mesh.name);
                 const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
 
                 size_t count = accessor["count"];
@@ -868,17 +989,13 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
             // Read joints.
             //
             // glTF stores JOINTS_0 as UNSIGNED_BYTE (componentType 5121) or
-            // UNSIGNED_SHORT (5123) — both fit easily into the ivec4 lanes
-            // Vertex::joints uses. We always copy 16-bit-or-smaller indices
-            // into the 32-bit lanes via ExtractBufferData<glm::ivec4> with
-            // a sizeof(glm::ivec4) component size, which is wrong for the
-            // 1-byte and 2-byte source variants and the wider mesh paths
-            // already paper over that by storing UNSIGNED_INT 4-byte joints
-            // exclusively (the Meshy/Blender pipeline emits 5125 for these
-            // assets). The validation below is what matters: even on a
-            // well-formed asset, a corrupted bufferView byteOffset can put
-            // garbage in `joints` that downstream skinning would feed into
-            // the shader's fixed-size bone palette.
+            // UNSIGNED_SHORT (5123) — the Meshy/Blender rig pipeline behind
+            // every shipped character emits tightly-packed u8vec4 streams.
+            // ExtractJointIndices dispatches on the accessor's declared
+            // componentType and widens each lane individually into the
+            // 32-bit ivec4 lanes Vertex::joints uses (the historical bulk
+            // memcpy that assumed i32 lanes garbled every u8/u16 asset;
+            // tests/unit/test_model_loader_joints.cpp pins the contract).
             //
             // WHY the bound is data.root["nodes"].size() (or its absence
             // -> the implied palette size of zero): JOINTS_0 references
@@ -905,9 +1022,9 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
                 size_t stride = bufferView.value("byteStride", 0);
 
-                auto joints = ExtractBufferData<glm::ivec4>(
+                auto joints = ExtractJointIndices(
                     data.buffers[bufferView["buffer"]].data(),
-                    offset, count, stride, sizeof(glm::ivec4)
+                    offset, count, stride, accessor["componentType"], mesh.name
                 );
 
                 // Bound joint indices against the actual node count. Skinned
@@ -942,7 +1059,10 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 }
             }
 
-            // Read weights
+            // Read weights. Same componentType dispatch as joints: raw
+            // floats pass through, normalized u8/u16 fixed-point decodes to
+            // [0, 1] so the "weights sum to 1" skinning invariant survives
+            // whichever encoding the exporter chose.
             if (attributes.contains("WEIGHTS_0")) {
                 int accessorIdx = attributes["WEIGHTS_0"];
                 const auto& accessor = accessors[accessorIdx];
@@ -952,9 +1072,9 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t offset = accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
                 size_t stride = bufferView.value("byteStride", 0);
 
-                auto weights = ExtractBufferData<glm::vec4>(
+                auto weights = ExtractWeights(
                     data.buffers[bufferView["buffer"]].data(),
-                    offset, count, stride, sizeof(glm::vec4)
+                    offset, count, stride, accessor["componentType"], mesh.name
                 );
 
                 for (size_t i = 0; i < count; ++i) {

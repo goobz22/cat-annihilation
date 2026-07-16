@@ -1,16 +1,30 @@
 {
-  "ts": "2026-05-16T15:41:51.836Z",
-  "ok": true,
-  "exitCode": 0,
+  "ts": "2026-07-16T07:18:29.518Z",
+  "ok": false,
+  "exitCode": 1,
   "stages": [
     {
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 95519,
-      "summary": "passed (95.5s)"
+      "durationMs": 34,
+      "summary": "passed (0.0s)"
+    },
+    {
+      "name": "ninja-build",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 32,
+      "summary": "passed (0.0s)"
+    },
+    {
+      "name": "cat-verify",
+      "ok": false,
+      "exitCode": 2,
+      "durationMs": 40322,
+      "summary": "exit 2 (expected 0); tail={ \"evidenceId\": 1, \"passes\": false, \"gitSha\": \"ca09747\", \"durationMs\": 40079, \"exitCode\": 0, \"framesObserved\": 29, \"fpsMin\": 56, \"fpsAvg\": 59.48275862068966, \"fpsMax\": 63, \"ppmPath\": \"C:/tmp/state/cat-verify-1784186269248.ppm\", \"ppmW\": 1920, \"ppmH\": 1061, \"distinctColors\": 2141, \"topColor\": \"198,225"
     }
   ],
-  "gitSha": "270423d",
-  "invocation": "--quick --json"
+  "gitSha": "ca09747",
+  "invocation": "--json"
 }

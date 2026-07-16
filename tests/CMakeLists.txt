@@ -795,6 +795,13 @@ set(UNIT_TEST_SOURCES
     unit/test_render_property_shadow_atlas_packer.cpp
     unit/test_render_property_camera_frustum.cpp
     unit/test_render_property_shader_hot_reload.cpp
+    # test_model_loader_joints.cpp pins the glTF JOINTS_0/WEIGHTS_0
+    # componentType contract (u8/u16/u32 joints widened per-lane, normalized
+    # u8 weights converted to [0,1] floats). The 2026-07-16 outage it guards:
+    # every rigged Meshy GLB (player cat + all 4 dogs) failed to load because
+    # the extractor memcpy'd u8vec4 joints as i32x4. Builds hermetic GLBs in
+    # the temp dir — no dependency on the gitignored art assets.
+    unit/test_model_loader_joints.cpp
 )
 
 # Collect integration test sources.
@@ -913,6 +920,12 @@ set(ENGINE_TEST_SOURCES
     # operations, and CRC32 helpers all resolve at link time. Pure CPU —
     # <fstream> + <vector> + STL only, no GPU coupling.
     ${PROJECT_ROOT}/engine/core/serialization.cpp
+    # ModelLoader.cpp is pulled in by test_model_loader_joints.cpp. Pure
+    # CPU glTF parsing (nlohmann::json + buffer extraction) — its only
+    # non-STL link dependency is the stb_image implementation, provided by
+    # mocks/stb_image_impl.cpp in this build (the game binary gets it from
+    # TextureLoader.cpp instead).
+    ${PROJECT_ROOT}/engine/assets/ModelLoader.cpp
 )
 
 # Mock implementations.
@@ -938,6 +951,13 @@ set(MOCK_SOURCES
     # full rationale and the same link-time-mock pattern that
     # mock_particle_system.cpp documents.
     mocks/mock_cat_entity.cpp
+    # stb_image_impl.cpp compiles the real stb_image implementation into the
+    # test binary. NOT a mock: ModelLoader.cpp calls stbi_load_from_memory /
+    # stbi_image_free for embedded baseColor textures, and in the game binary
+    # those symbols come from TextureLoader.cpp (which the test build excludes
+    # for its Vulkan coupling). Same single-implementation pattern, different
+    # host TU.
+    mocks/stb_image_impl.cpp
 )
 
 # Create unit test executable
