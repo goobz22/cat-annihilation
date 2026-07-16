@@ -165,4 +165,46 @@ inline constexpr float kProjectileSpawnHeight = 1.0f;
 inline constexpr float kBowProjectileDamage = 30.0f;
 inline constexpr float kBowProjectileSpeed = 25.0f;
 
+// ---------------------------------------------------------------------
+// Weapon skills — reference: the LIVE award/damage sites, NOT gameConfig's
+// WEAPONS table (same live-path warning as above).
+// ---------------------------------------------------------------------
+
+// LocalEnemySystem.tsx:149-150 — melee damage = 40 + (swordLevel-1)*10,
+// re-read from the store on every swing, so damage scales the moment the
+// skill levels.
+inline constexpr float kSwordBaseDamage = 40.0f;
+inline constexpr float kSwordDamagePerLevel = 10.0f;
+inline constexpr float swordDamageForLevel(int swordLevel) {
+    return kSwordBaseDamage +
+           static_cast<float>(swordLevel - 1) * kSwordDamagePerLevel;
+}
+
+// +10 weapon XP per damaging hit — sword LocalEnemySystem.tsx:155, bow
+// GlobalCollisionSystem.tsx:129, magic GlobalCollisionSystem.tsx:135.
+// +15 to the killing weapon (LocalEnemySystem.tsx killEnemy, killXP = 15).
+inline constexpr int kWeaponXpPerHit = 10;
+inline constexpr int kWeaponXpPerKill = 15;
+
+// Shield bash — LocalEnemySystem.tsx:160-176: attacking with the shield
+// selected lands 35 damage on a 600 ms per-enemy cooldown, shoves the dog
+// 3.0 units away, and awards 8 sword XP (the web files bash under the
+// sword skill).
+inline constexpr float kShieldBashDamage = 35.0f;
+inline constexpr float kShieldBashCooldownSeconds = 0.6f;
+inline constexpr float kShieldBashPushback = 3.0f;
+inline constexpr int kShieldBashXp = 8;
+
+// gameConfig.ts:160-166 (calculateXPForLevel) — the weapon-skill curve,
+// same RuneScape shape as the cat curve but 300-base / 2^(i/7) / ÷2.5;
+// max weapon level 99 (MAX_LEVEL, gameConfig.ts:82). Level 1 -> 2 costs
+// floor(floor(1 + 300*2^(1/7)) / 2.5) = 132 XP.
+inline float weaponXpForLevel(int level) {
+    double total = 0.0;
+    for (int i = 1; i < level; ++i) {
+        total += std::floor(static_cast<double>(i) + 300.0 * std::pow(2.0, i / 7.0));
+    }
+    return static_cast<float>(std::floor(total / 2.5));
+}
+
 } // namespace CatGame::WebParity

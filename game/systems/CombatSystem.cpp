@@ -420,7 +420,8 @@ void CombatSystem::applyDamageWithType(
     CatEngine::Entity target,
     float damage,
     DamageType type,
-    CatEngine::Entity attacker
+    CatEngine::Entity attacker,
+    HitSource source
 ) {
     auto* health = ecs_->getComponent<HealthComponent>(target);
     if (!health) {
@@ -474,6 +475,7 @@ void CombatSystem::applyDamageWithType(
             hitInfo.damage = damage;
             hitInfo.finalDamage = damage;
             hitInfo.damageType = type;
+            hitInfo.source = source;
             if (auto* targetTransform = ecs_->getComponent<Engine::Transform>(target)) {
                 hitInfo.hitPosition = targetTransform->position;
             }
@@ -771,6 +773,7 @@ void CombatSystem::processMeleeAttacks() {
                         hitInfo.wasPerfectBlock = wasPerfectBlock;
                         hitInfo.comboStep = getComboStep(attacker);
                         hitInfo.damageType = DamageType::Physical;
+                        hitInfo.source = HitSource::Melee;
 
                         onHitCallback_(hitInfo);
                     }
@@ -926,6 +929,7 @@ void CombatSystem::updateProjectiles(float dt) {
                         hitInfo.wasPerfectBlock = wasPerfectBlock;
                         hitInfo.comboStep = getComboStep(projectile.owner);
                         hitInfo.damageType = DamageType::Physical;
+                        hitInfo.source = HitSource::Projectile;
 
                         onHitCallback_(hitInfo);
                     }

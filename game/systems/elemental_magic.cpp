@@ -700,7 +700,12 @@ void ElementalMagicSystem::applySpellDamage(const ActiveSpell& spell,
     // dispatcher anyway.
     if (combatSystem_ != nullptr) {
         const DamageType type = damageTypeFromElement(spell.spell->element);
-        combatSystem_->applyDamageWithType(target, finalDamage, type, spell.caster);
+        // HitSource::Spell (not the StatusEffect default): this is the
+        // spell's direct impact, which the web awards +10 magic XP for
+        // (GlobalCollisionSystem.tsx:135) — DOT ticks stay StatusEffect
+        // and award nothing, matching the web.
+        combatSystem_->applyDamageWithType(target, finalDamage, type, spell.caster,
+                                           HitSource::Spell);
     } else if (ecs_ != nullptr) {
         if (auto* health = ecs_->getComponent<HealthComponent>(target)) {
             health->damage(finalDamage);

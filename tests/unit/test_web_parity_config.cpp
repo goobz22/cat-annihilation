@@ -88,6 +88,34 @@ TEST_CASE("progression rewards match the web store", "[web-parity]") {
     }
 }
 
+TEST_CASE("weapon-skill rewards and curve match the web literals", "[web-parity]") {
+    // Live sites: sword damage LocalEnemySystem.tsx:149-150, hit XP tsx:155
+    // + GlobalCollisionSystem.tsx:129/135, kill bonus killEnemy (killXP=15),
+    // shield bash tsx:160-176.
+    CHECK(WebParity::swordDamageForLevel(1) == 40.0f);
+    CHECK(WebParity::swordDamageForLevel(5) == 80.0f);
+    CHECK(WebParity::kWeaponXpPerHit == 10);
+    CHECK(WebParity::kWeaponXpPerKill == 15);
+    CHECK(WebParity::kShieldBashDamage == 35.0f);
+    CHECK(WebParity::kShieldBashCooldownSeconds == 0.6f);
+    CHECK(WebParity::kShieldBashPushback == 3.0f);
+    CHECK(WebParity::kShieldBashXp == 8);
+
+    // Weapon curve (gameConfig.ts calculateXPForLevel): L1 -> 2 costs
+    // floor(floor(1 + 300*2^(1/7)) / 2.5) = 132, and the leveling system's
+    // per-level threshold must equal the curve differences (same
+    // subtract-and-carry equivalence as the cat curve).
+    CHECK(WebParity::weaponXpForLevel(1) == 0.0f);
+    CHECK(WebParity::weaponXpForLevel(2) == 132.0f);
+    CHECK(getWeaponSkillXPToNextLevel(1) == 132);
+    for (int level = 1; level <= 40; ++level) {
+        CHECK(getWeaponSkillXPToNextLevel(level) ==
+              static_cast<int>(WebParity::weaponXpForLevel(level + 1) -
+                               WebParity::weaponXpForLevel(level)));
+    }
+    CHECK(getWeaponSkillXPToNextLevel(99) == -1);
+}
+
 TEST_CASE("leveling thresholds consume the web curve under parity", "[web-parity]") {
     // LevelingSystem::addXP does subtract-and-carry against
     // getCatXPToNextLevel, so the per-level threshold must equal the web

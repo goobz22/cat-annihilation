@@ -92,6 +92,13 @@ void PlayerControlSystem::update(float dt) {
     // Update current time for double-tap detection
     currentTime_ += dt;
 
+    // Tick the shield-bash swing gate every frame (600 ms per bash, web
+    // LocalEnemySystem.tsx:163) so the cooldown drains identically whether
+    // a human or the autoplay AI is steering.
+    if (shieldBashCooldown_ > 0.0f) {
+        shieldBashCooldown_ = std::max(0.0f, shieldBashCooldown_ - dt);
+    }
+
     if (autoplayMode_) {
         // Autoplay branch: the AI policy owns movement + attack for this
         // frame. Mouse-look is still driven by raw mouse delta so a human
@@ -437,7 +444,7 @@ void PlayerControlSystem::processAttackInput() {
             case HotbarItem::Sword:  performSwordAttack(combat); break;
             case HotbarItem::Bow:    performBowAttack();         break;
             case HotbarItem::Spell:  performSpellCast();         break;
-            case HotbarItem::Shield: break;  // shield has no attack action
+            case HotbarItem::Shield: performShieldBash();        break;
             case HotbarItem::Empty:  break;  // empty slot: selectable, inert
         }
         return;
@@ -518,6 +525,64 @@ void PlayerControlSystem::updateHotbarCombatFlags() {
     // so the barrier only exists while the player is holding the shield up.
     combat->shieldRaised =
         (hotbarItemForSlot(activeHotbarSlot_) == HotbarItem::Shield);
+}
+
+void PlayerControlSystem::performShieldBash() {
+    // Shield bash — LocalEnemySystem.tsx:160-176: attacking with the shield
+    // selected lands 35 flat damage on a 600 ms per-swing cooldown and
+    // shoves the dog 3.0 units straight away from the player. The web
+    // implements it as its own hit path beside the sword (not a sword swing
+    // with different numbers), so the native build mirrors that: a manual
+    // front-arc sweep through applyDamageWithType tagged Melee — the XP
+    // callback in the game layer sees Melee + shield-active and pays the
+    // web's 8 sword XP instead of the sword's 10.
+    if (combatSystem_ == nullptr || ecs_ == nullptr) {
+        return;
+    }
+    if (shieldBashCooldown_ > 0.0f) {
+        return;
+    }
+    auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
+    if (transform == nullptr) {
+        return;
+    }
+    shieldBashCooldown_ = WebParity::kShieldBashCooldownSeconds;
+
+    const float facingYaw =
+        2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
+    const Engine::vec3 facing(std::sin(facingYaw), 0.0f, -std::cos(facingYaw));
+
+    // Same reach as the sword (web bash checks the identical 2.0 melee
+    // range) and the same front-halfspace test the shield barrier uses:
+    // a dog counts as bashable when it is within reach AND ahead of the
+    // cat's shoulders (dot > 0 keeps the sweep from hitting dogs biting
+    // the cat's tail — the web's proximity loop has the shield object
+    // itself in front, which produces the same effective arc).
+    constexpr float kBashRange = 2.0f;
+    auto enemyQuery = ecs_->query<EnemyComponent, Engine::Transform, HealthComponent>();
+    for (auto [entity, enemyComp, enemyTransform, enemyHealth] : enemyQuery.view()) {
+        if (entity == playerEntity_ || enemyHealth->isDead) {
+            continue;
+        }
+        Engine::vec3 toEnemy = enemyTransform->position - transform->position;
+        toEnemy.y = 0.0f;
+        const float dist = toEnemy.length();
+        if (dist > kBashRange || dist < 0.001f) {
+            continue;
+        }
+        const Engine::vec3 toEnemyDir = toEnemy * (1.0f / dist);
+        if (toEnemyDir.dot(facing) <= 0.0f) {
+            continue;
+        }
+
+        combatSystem_->applyDamageWithType(entity, WebParity::kShieldBashDamage,
+                                           DamageType::Physical, playerEntity_,
+                                           HitSource::Melee);
+        // Knock the dog back 3.0 units along the bash direction
+        // (LocalEnemySystem.tsx:175-176 repositions by pushDistance).
+        enemyTransform->position =
+            enemyTransform->position + toEnemyDir * WebParity::kShieldBashPushback;
+    }
 }
 
 void PlayerControlSystem::performSwordAttack(CombatComponent* combat) {

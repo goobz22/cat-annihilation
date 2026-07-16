@@ -260,6 +260,28 @@ void CatAnnihilation::initializeSystems() {
     levelingSystem_->setLevelUpCallback([this](int newLevel) {
         eventBus_.publish(LevelUpEvent(newLevel - 1, newLevel));
     });
+    // Web melee scaling: damage = 40 + (swordLevel-1)*10, re-read on every
+    // swing in the reference (LocalEnemySystem.tsx:149-150). The native
+    // CombatComponent caches attackDamage, so refresh the cache the moment
+    // the sword skill levels — same observable damage on the same swing.
+    levelingSystem_->setWeaponLevelUpCallback(
+        [this](const std::string& weaponType, int newLevel) {
+            if constexpr (WebParity::kEnabled) {
+                if (weaponType == "sword" && ecs_.isAlive(playerEntity_)) {
+                    if (auto* combat = ecs_.getComponent<CombatComponent>(playerEntity_)) {
+                        combat->attackDamage = WebParity::swordDamageForLevel(newLevel);
+                        Engine::Logger::info(
+                            "[skill] sword level " + std::to_string(newLevel) +
+                            " -> melee damage " + std::to_string(combat->attackDamage));
+                    }
+                }
+            }
+            if (hud_ != nullptr) {
+                hud_->showNotification(weaponType + " skill level " +
+                                           std::to_string(newLevel) + "!",
+                                       "success", 3.0F);
+            }
+        });
 
     questSystem_ = std::make_unique<QuestSystem>(40);
     questSystem_->init(&ecs_);
@@ -882,6 +904,66 @@ void CatAnnihilation::connectSystemEvents() {
     // entity that just died.
     if (combatSystem_ != nullptr) {
         combatSystem_->setOnHitCallback([this](const HitInfo& hitInfo) {
+            // Weapon-skill XP, exactly as the web awards it: +10 to the
+            // weapon on every damaging hit the PLAYER lands (sword swing
+            // LocalEnemySystem.tsx:155, arrow GlobalCollisionSystem.tsx:129,
+            // spell :135; shield bash awards 8 under the sword skill,
+            // tsx:173). Keyed on the source-tagged fire only — the melee
+            // path also re-fires a generic Unspecified HitInfo through
+            // applyDamage, and DOT ticks arrive as StatusEffect; neither
+            // earns XP on the web. The weapon is also remembered per enemy
+            // so onEnemyKilled can pay the +15 kill bonus to whatever
+            // landed the killing blow (the web's lastDamageSource).
+            if constexpr (WebParity::kEnabled) {
+                if (hitInfo.attacker == playerEntity_ && levelingSystem_ != nullptr) {
+                    std::string weapon;
+                    int hitXp = WebParity::kWeaponXpPerHit;
+                    switch (hitInfo.source) {
+                        case HitSource::Melee:
+                            weapon = "sword";
+                            if (playerControlSystem_ != nullptr &&
+                                std::string(playerControlSystem_->getActiveHotbarItemName()) ==
+                                    "Shield") {
+                                hitXp = WebParity::kShieldBashXp;
+                            }
+                            break;
+                        case HitSource::Projectile:
+                            weapon = "bow";
+                            break;
+                        case HitSource::Spell:
+                            weapon = "magic";
+                            break;
+                        case HitSource::Unspecified:
+                        case HitSource::StatusEffect:
+                            break;
+                    }
+                    if (!weapon.empty()) {
+                        if (weapon == "magic") {
+                            // Native elemental skills key on ElementType;
+                            // recover it from the damage tint the spell
+                            // impact stamped (Water spells hit as Ice,
+                            // Air as Magic, Earth as Poison, Fire as Fire
+                            // — the element→DamageType table in
+                            // elemental_magic's damageTypeFromElement).
+                            ElementType element = ElementType::None;
+                            switch (hitInfo.damageType) {
+                                case DamageType::Ice:    element = ElementType::Water; break;
+                                case DamageType::Magic:  element = ElementType::Air;   break;
+                                case DamageType::Poison: element = ElementType::Earth; break;
+                                case DamageType::Fire:   element = ElementType::Fire;  break;
+                                default: break;
+                            }
+                            if (element != ElementType::None) {
+                                levelingSystem_->addElementalXP(element, hitXp);
+                            }
+                        } else {
+                            levelingSystem_->addWeaponXP(weapon, hitXp);
+                        }
+                        lastPlayerWeaponHit_[hitInfo.target.id] = weapon;
+                    }
+                }
+            }
+
             if (auto* targetHealth = ecs_.getComponent<HealthComponent>(hitInfo.target)) {
                 if (targetHealth->isDead) {
                     return;  // Killing blow — death-burst path will fire.
@@ -3582,6 +3664,30 @@ void CatAnnihilation::onEnemyKilled(const EnemyKilledEvent& event) {
     // Award XP to killer
     if (levelingSystem_ != nullptr && event.killer == playerEntity_) {
         levelingSystem_->addXP(event.xpReward);
+
+        // +15 weapon-skill kill bonus to whatever landed the killing blow —
+        // the web pays killXP=15 to the enemy's lastDamageSource
+        // (LocalEnemySystem.tsx killEnemy). The per-enemy weapon record is
+        // written by the hit callback above; erase it after paying so the
+        // map only ever holds live enemies.
+        if constexpr (WebParity::kEnabled) {
+            auto lastWeapon = lastPlayerWeaponHit_.find(event.enemy.id);
+            if (lastWeapon != lastPlayerWeaponHit_.end()) {
+                if (lastWeapon->second != "magic") {
+                    levelingSystem_->addWeaponXP(lastWeapon->second,
+                                                 WebParity::kWeaponXpPerKill);
+                }
+                // Magic kill bonuses need the element, which the hit
+                // record doesn't carry; the web awards them via the same
+                // lastDamageSource element. The elemental hit XP above
+                // already credits the element per impact — the kill bonus
+                // for spells goes to the generic staff skill's nearest
+                // native equivalent, which does not exist, so it is
+                // intentionally skipped and recorded as a delta in
+                // docs/parity/PARITY_MATRIX.md.
+                lastPlayerWeaponHit_.erase(lastWeapon);
+            }
+        }
     }
 
     // Update quest progress

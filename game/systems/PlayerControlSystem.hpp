@@ -298,6 +298,12 @@ private:
     void performSwordAttack(CombatComponent* combat);
     void performBowAttack();
     void performSpellCast();
+    void performShieldBash();
+
+    // Shield-bash swing cooldown, seconds remaining. The web gates the bash
+    // at 600 ms per swing (LocalEnemySystem.tsx:163); ticked down in
+    // update() so the gate holds regardless of who is steering.
+    float shieldBashCooldown_ = 0.0f;
 
     // Autoplay AI: replaces keyboard/mouse-driven input with a minimal
     // chase-and-attack policy. Implemented alongside the standard input path

@@ -190,6 +190,17 @@ inline int64_t getCatXPToNextLevel(int currentLevel) {
  * @return XP required to level up, or -1 if max level
  */
 inline int getWeaponSkillXPToNextLevel(int currentLevel) {
+    // Web parity: same subtract-and-carry equivalence as the cat curve
+    // above — serve the web weapon curve's per-level DIFFERENCE
+    // (gameConfig.ts calculateXPForLevel: 300-base, 2^(i/7), ÷2.5; max
+    // level 99) so weapon skills level on the same hit on both builds.
+    if constexpr (WebParity::kEnabled) {
+        if (currentLevel >= 99) {
+            return -1;
+        }
+        return static_cast<int>(WebParity::weaponXpForLevel(currentLevel + 1) -
+                                WebParity::weaponXpForLevel(currentLevel));
+    }
     auto it = WEAPON_SKILL_XP_TABLE.find(currentLevel);
     if (it != WEAPON_SKILL_XP_TABLE.end()) {
         return it->second;

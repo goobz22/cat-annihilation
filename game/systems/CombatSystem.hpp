@@ -16,6 +16,23 @@ struct ComboComponent;
 struct StatusEffectsComponent;
 
 /**
+ * Which combat pathway produced a hit. The game layer needs this to award
+ * weapon-skill XP the way the web reference does — the web awards +10 at
+ * the sword swing (LocalEnemySystem.tsx:155), the arrow impact
+ * (GlobalCollisionSystem.tsx:129), and the spell impact (:135), but NOT for
+ * DOT ticks, and the melee path fires the hit callback twice (a generic
+ * applyDamage fire plus the enriched call-site fire), so XP must key on the
+ * enriched, source-tagged fire only. Unspecified marks the generic fire.
+ */
+enum class HitSource {
+    Unspecified,   // generic applyDamage fire — never award XP for these
+    Melee,         // performAttack cone hit (sword swing / shield bash)
+    Projectile,    // arrow from processProjectileAttacks
+    Spell,         // elemental spell direct impact
+    StatusEffect,  // DOT tick (Burning / Frozen / Poisoned / Bleeding)
+};
+
+/**
  * Hit information for combat events
  */
 struct HitInfo {
@@ -39,6 +56,11 @@ struct HitInfo {
     // Defaults to Physical so an unwired callsite still gets the legacy
     // warm-white burst — backwards-compatible by construction.
     DamageType damageType = DamageType::Physical;
+
+    // Combat pathway that produced this hit — see HitSource. Defaults to
+    // Unspecified so the generic applyDamage fire is distinguishable from
+    // the enriched melee/projectile/spell fires, which set it explicitly.
+    HitSource source = HitSource::Unspecified;
 };
 
 /**
@@ -277,12 +299,17 @@ public:
      * @param damage Damage amount
      * @param type Damage type
      * @param attacker Source of damage
+     * @param source Combat pathway (defaults to StatusEffect — the DOT
+     *        ticks in processStatusEffects/elemental_magic are the
+     *        historical callers; the spell direct-impact site passes
+     *        Spell explicitly so weapon XP can tell them apart)
      */
     void applyDamageWithType(
         CatEngine::Entity target,
         float damage,
         DamageType type,
-        CatEngine::Entity attacker
+        CatEngine::Entity attacker,
+        HitSource source = HitSource::StatusEffect
     );
 
     /**
