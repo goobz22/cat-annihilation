@@ -24,6 +24,20 @@ PlayerControlSystem::PlayerControlSystem(Engine::Input* input, int priority)
 
 void PlayerControlSystem::init(CatEngine::ECS* ecs) {
     System::init(ecs);
+
+    // Web parity: the threejs reference has exactly one camera mode — the
+    // rig welded behind the cat's facing (BasicScene.tsx CameraFollow:
+    // distance 10.5 back, 8.4 up, hard snap, lookAt the cat's ground
+    // point). There is no mouse camera at all in the reference; the mouse
+    // only attacks, and the player turns the VIEW by turning the CAT with
+    // A/D. Enabling follow-yaw here (not just under --autoplay) gives the
+    // human game the same single camera the web build ships, and
+    // processMouseLook's early-return under follow-yaw silently retires
+    // the free-orbit mouselook while parity is on.
+    if constexpr (WebParity::kEnabled) {
+        followPlayerYawEnabled_ = true;
+        cameraOffset_ = Engine::vec3(0.0f, WebParity::kCameraHeight, WebParity::kCameraDistance);
+    }
 }
 
 void PlayerControlSystem::shutdown() {
@@ -134,6 +148,60 @@ void PlayerControlSystem::processMovementInput(float dt) {
     auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
 
     if (!movement || !transform) {
+        return;
+    }
+
+    if constexpr (WebParity::kEnabled) {
+        // --- Web tank controls (CatCharacter/index.tsx:280-297) ---
+        // A/D do NOT strafe: they rotate the cat in place at TURN_SPEED
+        // (4.25 rad/s), and W/S drive along the cat's current facing.
+        // With the camera welded behind the facing (updateCamera), turning
+        // the cat is how the player turns the view — the RuneScape-style
+        // steering the reference ships. Shift is the run key
+        // (RUN_SPEED / MOVEMENT_SPEED = 2x); the web build has no other
+        // keyboard speed input.
+        const float currentYaw = 2.0f * std::atan2(transform->rotation.y,
+                                                   transform->rotation.w);
+
+        // The native yaw convention faces (sin θ, 0, -cos θ), where a
+        // POSITIVE θ step turns the cat toward its RIGHT. The web's
+        // "left key adds to rotation" therefore maps to θ -= turn here —
+        // what must match is the visible behavior (A turns the cat's
+        // left), not the sign in either codebase's math.
+        float turnInput = 0.0f;
+        if (input_->isKeyDown(Engine::Input::Key::A)) {
+            turnInput -= 1.0f;
+        }
+        if (input_->isKeyDown(Engine::Input::Key::D)) {
+            turnInput += 1.0f;
+        }
+        const float newYaw = currentYaw + turnInput * WebParity::kPlayerTurnSpeed * dt;
+        if (turnInput != 0.0f) {
+            transform->rotation =
+                Engine::Quaternion(Engine::vec3(0.0f, 1.0f, 0.0f), newYaw);
+        }
+
+        const bool runHeld = input_->isKeyDown(Engine::Input::Key::LeftShift) ||
+                             input_->isKeyDown(Engine::Input::Key::RightShift);
+        movement->speedModifier =
+            runHeld ? (WebParity::kPlayerRunSpeed / WebParity::kPlayerWalkSpeed) : 1.0f;
+
+        float forwardInput = 0.0f;
+        if (input_->isKeyDown(Engine::Input::Key::W)) {
+            forwardInput += 1.0f;
+        }
+        if (input_->isKeyDown(Engine::Input::Key::S)) {
+            forwardInput -= 1.0f;
+        }
+
+        if (forwardInput != 0.0f) {
+            const Engine::vec3 facing(std::sin(newYaw), 0.0f, -std::cos(newYaw));
+            movement->applyMovement(facing * forwardInput, dt);
+        } else {
+            movement->applyDeceleration(dt);
+        }
+
+        movement->applyGravity(GRAVITY, dt);
         return;
     }
 
@@ -889,6 +957,18 @@ void PlayerControlSystem::updateCamera(float dt) {
         }
     }
 
+    // Web parity: the reference camera's PITCH is not a free variable —
+    // BasicScene.tsx positions the camera 10.5 behind / 8.4 above and then
+    // lookAt()s the cat's ground point, which is a constant downward tilt
+    // of atan2(8.4, 10.5) ≈ 38.7°. Writing it every frame (rather than
+    // once in init) keeps any stray pitch writer — mouse drain, an old
+    // save, the underground clamp — from tilting the lens off the cat.
+    if constexpr (WebParity::kEnabled) {
+        if (followPlayerYawEnabled_ && !cinematicOrbitEnabled_) {
+            cameraPitch_ = -std::atan2(WebParity::kCameraHeight, WebParity::kCameraDistance);
+        }
+    }
+
     // Calculate camera rotation
     Engine::Quaternion yawRot = Engine::Quaternion(Engine::vec3(0.0f, 1.0f, 0.0f), cameraYaw_);
     Engine::Quaternion pitchRot = Engine::Quaternion(Engine::vec3(1.0f, 0.0f, 0.0f), cameraPitch_);
@@ -897,8 +977,17 @@ void PlayerControlSystem::updateCamera(float dt) {
     // Calculate camera forward direction
     cameraForward_ = cameraRotation.rotate(Engine::vec3(0.0f, 0.0f, -1.0f));
 
-    // Calculate desired camera position
-    Engine::vec3 rotatedOffset = cameraRotation.rotate(cameraOffset_);
+    // Calculate desired camera position. The web rig rotates the offset by
+    // YAW ONLY — the camera slides around behind the facing at a fixed
+    // height while the pitch merely aims the lens down at the cat. Folding
+    // pitch into the offset rotation (the free-orbit behavior below) would
+    // instead swing the camera up-and-over toward the cat's zenith.
+    Engine::vec3 rotatedOffset;
+    if constexpr (WebParity::kEnabled) {
+        rotatedOffset = yawRot.rotate(cameraOffset_);
+    } else {
+        rotatedOffset = cameraRotation.rotate(cameraOffset_);
+    }
     Engine::vec3 desiredCameraPosition = transform->position + rotatedOffset;
 
     // Smooth camera follow
