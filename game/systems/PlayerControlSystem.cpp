@@ -486,6 +486,15 @@ void PlayerControlSystem::updateAutoplay(float dt) {
     Engine::vec3 targetPos(0.0f, 0.0f, 0.0f);
     float bestDistSq = std::numeric_limits<float>::max();
 
+    // Threat bookkeeping for the kite policy below: how many live dogs are
+    // already at claw range, and where is the local pack centered. Gathered
+    // in the same O(N) scan as target acquisition.
+    int dogsAtClawRange = 0;
+    int dogsInPack = 0;
+    Engine::vec3 packCentroid(0.0f, 0.0f, 0.0f);
+    constexpr float kClawRangeSq = 3.5f * 3.5f;
+    constexpr float kPackRadiusSq = 8.0f * 8.0f;
+
     const Engine::vec3 selfPos = transform->position;
     auto enemyQuery = ecs_->query<EnemyComponent, Engine::Transform, HealthComponent>();
     for (auto [entity, enemyComp, enemyTransform, enemyHealth] : enemyQuery.view()) {
@@ -503,6 +512,13 @@ void PlayerControlSystem::updateAutoplay(float dt) {
             target = entity;
             targetPos = enemyTransform->position;
         }
+        if (distSq < kClawRangeSq) {
+            ++dogsAtClawRange;
+        }
+        if (distSq < kPackRadiusSq) {
+            ++dogsInPack;
+            packCentroid = packCentroid + enemyTransform->position;
+        }
     }
 
     // --- Spell-cast cadence bookkeeping -------------------------------------
@@ -518,12 +534,63 @@ void PlayerControlSystem::updateAutoplay(float dt) {
         }
     }
 
+    // --- Kite policy (web-parity difficulty) ---------------------------------
+    // Under the web-reference stat profile the cat has 100 HP and every dog
+    // lands 15 damage on a 1 s cooldown — standing inside a converging wave
+    // is death in ~7 seconds, exactly how the web game plays. A human
+    // survives by kiting: the cat walks 4x faster than a dog (6 vs 1.5, 12
+    // sprinting), so you sprint out of the pack, let the chasers string
+    // out, then turn and fight the leader. The autoplay policy mirrors
+    // that instead of the old "stand and trade" policy that was only
+    // viable with the pre-parity 400 HP / 4 m-sword god-stats:
+    //   - retreat when ≥2 dogs are at claw range (surrounded), or when
+    //     health is critical and anything is closing in;
+    //   - retreat = sprint directly away from the local pack centroid;
+    //   - otherwise fight exactly as before at walk speed.
+    const float healthFraction =
+        (health != nullptr && health->maxHealth > 0.0f)
+            ? health->currentHealth / health->maxHealth
+            : 1.0f;
+    const bool shouldKite =
+        WebParity::kEnabled && target != CatEngine::NULL_ENTITY &&
+        (dogsAtClawRange >= 2 || (healthFraction < 0.30f && dogsInPack >= 1));
+
+    if (shouldKite) {
+        const Engine::vec3 threatCenter =
+            dogsInPack > 0
+                ? packCentroid * (1.0f / static_cast<float>(dogsInPack))
+                : targetPos;
+        Engine::vec3 awayXZ(selfPos.x - threatCenter.x, 0.0f, selfPos.z - threatCenter.z);
+        const float awayLen = awayXZ.length();
+        // Standing exactly on the centroid gives no direction — bolt along
+        // current facing rather than freeze inside the pack.
+        const Engine::vec3 retreatDir =
+            awayLen > 0.01f
+                ? awayXZ * (1.0f / awayLen)
+                : Engine::Quaternion(Engine::vec3(0.0f, 1.0f, 0.0f),
+                                     2.0f * std::atan2(transform->rotation.y,
+                                                       transform->rotation.w))
+                      .rotate(Engine::vec3(0.0f, 0.0f, -1.0f));
+
+        movement->speedModifier =
+            WebParity::kPlayerRunSpeed / WebParity::kPlayerWalkSpeed; // sprint
+        movement->applyMovement(retreatDir, dt);
+
+        // Face the escape direction so the locked-behind camera swings with
+        // the retreat, the same way a human kiting with tank controls sees it.
+        transform->rotation = Engine::Quaternion(
+            Engine::vec3(0.0f, 1.0f, 0.0f),
+            std::atan2(retreatDir.x, -retreatDir.z));
+    } else if (movement != nullptr) {
+        movement->speedModifier = 1.0f; // walk while fighting, like a human would
+    }
+
     // --- Movement + attack policy -------------------------------------------
     // Always run the bookkeeping tail (cooldowns, gravity, ground collision)
     // even when no target is found, otherwise a wave gap would leave the cat
     // hanging in the air if it was mid-jump. The branch above the tail only
     // decides how we steer while a target exists.
-    if (target != CatEngine::NULL_ENTITY && combat) {
+    if (!shouldKite && target != CatEngine::NULL_ENTITY && combat) {
         const Engine::vec3 toTarget = targetPos - selfPos;
         const float distXZ = std::sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
 
@@ -692,9 +759,11 @@ void PlayerControlSystem::updateAutoplay(float dt) {
                 combatSystem_->performAttack(playerEntity_, "L");
             }
         }
-    } else {
+    } else if (!shouldKite) {
         // No target: idle decelerate. The cat stays put between waves
         // instead of drifting, which also keeps the camera stable for demos.
+        // (While kiting, the retreat branch above already steered this frame
+        // — decelerating here would fight the escape acceleration.)
         movement->applyDeceleration(dt);
     }
 
