@@ -619,11 +619,6 @@ void PlayerControlSystem::performBowAttack() {
     // path, and (b) the web bow has no cooldown — one arrow per input press
     // (this call is edge-gated in processAttackInput) matches that.
     //
-    // NOTE (recorded in the port report): spawnProjectile applies CombatSystem's
-    // fixed projectileSpeed_ member (30 m/s), so the arrow currently flies at
-    // 30 rather than the web's 25. projectileSpeed_ is owned by CombatSystem,
-    // not the hotbar agent; the 5 m/s delta is documented, not silently
-    // absorbed.
     const float yaw =
         2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
     const Engine::vec3 facing(std::sin(yaw), 0.0f, -std::cos(yaw));
@@ -632,8 +627,12 @@ void PlayerControlSystem::performBowAttack() {
         facing * WebParity::kProjectileSpawnForwardDistance +
         Engine::vec3(0.0f, WebParity::kProjectileSpawnHeight, 0.0f);
 
+    // The web arrow flies at 25 (LocalProjectileSystem.tsx:246) —
+    // spawnProjectile's speed override carries it past the system default
+    // of 30 that the native-balance paths keep.
     combatSystem_->spawnProjectile(playerEntity_, spawnPosition, facing,
-                                   WebParity::kBowProjectileDamage);
+                                   WebParity::kBowProjectileDamage,
+                                   WebParity::kBowProjectileSpeed);
 }
 
 void PlayerControlSystem::performSpellCast() {
