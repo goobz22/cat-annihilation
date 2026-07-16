@@ -11,9 +11,13 @@
 #include "imgui.h"
 
 #include <cmath>
-#include <iostream>
 
 namespace Game {
+
+// All pre-game strings and the fur-swatch table come from the web-parity
+// table so MainMenu can never drift from the web reference on its own —
+// see the "Pre-game menu" section of game/config/WebParityConfig.hpp.
+namespace WebParity = CatGame::WebParity;
 
 // ---------------------------------------------------------------------------
 // Settings panel state
@@ -174,27 +178,45 @@ bool MainMenu::initialize() {
         return true;
     }
 
-    // Create menu buttons
+    // Create the mode-select page's button list. The two web mode cards
+    // come first, in the web's order (GameModeSelection.tsx:316-354), then
+    // the native-desktop extras (Continue / Settings / Quit) the web has
+    // no equivalent for. Reusing the MenuButton list for the cards —
+    // rather than drawing the page ad hoc — keeps ONE model that the
+    // keyboard navigation (m_selectedButtonIndex in handleInput) and the
+    // hover hit-testing (updateButtons) already operate on; the cards
+    // only differ visually, which render handles via the subtitle/hint
+    // fields. Geometry is intentionally not set here: render() writes the
+    // real on-screen ImGui rect back into each button every frame.
     m_buttons.clear();
 
-    // Start Game button
-    MenuButton startButton;
-    startButton.text = "Start Game";
-    startButton.position = {400.0F, 300.0F};
-    startButton.size = {200.0F, 50.0F};
-    startButton.enabled = true;
-    startButton.callback = [this]() {
-        if (m_startGameCallback) {
-            m_startGameCallback();
-        }
+    // Survival Mode card — web parity: clicking it opens the customize
+    // screen (GameModeSelection.tsx:46-49 handleSurvivalMode sets
+    // showCustomization); the run itself only starts from that page's
+    // START GAME, so this callback just flips the page.
+    MenuButton survivalButton;
+    survivalButton.text = WebParity::kSurvivalCardTitle;
+    survivalButton.subtitle = WebParity::kSurvivalCardSubtitle;
+    survivalButton.enabled = true;
+    survivalButton.callback = [this]() {
+        m_currentPage = MenuPage::Customize;
     };
-    m_buttons.push_back(startButton);
+    m_buttons.push_back(survivalButton);
+
+    // Story Mode card — present so the menu mirrors the web's two-card
+    // layout, but disabled: story mode is P3-deferred until survival is
+    // 1:1 (docs/parity/PARITY_MATRIX.md), so the card renders greyed with
+    // the hint below and no callback.
+    MenuButton storyButton;
+    storyButton.text = WebParity::kStoryCardTitle;
+    storyButton.subtitle = WebParity::kStoryCardSubtitle;
+    storyButton.hint = "Coming soon";
+    storyButton.enabled = false;
+    m_buttons.push_back(storyButton);
 
     // Continue button
     MenuButton continueButton;
     continueButton.text = "Continue";
-    continueButton.position = {400.0F, 360.0F};
-    continueButton.size = {200.0F, 50.0F};
     continueButton.enabled = m_hasSaveGame;
     continueButton.callback = [this]() {
         if (m_continueCallback) {
@@ -206,8 +228,6 @@ bool MainMenu::initialize() {
     // Settings button
     MenuButton settingsButton;
     settingsButton.text = "Settings";
-    settingsButton.position = {400.0F, 420.0F};
-    settingsButton.size = {200.0F, 50.0F};
     settingsButton.enabled = true;
     settingsButton.callback = [this]() {
         if (m_settingsCallback) {
@@ -223,8 +243,6 @@ bool MainMenu::initialize() {
     // Quit button
     MenuButton quitButton;
     quitButton.text = "Quit";
-    quitButton.position = {400.0F, 480.0F};
-    quitButton.size = {200.0F, 50.0F};
     quitButton.enabled = true;
     quitButton.callback = [this]() {
         if (m_quitCallback) {
@@ -234,6 +252,7 @@ bool MainMenu::initialize() {
     m_buttons.push_back(quitButton);
 
     m_selectedButtonIndex = 0;
+    m_currentPage = MenuPage::ModeSelect;
 
     m_initialized = true;
     Engine::Logger::info("MainMenu initialized successfully");
@@ -260,8 +279,13 @@ void MainMenu::update(float deltaTime) {
     m_titleAnimTimer += deltaTime;
     m_backgroundAnimTimer += deltaTime * 0.5F;
 
-    // Update button states
-    updateButtons();
+    // Update button states — mode-select page only. On the customize page
+    // the MenuButton list isn't drawn, so hit-testing its (now off-screen)
+    // rects would fire phantom hover sounds while the mouse crosses where
+    // the cards used to be.
+    if (m_currentPage == MenuPage::ModeSelect) {
+        updateButtons();
+    }
 }
 
 void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint32_t screenHeight) {
@@ -301,67 +325,15 @@ void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth,
 
     ImGui::Begin("##MainMenuOverlay", nullptr, kOverlayFlags);
 
-    // ------------------------------------------------------------------ Title
-    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
-        ImGui::PushFont(titleFont);
-    }
-    const char* titleText = "CAT ANNIHILATION";
-    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
-    const float titleY = height * 0.18F;
-    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
-    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
-    if (m_imguiLayer->GetTitleFont() != nullptr) {
-        ImGui::PopFont();
-    }
-
-    // --------------------------------------------------------------- Subtitle
-    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
-        ImGui::PushFont(regularFont);
-    }
-    const char* subtitleText = "Survive the Waves";
-    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
-    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
-    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
-    if (m_imguiLayer->GetRegularFont() != nullptr) {
-        ImGui::PopFont();
-    }
-
-    // ----------------------------------------------------------------- Buttons
-    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
-        ImGui::PushFont(boldFont);
-    }
-    const float buttonWidth = 360.0F;
-    const float buttonHeight = 60.0F;
-    const float buttonSpacing = 16.0F;
-    const float totalButtonsHeight = (buttonHeight + buttonSpacing) * static_cast<float>(m_buttons.size()) - buttonSpacing;
-    float cursorY = height * 0.48F;
-    const float buttonX = (width - buttonWidth) * 0.5F;
-
-    for (size_t i = 0; i < m_buttons.size(); ++i) {
-        auto& button = m_buttons[i];
-        ImGui::SetCursorPos(ImVec2(buttonX, cursorY));
-        ImGui::PushID(static_cast<int>(i));
-        ImGui::BeginDisabled(!button.enabled);
-        if (ImGui::Button(button.text.c_str(), ImVec2(buttonWidth, buttonHeight))) {
-            m_audio.playMenuClick();
-            if (button.callback) {
-                button.callback();
-            }
-        }
-        const bool hovered = ImGui::IsItemHovered();
-        ImGui::EndDisabled();
-        ImGui::PopID();
-
-        button.hovered = hovered;
-        if (hovered) {
-            m_hoveredButtonIndex = static_cast<int32_t>(i);
-        }
-        cursorY += buttonHeight + buttonSpacing;
-    }
-    // Suppress unused-variable warning while also documenting layout intent.
-    (void)totalButtonsHeight;
-    if (m_imguiLayer->GetBoldFont() != nullptr) {
-        ImGui::PopFont();
+    // ------------------------------------------------------------------- Pages
+    // The pre-game flow is two pages inside the one overlay window,
+    // mirroring the web's showCustomization branch
+    // (GameModeSelection.tsx:175/308). The background, version footer, and
+    // settings panel below are shared by both pages.
+    if (m_currentPage == MenuPage::ModeSelect) {
+        renderModeSelectPage(width, height);
+    } else {
+        renderCustomizePage(width, height);
     }
 
     // ----------------------------------------------------------------- Version
@@ -391,6 +363,29 @@ void MainMenu::handleInput() {
     if (!m_initialized) {
         return;
     }
+
+    // ---- Customize page ----------------------------------------------------
+    // Mouse interaction lives entirely in renderCustomizePage's ImGui
+    // widgets; the keyboard gets the two page-level actions. This branch
+    // MUST run before the mode-select handling below (with an early
+    // return): if it were checked after, the very Enter press that
+    // activates the Survival card — which flips m_currentPage — would
+    // fall through and instantly START the game in the same frame.
+    if (m_currentPage == MenuPage::Customize) {
+        // ESC is free in the MainMenu game state (GameUI only consumes it
+        // in Playing/Paused), so it maps naturally onto the web's "< Back".
+        if (m_input.isKeyPressed(Engine::Input::Key::Escape)) {
+            m_audio.playMenuClick();
+            m_currentPage = MenuPage::ModeSelect;
+        } else if (m_input.isKeyPressed(Engine::Input::Key::Enter) ||
+                   m_input.isKeyPressed(Engine::Input::Key::Space)) {
+            m_audio.playMenuClick();
+            confirmStartGame();
+        }
+        return;
+    }
+
+    // ---- Mode-select page --------------------------------------------------
 
     // Keyboard navigation
     if (m_input.isKeyPressed(Engine::Input::Key::Down)) {
@@ -430,18 +425,15 @@ void MainMenu::handleInput() {
         }
     }
 
-    // Mouse click
-    if (m_input.isMouseButtonPressed(Engine::Input::MouseButton::Left)) {
-        if (m_hoveredButtonIndex >= 0 &&
-            m_hoveredButtonIndex < static_cast<int32_t>(m_buttons.size())) {
-
-            auto& button = m_buttons[m_hoveredButtonIndex];
-            if (button.enabled && button.callback) {
-                m_audio.playMenuClick();
-                button.callback();
-            }
-        }
-    }
+    // Mouse activation is deliberately NOT handled here. ImGui::Button in
+    // renderModeSelectPage already fires the callback on click, and now
+    // that render() writes the real on-screen rects back into each
+    // MenuButton (so updateButtons' hover detection is truthful), a
+    // second Engine::Input-driven click path would double-activate every
+    // button: once on press (edge-triggered isMouseButtonPressed) and
+    // again on release (ImGui's click semantics). For toggles like
+    // Settings that double-fire is a visible bug — the panel would open
+    // and instantly close on one click.
 }
 
 // ============================================================================
