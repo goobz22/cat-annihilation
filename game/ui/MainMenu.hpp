@@ -3,6 +3,7 @@
 
 #include "../../engine/core/Input.hpp"
 #include "../../engine/renderer/passes/UIPass.hpp"
+#include "../config/WebParityConfig.hpp"
 #include <functional>
 #include <vector>
 #include <string>
@@ -20,9 +21,15 @@ class GameAudio;
 class GameConfig;
 
 /**
- * @brief Main Menu screen
+ * @brief Main Menu screen — the web-parity pre-game flow.
  *
- * Title screen with buttons for starting game, continuing, settings, and quitting.
+ * Mirrors the web reference's two-step pre-game flow
+ * (src/components/ui/GameModeSelection.tsx): a MODE-SELECT page (survival /
+ * story mode cards, plus the native-desktop Continue / Settings / Quit
+ * extras the web doesn't have), then a CUSTOMIZE page ("Customize Your
+ * Cat" fur-swatch picker) that the survival card opens. The run only
+ * starts from the customize page's START GAME button, exactly like the
+ * web's confirmSurvivalMode.
  */
 class MainMenu {
 public:
@@ -30,6 +37,19 @@ public:
      * @brief Menu button callback type
      */
     using ButtonCallback = std::function<void()>;
+
+    /**
+     * @brief Which pre-game page the menu is showing.
+     *
+     * Maps 1:1 onto the web's showCustomization state
+     * (GameModeSelection.tsx:16/175): mode select first, customize second.
+     * The web's third page (clan selection) is deliberately absent — it
+     * only exists on the story path, which is P3-deferred (PARITY_MATRIX.md).
+     */
+    enum class MenuPage {
+        ModeSelect,
+        Customize
+    };
 
     explicit MainMenu(Engine::Input& input, GameAudio& audio);
     ~MainMenu();
@@ -107,6 +127,31 @@ public:
     void setHasSaveGame(bool hasSave) { m_hasSaveGame = hasSave; }
 
     /**
+     * @brief Which pre-game page is currently showing.
+     */
+    [[nodiscard]] MenuPage getCurrentPage() const { return m_currentPage; }
+
+    /**
+     * @brief True once the player confirmed a fur colour via START GAME.
+     *
+     * False for runs that bypass the customize page (Continue, --autoplay),
+     * so the game layer knows whether the tint below is a real player
+     * choice or should be left off entirely.
+     */
+    [[nodiscard]] bool hasSelectedFurColor() const { return m_furColorConfirmed; }
+
+    /**
+     * @brief Linear-decoded rgb of the chosen fur swatch.
+     *
+     * The swatch table (WebParityConfig kFurSwatches,
+     * GameModeSelection.tsx:162) stores the web's sRGB hex bytes; this
+     * decodes each channel to LINEAR because the consumer is the entity
+     * tint push constant, which the shader multiplies in linear space —
+     * see srgbChannelToLinear's rationale in WebParityConfig.hpp.
+     */
+    void getSelectedFurLinear(float& r, float& g, float& b) const;
+
+    /**
      * @brief Set version string to display
      * @param version Version string (e.g., "v1.0.0")
      */
@@ -140,9 +185,16 @@ public:
 private:
     /**
      * @brief Menu button structure
+     *
+     * position/size are written back from the real ImGui item rect every
+     * frame render() draws the button, so updateButtons()'s hover
+     * detection always hit-tests the geometry actually on screen (the
+     * same sync PauseMenu::render does).
      */
     struct MenuButton {
         std::string text;
+        std::string subtitle; // second line inside a mode card; empty = plain button
+        std::string hint;     // small third line (e.g. "Coming soon"); empty = none
         bool enabled = true;
         bool hovered = false;
         std::array<float, 2> position = {0.0F, 0.0F};
@@ -151,7 +203,7 @@ private:
     };
 
     /**
-     * @brief Update button states (hover detection)
+     * @brief Update button states (hover detection + hover sound edge)
      */
     void updateButtons();
 
@@ -161,24 +213,22 @@ private:
     void renderBackground(CatEngine::Renderer::UIPass& uiPass);
 
     /**
-     * @brief Render title
+     * @brief ImGui body of the mode-select page (headings + m_buttons).
+     * Emits into the already-begun full-screen overlay window.
      */
-    void renderTitle(CatEngine::Renderer::UIPass& uiPass);
+    void renderModeSelectPage(float width, float height);
 
     /**
-     * @brief Render buttons
+     * @brief ImGui body of the "Customize Your Cat" page (fur swatch grid
+     * + BACK / START GAME). Emits into the same overlay window.
      */
-    void renderButtons(CatEngine::Renderer::UIPass& uiPass);
+    void renderCustomizePage(float width, float height);
 
     /**
-     * @brief Render version info
+     * @brief Confirm the customize page: latch the fur choice, reset the
+     * menu to mode-select for the next visit, and fire m_startGameCallback.
      */
-    void renderVersion(CatEngine::Renderer::UIPass& uiPass);
-
-    /**
-     * @brief Check if mouse is over button
-     */
-    bool isMouseOverButton(const MenuButton& button) const;
+    void confirmStartGame();
 
     Engine::Input& m_input;
     GameAudio& m_audio;
@@ -197,6 +247,15 @@ private:
     // State
     bool m_hasSaveGame = false;
     std::string m_versionString = "v1.0.0";
+
+    // Pre-game flow state (web parity: GameModeSelection.tsx). The fur
+    // index defaults to the web's initially-highlighted swatch; the
+    // confirmed flag only latches when START GAME fires, mirroring the
+    // web where setPlayerCustomization runs inside confirmSurvivalMode —
+    // not on every swatch click.
+    MenuPage m_currentPage = MenuPage::ModeSelect;
+    int m_selectedFurIndex = CatGame::WebParity::kDefaultFurSwatchIndex;
+    bool m_furColorConfirmed = false;
 
     // Animation
     float m_titleAnimTimer = 0.0F;
