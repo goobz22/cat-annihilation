@@ -25,11 +25,14 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 - ✅ **Forest population** — web scatter verbatim (100 ring trees 20-220m, jittered grid step 80 w/ 50m cutout, 60 bushes, 40 new dodecahedron rocks), deterministic seed, no draw budget; linear-decoded colors. Verified in frame dump: cat + dogs + trees + bushes + rocks all visible, web proportions.
 - ✅ **Gate recalibration** — cat-verify topColorPct ceiling 0.35 → 0.85 (openclaw/bridge/cat-verify.ts): the web reference's own flat-grass framing measures ~71-80% top color; 0.35 was tuned for the retired heightmap art. Degenerate one-color frames (99.3% inside-foliage) still fail.
 
+- ✅ **Weapon-skill loop** (2nd pass) — +10 weapon XP per player hit (sword/arrow/spell impacts; DOT ticks excluded) via HitSource-tagged HitInfo; +15 kill bonus to the killing weapon (per-enemy last-weapon map = the web's lastDamageSource); sword damage 40 + 10·(level-1) refreshed on weapon level-up; **shield bash** (35 dmg, 600ms, 3.0 knockback, 8 sword XP — the audit had missed that the web shield attacks); weapon XP curve = web calculateXPForLevel diffs (L1→2 = 132, max 99).
+- ✅ **Regeneration (L5) / Agility (L10) — verified ALREADY AT PARITY, nothing to port**: in the live web build both are dead config (unlock flags + CatStats icons; REGENERATION_RATE/AGILITY_MULTIPLIER have zero consumers, abilities.regeneration/agility are never read), and the native regen path is equally inert (HealthComponent regenerationRate never set for the player). 1:1 means NOT adding effects the web lacks.
+
 ### Open (next iterations)
 
-- 🟡 Regeneration ability (L5, 2 HP/s), Agility (L10), weapon-skill XP/level damage scaling (web sword dmg = 40 + 10/(skill level-1)).
 - 🟡 Menus: game-mode selection screen + pre-game cat-customization screen (web shows "Customize Your Cat" with fur/eye color pickers before survival; native has the customization SYSTEM loaded — 25 accessories/15 presets — but no pre-game UI), pause menu parity, game-over stats parity.
-- 🟡 Spell/arrow projectile speeds (25/15 web) need per-call speed plumbing in CombatSystem/ElementalMagic.
+- 🟡 Spell/arrow projectile speeds (web 15/25) need per-call speed plumbing in CombatSystem/ElementalMagic; magic KILL bonus (+15 per element) skipped — the native kill record doesn't carry the element (hit XP per element does land).
+- 🟡 Ability icons / next-unlock display (CatStats.tsx) missing from native HUD (P3 — flags unlock correctly on both sides).
 - 🟡 Low-health vignette (HUD.cpp:319) is native-only — web has no screen-edge damage vignette; decide keep (better feedback) or gate under parity.
 - 🟡 Story mode (P3, deferred until survival is 1:1).
 
