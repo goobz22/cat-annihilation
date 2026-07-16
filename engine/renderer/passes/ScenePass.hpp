@@ -373,7 +373,9 @@ private:
     // happens — adding it now would be speculative complexity).
     bool EnsureModelGpuMesh(const CatEngine::Model* model);
 
-    // Lazy uploader for path (c) skinned-mesh draws. On first encounter of a
+    // Lazy uploader for LEGACY CPU-skinned draws (SkinningMode::CpuVertex,
+    // forced by --enable-cpu-skinning; the default path (c) route is the
+    // GPU pipeline above). On first encounter of a
     // `skinningKey` (typically the entity's Animator pointer), allocate a
     // host-coherent dynamic vertex buffer sized exactly to the model's
     // concatenated vertex count × 24-byte stride. On every call it re-runs

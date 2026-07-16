@@ -1434,12 +1434,40 @@ def parent_with_auto_weights(mesh_obj, arm_obj):
 
 
 def bake_animation_clips(arm_obj, fps=24):
-    """Bake the same animation clips the asset browser builds in JS
-    directly into the armature as Blender Actions, then push them to
-    NLA tracks so the glTF exporter writes them into the output file's
-    `animations` array. After this the rigged GLB carries walk / run /
-    sit / lay / standUp / idle clips that the game engine (or any
-    three.js viewer) can play without reimplementing the clip math.
+    """Bake procedural quadruped animation into the armature as Blender
+    Actions, then push each onto its own NLA track so the glTF exporter
+    writes them into the output file's `animations` array. After this the
+    rigged GLB carries idle / walk / run / attack (the pipeline minimum
+    set) plus the sit / lay / standUp resting clips, all playable directly
+    off `gltf.animations` by the game engine or any three.js viewer.
+
+    Clip names are LOWERCASE on purpose: the native engine loads clips by
+    exact string name and branches on them (game/entities/{Cat,Dog}Entity.cpp
+    set `loops = clip.name in {idle, walk, run}`; game/components/
+    LocomotionStateMachine.hpp gates on `hasState("idle"|"walk"|"run")`;
+    game/CatAnnihilation.cpp calls `play("idle"|"sitDown"|"layDown"|
+    "standUpFromSit"|"standUpFromLay")`). Capitalising them would silently
+    break locomotion, so the four required clips are authored as idle/walk/
+    run/attack. verify_rig.ts matches the idle/walk/run/attack keywords
+    case-insensitively, so lowercase satisfies the oracle as well.
+
+    The four core clips (idle/walk/run/attack) are authored below with the
+    kf_pose/emit_cycle helpers (world-axis rotations COMPOSED per bone so a
+    combined yaw+pitch keyframe doesn't clobber itself). The sit/lay/standUp
+    clips retain the original kf_rot/kf_loc single-axis authoring the game's
+    4-phase rest state machine depends on.
+
+    Ground-contact + loop-safety are hard constraints, honoured structurally:
+      - Vertical body motion (hip bob / gallop suspension / breath) is applied
+        as an UP-BIASED-ONLY root translation ((1-cos)/2 >= 0 for all phase),
+        and legs are driven purely by joint ROTATION. With rest legs hanging
+        ~vertical, rotating a leg about the side axis sweeps its paw along an
+        arc whose lowest point is the planted rest position, so no rotation
+        amplitude drives a paw below the ground plane (the paw rest height is
+        the reference). Amplitudes stay conservative for the stylised look.
+      - idle/walk/run sample BOTH phase endpoints (0.0 and 1.0), so for any
+        whole-period sinusoid the first and last keyframe are identical =
+        loop-safe. attack is a one-shot that opens and closes on the rest pose.
 
     Math mirrors asset_browser.html:
       - leg / knee swings rotate around the rig's SIDE axis (perpendicular
@@ -1466,27 +1494,34 @@ def bake_animation_clips(arm_obj, fps=24):
     # browser). Skeleton is in armature-local coords by now; we want the
     # world-space direction so the rotation applies the same way as the
     # browser computes it.
+    # Rig frame in WORLD space (so world-axis pose rotations / translations
+    # apply the same way the browser clip math computes them):
+    #   side_axis    - left/right axis; leg fore-aft swings rotate about it.
+    #   forward_axis - horizontal heading (hips -> chest); drives the attack
+    #                  lunge translation.
+    #   torso_span   - hips->chest distance; scales translation amplitudes so
+    #                  a small dog and a big dog move proportionally.
+    forward_axis = _V((1.0, 0.0, 0.0))
+    side_axis = _V((0.0, 1.0, 0.0))
+    torso_span = 0.30
     hips = arm_obj.pose.bones.get('hips')
     chest = arm_obj.pose.bones.get('chest')
     if hips and chest:
         hips_w = arm_obj.matrix_world @ hips.head
         chest_w = arm_obj.matrix_world @ chest.head
-        forward = chest_w - hips_w
-        forward.z = 0
+        span_vec = chest_w - hips_w
+        if span_vec.length > 1e-6:
+            torso_span = span_vec.length
+        forward = _V((span_vec.x, span_vec.y, 0.0))
         if forward.length > 1e-6:
             forward.normalize()
+            forward_axis = forward
             # side = cross(forward, up) matches browser (Y-up equivalent
-            # here is Z since we're in Blender). Gives left-side axis.
+            # here is Z since we're in Blender). Gives the left-side axis.
             side = forward.cross(_V((0.0, 0.0, 1.0)))
-            if side.length < 1e-6:
-                side = _V((0.0, 1.0, 0.0))
-            else:
+            if side.length > 1e-6:
                 side.normalize()
-        else:
-            side = _V((0.0, 1.0, 0.0))
-    else:
-        side = _V((0.0, 1.0, 0.0))
-    side_axis = side  # world-space vector
+                side_axis = side
 
     def bone_rest_world_quat(pose_bone):
         m = arm_obj.matrix_world @ pose_bone.bone.matrix_local
@@ -1539,6 +1574,52 @@ def bake_animation_clips(arm_obj, fps=24):
         pb.location = basis_for_world_translation(pb, world_delta)
         pb.keyframe_insert(data_path='location', frame=frame, group=bone_name)
 
+    rad = math.radians
+
+    def kf_pose(bone_name, frame, rots=None, world_delta=None):
+        """Keyframe a bone with any number of world-axis rotations COMPOSED
+        into one local quaternion, and/or a world-space translation.
+
+        Why compose instead of calling kf_rot twice: kf_rot writes the WHOLE
+        rotation_quaternion each call, so two single-axis keyframes on the
+        same bone+frame (e.g. head yaw then head pitch) would have the second
+        clobber the first - the bone would only get the pitch. Here each
+        world-axis rotation becomes a local quaternion via the same
+        conjugation basis_for_world_rot uses, and the product of those local
+        quaternions equals the local basis of the composed world rotation
+        (rw_inv * (Q2*Q1) * rw == (rw_inv*Q2*rw)*(rw_inv*Q1*rw)). Small
+        stylised angles make the compose order visually irrelevant.
+
+        `rots` is a list of (world_axis, angle_radians); an empty list writes
+        the rest (identity) rotation. Rotation and location channels are keyed
+        only when their argument is provided, so a translate-only bone (root)
+        never gets a redundant constant rotation track."""
+        pb = arm_obj.pose.bones.get(bone_name)
+        if pb is None:
+            return
+        if rots is not None:
+            pb.rotation_mode = 'QUATERNION'
+            q = _Q((1.0, 0.0, 0.0, 0.0))
+            for axis, angle in rots:
+                q = q @ basis_for_world_rot(pb, axis, angle)
+            pb.rotation_quaternion = q
+            pb.keyframe_insert(data_path='rotation_quaternion', frame=frame, group=bone_name)
+        if world_delta is not None:
+            pb.location = basis_for_world_translation(pb, world_delta)
+            pb.keyframe_insert(data_path='location', frame=frame, group=bone_name)
+
+    def emit_cycle(n_samples, dur_f, per_sample):
+        """Keyframe a looping clip by evaluating per_sample(t, frame) at
+        n_samples+1 even phases across [0, 1]. Sampling BOTH endpoints
+        (i == 0 -> phase 0.0 and i == n_samples -> phase 1.0) makes the
+        first and last keyframe identical for any whole-period sinusoid,
+        which is the loop-safe first==last requirement: three.js wraps
+        t=duration back onto t=0 with no pop."""
+        for i in range(n_samples + 1):
+            t = i / n_samples
+            frame = round(t * dur_f)
+            per_sample(t, frame)
+
     UP = _V((0.0, 0.0, 1.0))
     DROP_FRAC_BY_SCALE = {0.0: 0.000, 0.25: 0.064, 0.5: 0.241, 0.75: 0.509, 1.0: 0.832}
     KEY_SCALES = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -1560,196 +1641,216 @@ def bake_animation_clips(arm_obj, fps=24):
     }
 
     # -----------------------------------------------------------------
-    # idle: subtle breathing + head sway + tail flick over 2.4 s.
+    # idle: ~4 s breathing loop (spec: subtle breathing chest/spine bob
+    # ~2%, slow tail sway, occasional head turn).
     #
-    # The previous bake just inserted two zero-delta keyframes (rest pose
-    # held for 2 s), which made the engine's Animator->update loop run
-    # CPU vertex skinning at 60 fps but produce visually identical bone
-    # palettes every frame -- the cat looked frozen in T-pose. Confirmed
-    # by the cat-annihilation 2026-04-25 playtest: 1106 frames over 22 s,
-    # vsync-locked 60 fps, but the player cat's silhouette in --frame-dump
-    # was bit-identical between t=1 s and t=10 s (frame-N to frame-600
-    # diff produced zero deltas in the cat region).
-    #
-    # Real idle motion has to satisfy three constraints to read at the
-    # game's typical viewing distance (camera ~3-5 m back, 16:9 1080p):
-    #
-    #   1. Breath cycle on chest+lumbar -- the most universal "alive"
-    #      cue, ~12 breaths/min ~= 0.2 Hz, but in stylised game idle
-    #      the cycle is sped up ~3x to 0.6 Hz so it reads in a 2 s
-    #      preview clip without the loop boundary popping.
-    #   2. Head micro-sway -- breaks the "statue head" look that pure
-    #      chest motion still has. Yaw + pitch combined, low frequency
-    #      so it doesn't feel jittery.
-    #   3. Tail tip motion -- the most visible single bone because of
-    #      its long lever arm; even small angular motion at the root
-    #      maps to multi-cm tip motion which is unambiguously visible
-    #      in screen space at typical camera distance.
-    #
-    # All amplitudes deliberately small (~2-6 deg) -- this is idle, not
-    # walk. The walk clip uses 22 deg leg swings; we want the silhouette
-    # delta between idle and walk to be obvious. If anything, prefer
-    # under-amplitude here -- a too-bouncy idle feels nauseous.
-    #
-    # Period choice (2.4 s) is intentionally not 2.0 s so the breath
-    # cycle and tail sway aren't both at the loop boundary -- subdividing
-    # the cycle into 9 keyframes (frames 0..2.4*fps) lets the breath hit
-    # exhale at frame 0 (= rest), inhale at the half-cycle, exhale again
-    # at the loop, with the tail running a half-period offset so the
-    # combined motion never returns to the exact same pose twice within
-    # the loop. That's what kills the "static statue" perception.
+    # Three "alive" cues, all conservative because this is idle not walk:
+    #   1. Breath -- two ~2 s cycles (~30 breaths/min) driven by a small
+    #      up-only root bob (~2% of torso span = the ribcage rising) plus a
+    #      gentle chest/spine pitch. (1-cos)/2 rests (0) at the loop seam
+    #      and swells mid-cycle, so it is inherently loop-safe and never
+    #      pushes the body DOWN (ground-safe).
+    #   2. Slow tail sway -- one yaw cycle across the loop, biggest at the
+    #      base and tapering to the tip (long lever arm = the most visible
+    #      single bone), with a small out-of-phase lift.
+    #   3. Occasional head turn -- one slow look across the loop (yaw)
+    #      composed with a tiny breath-shadowing pitch; kf_pose combines
+    #      them into one keyframe so neither clobbers the other.
     # -----------------------------------------------------------------
     idle = new_action('idle')
-    idle_dur = 2.4
-    idle_dur_f = int(idle_dur * fps)
+    idle_dur_f = int(4.0 * fps)
 
-    # Sample count: 9 keyframes -> 8 segments -> period repeats cleanly.
-    idle_samples = 9
+    def idle_sample(t, f):
+        breath = (1.0 - math.cos(2.0 * math.pi * 2.0 * t)) * 0.5
+        kf_pose('root', f, world_delta=UP * (breath * 0.02 * torso_span))
+        kf_pose('chest',         f, rots=[(side_axis, breath * rad(2.5))])
+        kf_pose('upper_back_02', f, rots=[(side_axis, breath * rad(1.8))])
+        kf_pose('upper_back_01', f, rots=[(side_axis, breath * rad(1.4))])
+        kf_pose('lumbar_01',     f, rots=[(side_axis, breath * rad(1.0))])
+        kf_pose('lumbar_02',     f, rots=[(side_axis, breath * rad(0.6))])
 
-    breath_amp_chest  = math.radians(3.0)   # chest pitches up on inhale
-    breath_amp_lumbar = math.radians(1.5)   # lumbar follows, smaller
-    head_pitch_amp    = math.radians(2.0)   # head bobs with breath
-    head_yaw_amp      = math.radians(3.0)   # head sways side-to-side
-    neck_pitch_amp    = math.radians(1.5)   # neck shadows head pitch
-    tail_yaw_amp      = math.radians(6.0)   # tail tip motion is biggest
-    tail_pitch_amp    = math.radians(2.0)   # tail also lifts subtly
+        tail_yaw  = math.sin(2.0 * math.pi * t) * rad(9.0)
+        tail_lift = math.sin(2.0 * math.pi * t + math.pi * 0.5) * rad(3.0)
+        kf_pose('tail_01', f, rots=[(UP, tail_yaw),       (side_axis, tail_lift)])
+        kf_pose('tail_02', f, rots=[(UP, tail_yaw * 0.7), (side_axis, tail_lift * 0.6)])
+        kf_pose('tail_03', f, rots=[(UP, tail_yaw * 0.45)])
+        kf_pose('tail_04', f, rots=[(UP, tail_yaw * 0.25)])
 
-    # Breath: cosine starting at 1 (exhaled rest) -> -1 (peak inhale) ->
-    # 1 (exhaled). Keyframe 0 lands at rest, keyframe 4 (mid-loop) at
-    # peak inhale, keyframe 8 back to rest. Standard sine for tail/head
-    # so they start at zero and oscillate +/- on either side.
-    for i in range(idle_samples):
-        f = int(i / (idle_samples - 1) * idle_dur_f)
-        phase = i / (idle_samples - 1)  # 0..1 across the loop
-
-        # Breath cosine: exhale at boundary, inhale mid-loop. Multiply by
-        # -1 because cos(0)=1, cos(pi)=-1, and we want frame 0 to BE
-        # rest (zero delta). So delta = (1 - cos(2*pi*phase)) / 2 * amp.
-        breath = (1.0 - math.cos(2.0 * math.pi * phase)) * 0.5
-        kf_rot('chest',     f, side_axis, breath * breath_amp_chest)
-        kf_rot('upper_back_01', f, side_axis, breath * breath_amp_chest * 0.7)
-        kf_rot('upper_back_02', f, side_axis, breath * breath_amp_chest * 0.5)
-        kf_rot('lumbar_01', f, side_axis, breath * breath_amp_lumbar)
-        kf_rot('lumbar_02', f, side_axis, breath * breath_amp_lumbar * 0.6)
-
-        # Head pitch shadows breath (cat's head dips slightly on exhale,
-        # rises on inhale). Same cosine, smaller amplitude, opposite sign
-        # so head appears to sit on the chest's motion.
-        kf_rot('neck_01', f, side_axis, -breath * neck_pitch_amp * 0.6)
-        kf_rot('neck_02', f, side_axis, -breath * neck_pitch_amp)
-        kf_rot('head',    f, side_axis, -breath * head_pitch_amp)
-
-        # Head yaw: independent sine at the same period, half-phase
-        # shifted so peak yaw lands between exhale and inhale. Reads as
-        # the cat looking around while breathing.
-        head_yaw = math.sin(2.0 * math.pi * phase + math.pi * 0.5) * head_yaw_amp
-        kf_rot('head', f, UP, head_yaw)
-
-        # Tail: yaw at full-period, plus a half-amplitude pitch lift on
-        # the off-phase. Generous amplitude because of the long lever
-        # arm -- 6 deg at the root maps to ~6-8 cm of tip motion on
-        # the canonical cat rig (tail length ~= 0.6-0.8 m), which is
-        # unambiguously visible in screen space.
-        tail_yaw = math.sin(2.0 * math.pi * phase) * tail_yaw_amp
-        kf_rot('tail_01', f, UP, tail_yaw)
-        kf_rot('tail_02', f, UP, tail_yaw * 0.7)
-        kf_rot('tail_03', f, UP, tail_yaw * 0.4)
-        tail_pitch = math.sin(2.0 * math.pi * phase + math.pi * 0.5) * tail_pitch_amp
-        kf_rot('tail_01', f, side_axis, tail_pitch)
-        kf_rot('tail_02', f, side_axis, tail_pitch * 0.6)
+        head_yaw = math.sin(2.0 * math.pi * t) * rad(7.0)
+        kf_pose('head',    f, rots=[(UP, head_yaw),        (side_axis, -breath * rad(2.0))])
+        kf_pose('neck_02', f, rots=[(UP, head_yaw * 0.5),  (side_axis, -breath * rad(1.2))])
+        kf_pose('neck_01', f, rots=[(UP, head_yaw * 0.25)])
+    emit_cycle(16, idle_dur_f, idle_sample)
     actions_to_push.append(idle)
 
     # -----------------------------------------------------------------
-    # walk: lateral gait, 1.0s
+    # walk: ~1.2 s 4-beat lateral-sequence loop (spec: LH, LF, RH, RF;
+    # legs swing via thigh/shin/foot + shoulder/upper/lower/paw chains;
+    # spine counter-sway; hips bob).
+    #
+    # Footfall order LH -> LF -> RH -> RF at even 0.25 phase spacing is a
+    # textbook lateral-sequence walk (each forefoot follows the hindfoot
+    # on the SAME side). Each entry: (swing bone, stride phase, knee bone,
+    # knee sign, secondary bone, paw bone). Knee sign encodes cat anatomy:
+    # the stifle (shin) folds rearward (-1), the elbow (lower_arm) folds
+    # forward (+1). The knee fold is gated to the forward-swing half
+    # (max(0, sin)) so the paw LIFTS while it travels forward and stays
+    # planted (0 fold) through stance -- ground-safe.
     # -----------------------------------------------------------------
     walk = new_action('walk')
-    dur = 1.0
-    dur_f = int(dur * fps)
-    amp = math.radians(22); knee_amp = math.radians(15)
-    for bone_name, phase in [('shoulder_L', 0.0), ('thigh_L', 0.0),
-                              ('shoulder_R', 0.5), ('thigh_R', 0.5)]:
-        for i in range(5):
-            f = int(i / 4 * dur_f)
-            a = math.sin(2 * math.pi * (i/4 + phase)) * amp
-            kf_rot(bone_name, f, side_axis, a)
-    for bone_name, phase in [('lower_arm_L', 0.0), ('shin_L', 0.0),
-                              ('lower_arm_R', 0.5), ('shin_R', 0.5)]:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            s = math.sin(2 * math.pi * (i/8 + phase))
-            a = -max(0.0, s) * knee_amp
-            kf_rot(bone_name, f, side_axis, a)
-    for i in range(5):
-        f = int(i / 4 * dur_f)
-        a = math.sin(2 * math.pi * i / 4) * math.radians(10)
-        kf_rot('tail_01', f, UP, a)
-    head_pitch = math.radians(4); head_yaw = math.radians(6)
-    for bone_name, w in [('neck_01', 0.6), ('neck_02', 1.0)]:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            a = math.sin(2 * math.pi * i / 8) * head_pitch * w
-            kf_rot(bone_name, f, side_axis, a)
-    for i in range(5):
-        f = int(i / 4 * dur_f)
-        a = -math.sin(2 * math.pi * i / 4) * head_yaw
-        kf_rot('head', f, UP, a)
+    walk_dur_f = int(1.2 * fps)
+    walk_swing_amp = rad(15.0)
+    walk_knee_amp  = rad(20.0)
+    walk_legs = [
+        ('thigh_L',    0.00, 'shin_L',      -1.0, 'foot_L',      'paw_back_L'),
+        ('shoulder_L', 0.25, 'lower_arm_L', +1.0, 'upper_arm_L', 'paw_front_L'),
+        ('thigh_R',    0.50, 'shin_R',      -1.0, 'foot_R',      'paw_back_R'),
+        ('shoulder_R', 0.75, 'lower_arm_R', +1.0, 'upper_arm_R', 'paw_front_R'),
+    ]
+
+    def walk_sample(t, f):
+        for swing_bone, phase, knee_bone, knee_sign, second_bone, paw_bone in walk_legs:
+            swing = math.sin(2.0 * math.pi * (t + phase)) * walk_swing_amp
+            lift  = max(0.0, math.sin(2.0 * math.pi * (t + phase))) * walk_knee_amp * knee_sign
+            kf_pose(swing_bone,  f, rots=[(side_axis, swing)])
+            kf_pose(knee_bone,   f, rots=[(side_axis, lift)])
+            kf_pose(second_bone, f, rots=[(side_axis, -swing * 0.35)])
+            kf_pose(paw_bone,    f, rots=[(side_axis, -lift * 0.30)])
+        # Spine counter-sway: the hips-end lumbar yaws one way while the
+        # chest yaws the other at stride frequency = the lateral S-bend of
+        # a walking spine.
+        sway = math.sin(2.0 * math.pi * t)
+        kf_pose('lumbar_01',     f, rots=[(UP,  sway * rad(5.0))])
+        kf_pose('lumbar_02',     f, rots=[(UP,  sway * rad(4.0))])
+        kf_pose('chest',         f, rots=[(UP, -sway * rad(4.0))])
+        kf_pose('upper_back_02', f, rots=[(UP, -sway * rad(2.5))])
+        # Hips bob: two up-only bounces per stride (pelvis rises as each
+        # support pair passes under the body); never sinks the feet.
+        bob = (1.0 - math.cos(2.0 * math.pi * 2.0 * t)) * 0.5
+        kf_pose('root', f, world_delta=UP * (bob * 0.05 * hip_world_height))
+        # Head counter-yaw keeps the gaze roughly forward; tail trails.
+        kf_pose('head',    f, rots=[(UP, -sway * rad(3.0))])
+        kf_pose('tail_01', f, rots=[(UP,  sway * rad(6.0))])
+        kf_pose('tail_02', f, rots=[(UP,  sway * rad(4.0))])
+    emit_cycle(12, walk_dur_f, walk_sample)
     actions_to_push.append(walk)
 
     # -----------------------------------------------------------------
-    # run: simplified bound-style gallop, 0.55s. See
-    # asset_browser.html buildRunClip for the rationale - both fronts
-    # synced, both backs synced, 0.25-stride offset between pairs, big
-    # spine flex. Reads cleanly for an in-place preview.
+    # run: ~0.6 s 2-beat gallop loop (spec: 2-beat gallop-ish gait, larger
+    # amplitudes, body pitch).
+    #
+    # Both hinds fire together (phase 0.0), then both fores together after
+    # a ~0.45 stride offset = a bounding 2-beat gallop. Swing/knee amplitudes
+    # are roughly double the walk, and the whole spine pitches (gathers and
+    # extends) once per stride for the galloping pump. Same anatomy-aware
+    # knee signs and forward-swing-gated lift as the walk keep the paws off
+    # the ground during protraction and planted through stance.
     # -----------------------------------------------------------------
     run = new_action('run')
-    dur = 0.55; dur_f = int(dur * fps)
-    back_leg_amp   = math.radians(50)
-    front_leg_amp  = math.radians(45)
-    back_knee_amp  = math.radians(60)
-    front_knee_amp = math.radians(50)
-    spine_amp      = math.radians(28)
-    chest_amp      = math.radians(18)
-    legs_run = [
-        ('thigh_L',    0.00, back_leg_amp),
-        ('thigh_R',    0.00, back_leg_amp),
-        ('shoulder_L', 0.25, front_leg_amp),
-        ('shoulder_R', 0.25, front_leg_amp),
+    run_dur_f = int(0.6 * fps)
+    run_swing_amp = rad(30.0)
+    run_knee_amp  = rad(38.0)
+    run_front_phase = 0.45
+    run_legs = [
+        ('thigh_L',    0.00,            'shin_L',      -1.0, 'foot_L',      'paw_back_L'),
+        ('thigh_R',    0.00,            'shin_R',      -1.0, 'foot_R',      'paw_back_R'),
+        ('shoulder_L', run_front_phase, 'lower_arm_L', +1.0, 'upper_arm_L', 'paw_front_L'),
+        ('shoulder_R', run_front_phase, 'lower_arm_R', +1.0, 'upper_arm_R', 'paw_front_R'),
     ]
-    for bone_name, phase, legamp in legs_run:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            a = math.sin(2 * math.pi * (i/8 + phase)) * legamp
-            kf_rot(bone_name, f, side_axis, a)
-    # Knees fold rearward (negative); elbows fold forward (positive) -
-    # opposite signs for the two because cat knees and elbows flex in
-    # anatomically opposite directions. See asset_browser.html comments.
-    knees_run = [
-        ('shin_L',      0.00, back_knee_amp,  -1.0),
-        ('shin_R',      0.00, back_knee_amp,  -1.0),
-        ('lower_arm_L', 0.25, front_knee_amp, +1.0),
-        ('lower_arm_R', 0.25, front_knee_amp, +1.0),
-    ]
-    for bone_name, phase, kneeamp, sign in knees_run:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            s = math.sin(2 * math.pi * (i/8 + phase))
-            a = sign * max(0.0, s) * kneeamp
-            kf_rot(bone_name, f, side_axis, a)
-    for bone_name, bend_amp in [('spine_01', spine_amp), ('chest', chest_amp)]:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            a = math.cos(2 * math.pi * i / 8) * bend_amp
-            kf_rot(bone_name, f, side_axis, a)
-    # Head stabilization: counter-rotate neck to cancel spine+chest flex,
-    # so the head stays level on its target while the body pumps. See
-    # asset_browser.html buildRunClip for the rationale.
-    spine_sum = spine_amp + chest_amp
-    for bone_name, w in [('neck_01', 0.5), ('neck_02', 0.5)]:
-        for i in range(9):
-            f = int(i / 8 * dur_f)
-            a = -math.cos(2 * math.pi * i / 8) * spine_sum * w
-            kf_rot(bone_name, f, side_axis, a)
+
+    def run_sample(t, f):
+        for swing_bone, phase, knee_bone, knee_sign, second_bone, paw_bone in run_legs:
+            swing = math.sin(2.0 * math.pi * (t + phase)) * run_swing_amp
+            lift  = max(0.0, math.sin(2.0 * math.pi * (t + phase))) * run_knee_amp * knee_sign
+            kf_pose(swing_bone,  f, rots=[(side_axis, swing)])
+            kf_pose(knee_bone,   f, rots=[(side_axis, lift)])
+            kf_pose(second_bone, f, rots=[(side_axis, -swing * 0.40)])
+            kf_pose(paw_bone,    f, rots=[(side_axis, -lift * 0.25)])
+        # Body pitch: the spine gathers/extends once per stride (cosine, so
+        # its value at the seam matches for loop safety). The neck
+        # counter-rotates to hold the head roughly level while the torso
+        # pumps.
+        pitch = math.cos(2.0 * math.pi * t)
+        spine_pitch = pitch * rad(14.0)
+        chest_pitch = pitch * rad(10.0)
+        kf_pose('spine_01',  f, rots=[(side_axis, spine_pitch)])
+        kf_pose('lumbar_02', f, rots=[(side_axis, spine_pitch * 0.6)])
+        kf_pose('chest',     f, rots=[(side_axis, chest_pitch)])
+        neck_counter = -pitch * (rad(14.0) + rad(10.0)) * 0.5
+        kf_pose('neck_01', f, rots=[(side_axis, neck_counter)])
+        kf_pose('neck_02', f, rots=[(side_axis, neck_counter)])
+        # Suspension: one up-only bounce per stride; never sinks the feet.
+        bounce = (1.0 - math.cos(2.0 * math.pi * t)) * 0.5
+        kf_pose('root', f, world_delta=UP * (bounce * 0.07 * hip_world_height))
+        # Tail streams with the body pump.
+        kf_pose('tail_01', f, rots=[(side_axis, -pitch * rad(8.0))])
+        kf_pose('tail_02', f, rots=[(side_axis, -pitch * rad(6.0))])
+    emit_cycle(8, run_dur_f, run_sample)
     actions_to_push.append(run)
+
+    # -----------------------------------------------------------------
+    # attack: ~0.8 s one-shot lunge (spec: weight shift back then a forward
+    # lunge with head strike + forepaw swipe).
+    #
+    # Normalised timeline: 0.0 rest -> 0.30 weight-shift BACK (anticipation
+    # coil) -> 0.58 forward LUNGE with head strike + forepaw swipe -> 0.80
+    # partial recover -> 1.0 rest. It is a one-shot (not looped), but opens
+    # and closes on the rest pose so it blends cleanly out of / back into
+    # idle. The root translates only HORIZONTALLY (forward_axis, z = 0) so
+    # the lunge never drives paws through the ground; the lean/crouch is
+    # done with spine ROTATION instead of a downward drop.
+    # -----------------------------------------------------------------
+    attack = new_action('attack')
+    attack_dur_f = int(0.8 * fps)
+
+    def AF(t):
+        return round(t * attack_dur_f)
+
+    def attack_bone(bone_name, anticip, strike):
+        """5 keys: rest -> anticipation -> strike peak -> quarter-strength
+        recover -> rest. anticip/strike are world-axis rotation lists."""
+        kf_pose(bone_name, AF(0.00), rots=[])
+        kf_pose(bone_name, AF(0.30), rots=anticip)
+        kf_pose(bone_name, AF(0.58), rots=strike)
+        kf_pose(bone_name, AF(0.80), rots=[(ax, a * 0.25) for ax, a in strike])
+        kf_pose(bone_name, AF(1.00), rots=[])
+
+    lunge_dist = 0.55 * torso_span
+    back_dist  = 0.16 * torso_span
+
+    # Spine: lean back on the coil, dip forward on the lunge.
+    attack_bone('chest',         [(side_axis,  rad(12.0))], [(side_axis, -rad(16.0))])
+    attack_bone('spine_01',      [(side_axis,  rad(8.0))],  [(side_axis, -rad(12.0))])
+    attack_bone('upper_back_02', [(side_axis,  rad(6.0))],  [(side_axis, -rad(8.0))])
+    # Head strike: pull back/up on the coil, whip forward-down on the hit.
+    attack_bone('neck_01', [(side_axis,  rad(10.0))], [(side_axis, -rad(22.0))])
+    attack_bone('neck_02', [(side_axis,  rad(10.0))], [(side_axis, -rad(28.0))])
+    attack_bone('head',    [(side_axis,  rad(8.0))],  [(side_axis, -rad(34.0))])
+    # Forepaw swipe: both forelimbs coil up, then swipe forward-down; the
+    # elbow (lower_arm) extends into the strike.
+    for shoulder_bone, upper_bone, lower_bone in (
+        ('shoulder_L', 'upper_arm_L', 'lower_arm_L'),
+        ('shoulder_R', 'upper_arm_R', 'lower_arm_R'),
+    ):
+        attack_bone(shoulder_bone, [(side_axis,  rad(20.0))], [(side_axis, -rad(42.0))])
+        attack_bone(upper_bone,    [(side_axis,  rad(14.0))], [(side_axis, -rad(20.0))])
+        attack_bone(lower_bone,    [(side_axis,  rad(24.0))], [(side_axis,  rad(10.0))])
+    # Back legs load under the body on the coil, then drive to power the
+    # lunge.
+    for thigh_bone, shin_bone in (('thigh_L', 'shin_L'), ('thigh_R', 'shin_R')):
+        attack_bone(thigh_bone, [(side_axis,  rad(16.0))], [(side_axis, -rad(18.0))])
+        attack_bone(shin_bone,  [(side_axis, -rad(20.0))], [(side_axis,  -rad(6.0))])
+    # Tail flicks up for balance on the strike.
+    attack_bone('tail_01', [(side_axis, -rad(8.0))], [(side_axis, rad(14.0))])
+    attack_bone('tail_02', [(side_axis, -rad(6.0))], [(side_axis, rad(10.0))])
+    # Root: settle back on the coil, drive forward on the lunge, ease back
+    # to rest. Horizontal only (z = 0) so paws never breach the ground.
+    kf_pose('root', AF(0.00), world_delta=_V((0.0, 0.0, 0.0)))
+    kf_pose('root', AF(0.30), world_delta=forward_axis * (-back_dist))
+    kf_pose('root', AF(0.58), world_delta=forward_axis * (lunge_dist))
+    kf_pose('root', AF(0.80), world_delta=forward_axis * (lunge_dist * 0.3))
+    kf_pose('root', AF(1.00), world_delta=_V((0.0, 0.0, 0.0)))
+    actions_to_push.append(attack)
 
     # -----------------------------------------------------------------
     # sitDown: deep back-leg fold + root drop, 1.3s, one-shot
@@ -1947,10 +2048,10 @@ def main():
     parent_with_auto_weights(mesh_obj, arm_obj)
 
     # Bake procedural animation clips into the armature BEFORE export so
-    # the output GLB carries walk / run / sit / lay / standUp / idle.
-    # The game engine (and any three.js viewer) can play them directly
-    # off gltf.animations - no need to duplicate the clip math in engine
-    # code.
+    # the output GLB carries idle / walk / run / attack (the pipeline
+    # minimum set) plus sit / lay / standUp. The game engine (and any
+    # three.js viewer) can play them directly off gltf.animations - no
+    # need to duplicate the clip math in engine code.
     try:
         bake_animation_clips(arm_obj)
     except Exception as err:

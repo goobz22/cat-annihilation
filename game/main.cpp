@@ -170,6 +170,29 @@ struct CommandLineArgs {
     bool enableCpuSkinningExplicitOn  = false;
     bool enableCpuSkinningExplicitOff = false;
 
+    // --disable-gpu-skinning: triage switch for the GPU-skinning path that
+    // is now the DEFAULT (2026-07-16 iteration: bone palettes upload to a
+    // per-frame dynamic UBO ring and entity_skinned.vert does the
+    // per-vertex blend, so every animated character plays its Animator
+    // clips at full frame rate — the 2026-04-26 "bind-pose by default"
+    // perf compromise is retired).
+    //
+    // Setting this forces palette-carrying draws back to bind-pose
+    // (ScenePass::SkinningMode::BindPose), reproducing the pre-GPU-skinning
+    // frames exactly. That gives a three-way bisect for any skinning
+    // regression:
+    //   (default)                → GPU skinning     (the suspect)
+    //   --disable-gpu-skinning   → bind-pose        (no skinning at all)
+    //   --enable-cpu-skinning    → CPU skinning     (same palette, host
+    //                                                executor — isolates
+    //                                                shader/pipeline bugs
+    //                                                from Animator bugs)
+    // --enable-cpu-skinning wins when both flags are passed: an operator
+    // explicitly asking for the CPU A/B path shouldn't have it silently
+    // downgraded to bind-pose by a stale wrapper script that also passes
+    // the disable flag.
+    bool disableGpuSkinning = false;
+
     // --starting-wave <N>: bypass wave 1 and seed the WaveSystem to spawn
     // wave N as the first wave in autoplay mode. Default 1 = unchanged
     // pre-2026-04-25 behaviour (every nightly playtest spawns wave 1
@@ -401,6 +424,11 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             // if a future change reintroduces the >15-skinned-entity
             // bottleneck and a repro needs the bind-pose fallback.
             args.enableCpuSkinningExplicitOff = true;
+        } else if (arg == "--disable-gpu-skinning") {
+            // Presence flips it — same single-token shape as
+            // --enable-ribbon-trails. See the struct field's docblock for
+            // the three-way skinning bisect this enables.
+            args.disableGpuSkinning = true;
         } else if (arg == "--day-night-rate") {
             // Space-separated form: --day-night-rate <seconds>.
             // Plumbed straight into ScenePass::SetDayCycleSeconds() after
@@ -512,9 +540,10 @@ void printHelp() {
     std::cout << "  --log-file <path>          Mirror Logger output to <path> (in addition to console)\n";
     std::cout << "  --frame-dump <path>        After loop exits, write final swapchain image to <path> (.ppm)\n";
     std::cout << "  --enable-ribbon-trails     Render CUDA-produced ribbon trails for particle systems\n";
-    std::cout << "  --enable-cpu-skinning      Run per-frame CPU vertex skinning for animated entities\n";
-    std::cout << "                             (default OFF: entities render in bind-pose at full fps;\n";
-    std::cout << "                              ON: animated but expect 2-5 fps with full waves until GPU skinning lands)\n";
+    std::cout << "  --enable-cpu-skinning      Force LEGACY per-frame CPU vertex skinning (A/B triage vs the\n";
+    std::cout << "                             default GPU path; expect 2-5 fps with full waves)\n";
+    std::cout << "  --disable-gpu-skinning     Turn OFF the default GPU skinning; animated entities render\n";
+    std::cout << "                             in bind-pose (pre-2026-07-16 behaviour, for regression bisects)\n";
     std::cout << "  --starting-wave <N>        In autoplay mode, spawn wave N first instead of wave 1 (default 1)\n";
     std::cout << "  --day-night-rate <S>       Sky cycle period in seconds (default 30; 0 freezes at midday for golden-image CI)\n";
     std::cout << "  --cinematic-orbit-camera [<rad/s>]  Slowly orbit the camera around the player so portfolio captures show multiple angles\n";
@@ -856,23 +885,39 @@ int main(int argc, char* argv[]) {
     Engine::Logger::info(std::string("[cli] --enable-ribbon-trails: gate=") +
                          (cmdArgs.enableRibbonTrails ? "on" : "off"));
 
-    // --enable-cpu-skinning: same parse-only-then-forward shape as
-    // --enable-ribbon-trails. The flag drives the per-frame CPU vertex skin
-    // path inside MeshSubmissionSystem. Default OFF (entities draw bind-pose)
-    // is the only path that meets a playable frame budget when the wave is
-    // active (~17-20 visible skinned entities collapse fps to 2-5 on the CPU
-    // skin loop — see the setter docblock in MeshSubmissionSystem.hpp for
-    // the heartbeat trace). Logging the resolved gate value at startup so a
-    // reviewer reading the playtest log can see which skinning path is live
-    // without grepping for downstream evidence.
+    // ---- Skinning mode resolution (GPU default, 2026-07-16) --------------
+    // One resolved decision, mirrored into the two consumers:
+    //   * MeshSubmissionSystem::SetEnableCpuSkinning keeps the historical
+    //     static flag queryable for game-layer diagnostics (it no longer
+    //     gates the bone-palette fill — palettes are computed for every
+    //     animator-bearing entity; see the setter docblock).
+    //   * ScenePass::SetSkinningMode is the actual per-draw routing:
+    //     GpuPalette (default) / CpuVertex (--enable-cpu-skinning) /
+    //     BindPose (--disable-gpu-skinning). --enable-cpu-skinning wins a
+    //     conflict — an operator explicitly requesting the CPU A/B path
+    //     shouldn't be downgraded to bind-pose by a stale wrapper script.
+    // The single [cli] skinning= line below is the greppable startup
+    // statement of which executor animates this session (design
+    // requirement: log once which skinning mode is live).
     CatEngine::Renderer::MeshSubmissionSystem::SetEnableCpuSkinning(
         cmdArgs.enableCpuSkinning);
-    Engine::Logger::info(std::string("[cli] --enable-cpu-skinning: gate=") +
-                         (cmdArgs.enableCpuSkinning
-                              ? "on (per-frame CPU vertex skinning, expect 2-5 fps with full waves)"
-                              : "off (entities render in bind-pose at full fps; default)"));
+    using ScenePassSkinningMode = CatEngine::Renderer::ScenePass::SkinningMode;
+    const ScenePassSkinningMode resolvedSkinningMode =
+        cmdArgs.enableCpuSkinning ? ScenePassSkinningMode::CpuVertex
+        : cmdArgs.disableGpuSkinning ? ScenePassSkinningMode::BindPose
+                                     : ScenePassSkinningMode::GpuPalette;
+    Engine::Logger::info(std::string("[cli] skinning=") +
+                         (resolvedSkinningMode == ScenePassSkinningMode::GpuPalette
+                              ? "gpu (default: bone palettes in a dynamic UBO ring, "
+                                "per-vertex blend in entity_skinned.vert)"
+                          : resolvedSkinningMode == ScenePassSkinningMode::CpuVertex
+                              ? "cpu (--enable-cpu-skinning: legacy host vertex loop, "
+                                "expect 2-5 fps with full waves)"
+                              : "off (--disable-gpu-skinning: animated entities render "
+                                "in bind-pose)"));
 
     if (auto* scenePass = renderer->GetScenePass()) {
+        scenePass->SetSkinningMode(resolvedSkinningMode);
         scenePass->SetRibbonsEnabled(cmdArgs.enableRibbonTrails);
         // 2026-04-25 SHIP-THE-CAT iter (time-of-day cycling): forward the
         // configured cycle period to ScenePass. A value of 0 (or negative)

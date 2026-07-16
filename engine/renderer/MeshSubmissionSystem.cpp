@@ -220,13 +220,17 @@ Engine::vec3 ComputeWorldCenter(const Engine::Transform& transform,
 
 } // namespace
 
-// Module-scope flag for the per-frame CPU-skinning hot path. Initialised to
-// false (skinning OFF) so a fresh process renders entities in bind-pose at
-// full frame rate; main.cpp's CLI parser flips this on via SetEnableCpuSkinning
-// when the user opts in with `--enable-cpu-skinning`. See the docblock on the
-// setter in MeshSubmissionSystem.hpp for the full WHY (2026-04-26 perf halt:
-// ~17-20 skinned entities * ~150k verts each = 2-3 M per-frame transforms on
-// a single CPU thread, observed fps collapse 2-5).
+// Module-scope flag recording that the operator forced the LEGACY CPU
+// vertex-skinning path via `--enable-cpu-skinning`. Since the 2026-07-16
+// GPU-skinning iteration this flag no longer gates the bone-palette fill
+// below (palettes are computed for every animator-bearing entity —
+// they're microseconds; it was the per-VERTEX host loop that cost the
+// 2026-04-26 fps collapse to 2-5 at wave scale). main.cpp still sets it
+// via SetEnableCpuSkinning and mirrors the same decision into
+// ScenePass::SetSkinningMode(CpuVertex), which is where the actual
+// routing happens; this flag remains queryable (IsCpuSkinningEnabled)
+// for game-layer diagnostics. See MeshSubmissionSystem.hpp's setter
+// docblock for the full history.
 static bool s_enableCpuSkinning = false;
 
 void MeshSubmissionSystem::SetEnableCpuSkinning(bool enabled) {
@@ -721,14 +725,13 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             }
 
             // ---- Path (c): skinned mesh bone palette --------------------
-            // If the entity has an Animator AND the model carries skinned
-            // vertices (joints/weights authored), pull the per-frame
-            // skinning matrices and stash them on the EntityDraw. ScenePass
-            // takes ownership of the vector by-move; the Animator's internal
-            // state is unchanged. Path (c) is gated inside ScenePass on
-            // (skinningKey != null) AND (bonePalette non-empty), so leaving
-            // bonePalette empty here cleanly falls through to bind-pose
-            // path (b) for entities without animation.
+            // If the entity has an Animator, pull the per-frame skinning
+            // matrices and stash them on the EntityDraw. ScenePass routes
+            // palette-carrying draws by its SkinningMode (default:
+            // GPU-skinned pipeline; --enable-cpu-skinning forces the legacy
+            // host loop; --disable-gpu-skinning forces bind-pose), so
+            // leaving bonePalette empty here cleanly falls through to
+            // bind-pose path (b) for entities without animation.
             //
             // WHY animator pointer as the skinningKey: it's a stable
             // shared_ptr-managed address tied to the entity's lifetime
@@ -738,47 +741,24 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             // animators). ScenePass treats it as opaque pointer identity
             // for cache lookup — it never dereferences the animator.
             //
-            // Cost: getCurrentSkinningMatrices() runs computeWorldTransforms
-            // + computeSkinningMatrices for the skeleton's bones (~37 for
-            // a Meshy cat) — a handful of microseconds per entity. The
-            // expensive part (CPU vertex skinning over ~150k verts) lives
-            // in ScenePass::EnsureSkinnedMesh, gated to actually-skinned
-            // entities only.
-            //
-            // 2026-04-26 perf halt: the "expensive part" turned out to be the
-            // ENTIRE frame budget for a wave-active scene. With ~17-20 skinned
-            // NPCs + dogs visible during wave 1, the per-vertex weighted-mat4
-            // sum + transform + normalise loop in ScenePass::EnsureSkinnedMesh
-            // drops fps from 46 (steady state, 0-2 visible skinned entities)
-            // to 2-5 (steady state, 17-20 visible skinned entities). The
-            // smoking-gun heartbeat trace (perf-repro.log 2026-04-26 01:02-01:03)
-            // shows fps recovery from 5 -> 46 the instant wave 1 clears and
-            // frustum culling drops the count back to 2. The CPU loop is the
-            // bottleneck regardless of which authored animation clip plays.
-            //
-            // Until GPU-skinning lands (skin matrices uploaded as a UBO/SSBO
-            // and applied in a vertex shader, kept on the GPU side per
-            // entity instead of writing back ~3.6 MB of skinned vertex data
-            // per entity per frame to a HostCoherent VB), we DO NOT populate
-            // skinningKey/bonePalette by default. ScenePass then naturally
-            // falls through to its bind-pose Path (b) — every entity still
-            // draws as the static GLB at its current world transform; the
-            // mesh is frozen in T-pose / authored bind-pose, but the frame
-            // rate is playable.
-            //
-            // Opt-in via `MeshSubmissionSystem::SetEnableCpuSkinning(true)`
-            // (CLI: `--enable-cpu-skinning`) for screenshot / portfolio runs
-            // where the visual cost of bind-pose outweighs the fps cost of
-            // CPU skinning (e.g. low-NPC-count "hero" scenes).
-            //
-            // We still call getCurrentSkinningMatrices when CPU skinning is
-            // off only when the flag is on; the bone-palette compute itself
-            // (~37 bones * a few mat4 mults per bone) is microseconds, but
-            // when we're not going to use the result there's no point
-            // generating it — and skipping the call also avoids the std::vector
-            // resize/zero that would otherwise allocate ~37*64 = 2.4 KB of
-            // per-frame zeroed memory per entity.
-            if (s_enableCpuSkinning && meshComponent->animator != nullptr) {
+            // WHY the fill is UNCONDITIONAL when an animator exists
+            // (2026-07-16 GPU-skinning iteration): the 2026-04-26 perf halt
+            // that gated this behind s_enableCpuSkinning was never about
+            // the palette — getCurrentSkinningMatrices() is
+            // computeWorldTransforms + computeSkinningMatrices over ~37
+            // bones, a handful of microseconds and ~2.4 KB per entity per
+            // frame. The frame-budget killer was the PER-VERTEX CPU loop in
+            // ScenePass::EnsureSkinnedMesh (~150k weighted-mat4 transforms
+            // per entity; fps 46 -> 2-5 the moment a wave put ~17-20
+            // skinned entities on screen, heartbeat trace perf-repro.log
+            // 2026-04-26 01:02-01:03). With the blend moved into
+            // entity_skinned.vert, the palette is all the CPU contributes
+            // per skinned draw — so every animator-bearing entity hands its
+            // palette over and animates by default. s_enableCpuSkinning no
+            // longer gates this fill; it survives only as the CLI signal
+            // main.cpp translates into ScenePass::SkinningMode::CpuVertex
+            // for A/B triage of the GPU path.
+            if (meshComponent->animator != nullptr) {
                 ++withAnimator;
                 meshComponent->animator->getCurrentSkinningMatrices(draw.bonePalette);
                 if (!draw.bonePalette.empty()) {

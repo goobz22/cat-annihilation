@@ -2188,16 +2188,15 @@ bool ScenePass::EnsureModelGpuMesh(const CatEngine::Model* model) {
 // relies on for the "frozen at idle" frame to look identical to the
 // previous bind-pose-only render.
 //
-// WHY CPU rather than GPU skinning here: GPU skinning needs (a) a new
-// vertex-input layout that consumes joints+weights, (b) a new pipeline
-// that consumes a per-frame bone palette UBO via descriptor set, (c)
-// descriptor pool + descriptor set allocation per entity. Each of those
-// is a non-trivial Vulkan moving part. CPU skinning lights up animated
-// cats with zero new pipeline state — it only adds a per-entity buffer
-// and a per-frame compute loop. A future iteration replaces this with
-// the GPU path once the visible win is locked in (see follow-up note in
-// ENGINE_PROGRESS.md). At the player + handful-of-dogs scale this
-// iteration targets, the ~1 ms/frame CPU cost is invisible.
+// STATUS (2026-07-16): this is now the LEGACY path. GPU skinning landed
+// (CreateSkinnedEntityPipeline + the bone-palette ring + entity_skinned
+// .vert) and is the default route for palette-carrying draws; this
+// function runs only when the operator forces SkinningMode::CpuVertex
+// via --enable-cpu-skinning, kept alive as the A/B comparison baseline
+// for triaging the GPU path (same palette, same models, different
+// executor — a divergence between the two isolates shader/pipeline bugs
+// from Animator/palette bugs). It retains its historical behaviour and
+// perf profile: fine for one hero entity, 2-5 fps at wave scale.
 bool ScenePass::EnsureSkinnedMesh(const void* skinningKey,
                                    const CatEngine::Model* model,
                                    const std::vector<Engine::mat4>& bonePalette) {
@@ -2391,6 +2390,472 @@ bool ScenePass::EnsureSkinnedMesh(const void* skinningKey,
     cached.vertexBuffer->UpdateData(packedVertices.data(),
                                     packedVertices.size() * sizeof(float),
                                     0);
+    return true;
+}
+
+// ============================================================================
+// GPU skinning (2026-07-16 iteration): palette ring + skinned pipeline +
+// per-Model skin-attribute side-car
+// ============================================================================
+//
+// This is the path that finally retires the perf-vs-animation tradeoff the
+// engine has carried since the 2026-04-26 halt: the CPU path above moves
+// ~3.6 MB of re-skinned vertices per entity per frame and collapses to
+// 2-5 fps at wave scale, while this path moves ONE 16 KB bone palette per
+// entity per frame and lets the vertex shader do the blend where it's
+// effectively free. The bind-pose VB/IB caches are shared byte-for-byte;
+// the only new per-Model memory is a 32 B/vertex joints+weights stream.
+
+bool ScenePass::CreateBonePaletteResources() {
+    if (m_device == nullptr) return false;
+    VkDevice dev = m_device->GetDevice();
+
+    // Sanity-check the two spec-guaranteed limits this design leans on.
+    // Both are hard guarantees for conformant Vulkan implementations
+    // (maxUniformBufferRange >= 16384, minUniformBufferOffsetAlignment a
+    // power of two <= 256), so these can only fire on a broken driver —
+    // but failing HERE with a message beats a validation error at draw
+    // time, and the bind-pose fallback keeps the game playable.
+    const VkPhysicalDeviceLimits& limits = m_device->GetProperties().limits;
+    if (limits.maxUniformBufferRange < kBonePaletteBytesPerDraw
+        || (limits.minUniformBufferOffsetAlignment != 0
+            && kBonePaletteBytesPerDraw % limits.minUniformBufferOffsetAlignment != 0)) {
+        std::cerr << "[ScenePass] bone palette: device limits reject the "
+                  << "16 KB dynamic-UBO layout (maxUniformBufferRange="
+                  << limits.maxUniformBufferRange
+                  << ", minUniformBufferOffsetAlignment="
+                  << limits.minUniformBufferOffsetAlignment << ")\n";
+        return false;
+    }
+
+    // ---- Descriptor set layout: set=1, binding=0, dynamic UBO ----------
+    // DYNAMIC so one descriptor set per ring slot serves every skinned
+    // draw of that frame — the per-draw vkCmdBindDescriptorSets supplies
+    // the 16 KB-aligned offset selecting the draw's palette slice. The
+    // alternative (one static-UBO set per draw) would need a pool sized
+    // for draws × frames and a descriptor write per draw; dynamic offsets
+    // are the API's purpose-built answer for exactly this pattern.
+    VkDescriptorSetLayoutBinding paletteBinding{};
+    paletteBinding.binding = 0;
+    paletteBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    paletteBinding.descriptorCount = 1;
+    paletteBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    paletteBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslInfo.bindingCount = 1;
+    dslInfo.pBindings = &paletteBinding;
+    if (vkCreateDescriptorSetLayout(dev, &dslInfo, nullptr,
+                                    &m_bonePaletteDescriptorSetLayout) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] bone palette descriptor set layout creation failed\n";
+        return false;
+    }
+
+    // ---- Descriptor pool: exactly one set per ring slot -----------------
+    // No FREE_DESCRIPTOR_SET_BIT for the same reason as the texture pool:
+    // sets live for the session and die with the pool at Shutdown.
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    poolSize.descriptorCount = kBonePaletteRingSlots;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = kBonePaletteRingSlots;
+    if (vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+                               &m_bonePaletteDescriptorPool) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] bone palette descriptor pool creation failed\n";
+        return false;
+    }
+
+    // ---- Ring buffers + descriptor sets ---------------------------------
+    // HostVisible + HostCoherent: the palettes are written by the CPU
+    // during command recording and read once by the vertex stage — a
+    // classic streaming-uniform pattern where a device-local copy via
+    // staging would add a transfer + barrier per frame to save one PCIe
+    // read of 16 KB per draw. Not worth it at ≤64 draws/frame.
+    for (uint32_t slot = 0; slot < kBonePaletteRingSlots; ++slot) {
+        RHI::BufferDesc bufferDesc{};
+        bufferDesc.size = static_cast<uint64_t>(kMaxGpuSkinnedDrawsPerFrame)
+                          * kBonePaletteBytesPerDraw;
+        bufferDesc.usage = RHI::BufferUsage::Uniform;
+        bufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible
+                                    | RHI::MemoryProperty::HostCoherent;
+        bufferDesc.debugName = "BonePaletteRingBuffer";
+        m_bonePaletteRing[slot].buffer =
+            std::make_unique<RHI::VulkanBuffer>(m_device, bufferDesc);
+
+        VkDescriptorSetAllocateInfo setAlloc{};
+        setAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        setAlloc.descriptorPool = m_bonePaletteDescriptorPool;
+        setAlloc.descriptorSetCount = 1;
+        setAlloc.pSetLayouts = &m_bonePaletteDescriptorSetLayout;
+        if (vkAllocateDescriptorSets(dev, &setAlloc,
+                                     &m_bonePaletteRing[slot].descriptorSet) != VK_SUCCESS) {
+            std::cerr << "[ScenePass] bone palette descriptor set alloc failed (slot "
+                      << slot << ")\n";
+            return false;
+        }
+
+        // range = ONE palette (16 KB), offset 0; the dynamic offset at
+        // bind time slides the 16 KB window across the ring buffer. The
+        // shader-visible size is therefore always exactly the mat4[256]
+        // block entity_skinned.vert declares.
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_bonePaletteRing[slot].buffer->GetVkBuffer();
+        bufferInfo.offset = 0;
+        bufferInfo.range = kBonePaletteBytesPerDraw;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_bonePaletteRing[slot].descriptorSet;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        write.pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+    }
+
+    std::cout << "[ScenePass] bone palette ring ready ("
+              << kBonePaletteRingSlots << " slots x "
+              << kMaxGpuSkinnedDrawsPerFrame << " draws x "
+              << kBonePaletteBytesPerDraw / 1024 << " KB)\n";
+    return true;
+}
+
+void ScenePass::DestroyBonePaletteResources() {
+    if (m_device == nullptr) return;
+    VkDevice dev = m_device->GetDevice();
+
+    for (auto& slot : m_bonePaletteRing) {
+        slot.buffer.reset();
+        // Individual sets are freed by the pool destroy below (no
+        // FREE_DESCRIPTOR_SET_BIT — same teardown contract as the
+        // texture pool).
+        slot.descriptorSet = VK_NULL_HANDLE;
+    }
+    if (m_bonePaletteDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(dev, m_bonePaletteDescriptorPool, nullptr);
+        m_bonePaletteDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (m_bonePaletteDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev, m_bonePaletteDescriptorSetLayout, nullptr);
+        m_bonePaletteDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+bool ScenePass::CreateSkinnedEntityPipeline() {
+    // Preconditions wired by Setup(): the static entity pipeline exists
+    // (we share its fragment shader module and mirror its state) and the
+    // palette resources exist (the layout below references their DSL).
+    if (m_device == nullptr
+        || m_entityFragShader == VK_NULL_HANDLE
+        || m_textureDescriptorSetLayout == VK_NULL_HANDLE
+        || m_bonePaletteDescriptorSetLayout == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    m_skinnedEntityVertShader =
+        LoadShaderModule("shaders/compiled/entity_skinned.vert.spv");
+    if (m_skinnedEntityVertShader == VK_NULL_HANDLE) {
+        std::cerr << "[ScenePass] CreateSkinnedEntityPipeline: missing "
+                  << "entity_skinned.vert SPIR-V (check CMake glslc rule + "
+                  << "shaders/compiled/ output)\n";
+        return false;
+    }
+
+    VkDevice dev = m_device->GetDevice();
+
+    // Push ranges BYTE-IDENTICAL to CreateEntityPipelineAndMesh's — this
+    // is what makes the two pipeline layouts push-constant-compatible and
+    // set-0-compatible, letting the entity draw loop switch pipelines
+    // without re-pushing constants or re-binding the texture set. Any
+    // future change to the entity push layout must be mirrored here (a
+    // divergence shows up as validation errors on the first mixed
+    // static/skinned frame, so it can't rot silently).
+    VkPushConstantRange pcRanges[2] = {};
+    pcRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRanges[0].offset = 0;
+    pcRanges[0].size = sizeof(float) * 20;    // mat4 mvp + vec4 color
+    pcRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcRanges[1].offset = sizeof(float) * 20;  // offset 80
+    pcRanges[1].size = sizeof(float) * 4;     // vec4 fogParams
+
+    // Set 0 = shared baseColor texture layout (same handle as the static
+    // pipeline — required for set-0 compatibility, not just convenient);
+    // set 1 = the bone-palette dynamic UBO.
+    VkDescriptorSetLayout setLayouts[2] = {
+        m_textureDescriptorSetLayout,
+        m_bonePaletteDescriptorSetLayout,
+    };
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
+    layoutInfo.pushConstantRangeCount = 2;
+    layoutInfo.pPushConstantRanges = pcRanges;
+    if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr,
+                               &m_skinnedEntityPipelineLayout) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] skinned entity pipeline layout creation failed\n";
+        return false;
+    }
+
+    // Vertex input: binding 0 is the exact packed stream the static
+    // entity pipeline consumes (pos+normal+uv, stride 32 — produced by
+    // EnsureModelGpuMesh); binding 1 is the joints+weights side-car
+    // (EnsureModelSkinAttributes), also stride 32: ivec4 (16 B) + vec4
+    // (16 B). Splitting the rig data into a second binding is what lets
+    // the two pipelines SHARE the per-Model bind-pose VB instead of
+    // duplicating a 56-byte-stride copy of every skinned model.
+    VkVertexInputBindingDescription bindings[2] = {};
+    bindings[0].binding = 0;
+    bindings[0].stride = sizeof(float) * 8;
+    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    bindings[1].binding = 1;
+    bindings[1].stride = sizeof(int32_t) * 4 + sizeof(float) * 4;
+    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[5] = {};
+    attrs[0].location = 0;                              // position
+    attrs[0].binding = 0;
+    attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[0].offset = 0;
+    attrs[1].location = 1;                              // normal
+    attrs[1].binding = 0;
+    attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[2].location = 2;                              // texcoord0
+    attrs[2].binding = 0;
+    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[2].offset = sizeof(float) * 6;
+    attrs[3].location = 3;                              // joints (ivec4)
+    attrs[3].binding = 1;
+    attrs[3].format = VK_FORMAT_R32G32B32A32_SINT;
+    attrs[3].offset = 0;
+    attrs[4].location = 4;                              // weights (vec4)
+    attrs[4].binding = 1;
+    attrs[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrs[4].offset = sizeof(int32_t) * 4;
+
+    VkPipelineVertexInputStateCreateInfo vi = {};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 2;
+    vi.pVertexBindingDescriptions = bindings;
+    vi.vertexAttributeDescriptionCount = 5;
+    vi.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = m_skinnedEntityVertShader;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = m_entityFragShader;  // shared with the static pipeline
+    stages[1].pName = "main";
+
+    // Fixed-function state below is a deliberate CLONE of
+    // CreateEntityPipelineAndMesh — skinned and static draws must be
+    // visually indistinguishable at identity pose, so any state
+    // divergence (cull mode, depth op, blend) would be a bug, not a
+    // tuning knob. See that function for the WHY on each choice.
+    VkPipelineInputAssemblyStateCreateInfo ia = {};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp = {};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs = {};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;  // matches entity pipeline (double-sided)
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms = {};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds = {};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    ds.minDepthBounds = 0.0f;
+    ds.maxDepthBounds = 1.0f;
+
+    VkPipelineColorBlendAttachmentState cba = {};
+    cba.blendEnable = VK_FALSE;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo cb = {};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dyn = {};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates = dynStates;
+
+    VkGraphicsPipelineCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vi;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &rs;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &cb;
+    info.pDynamicState = &dyn;
+    info.layout = m_skinnedEntityPipelineLayout;
+    info.renderPass = m_renderPass;
+    info.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr,
+                                  &m_skinnedEntityPipeline) != VK_SUCCESS) {
+        std::cerr << "[ScenePass] skinned entity pipeline creation failed\n";
+        return false;
+    }
+
+    std::cout << "[ScenePass] GPU-skinned entity pipeline ready "
+              << "(entity_skinned.vert + shared entity.frag, "
+              << kMaxBonesPerPalette << "-bone palette)\n";
+    return true;
+}
+
+void ScenePass::DestroySkinnedEntityPipeline() {
+    if (m_device == nullptr) return;
+    VkDevice dev = m_device->GetDevice();
+
+    if (m_skinnedEntityPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(dev, m_skinnedEntityPipeline, nullptr);
+        m_skinnedEntityPipeline = VK_NULL_HANDLE;
+    }
+    if (m_skinnedEntityPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(dev, m_skinnedEntityPipelineLayout, nullptr);
+        m_skinnedEntityPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_skinnedEntityVertShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(dev, m_skinnedEntityVertShader, nullptr);
+        m_skinnedEntityVertShader = VK_NULL_HANDLE;
+    }
+    // NOTE: m_entityFragShader is owned by DestroyEntityPipelineAndMesh —
+    // this pipeline only borrowed the module handle.
+}
+
+bool ScenePass::EnsureModelSkinAttributes(const CatEngine::Model* model) {
+    if (model == nullptr || m_device == nullptr) {
+        return false;
+    }
+
+    // The side-car lives inside the model's GpuMesh cache entry, so the
+    // bind-pose upload must have happened first — Execute's routing runs
+    // EnsureModelGpuMesh before this in the same condition chain.
+    auto cacheIt = m_modelMeshCache.find(model);
+    if (cacheIt == m_modelMeshCache.end() || cacheIt->second.indexCount == 0) {
+        return false;
+    }
+    GpuMesh& gpuMesh = cacheIt->second;
+    if (gpuMesh.skinAttributeBuffer != nullptr) {
+        return true;  // steady-state cache hit: one map find per frame
+    }
+    if (gpuMesh.skinAttributesFailed) {
+        return false; // negative cache: don't repack a failed model per frame
+    }
+
+    // Clamp bound for joint indices. The caller's palette guard already
+    // proved palette.size() == nodes.size(), so clamping into
+    // [0, nodeCount) makes every packed index a valid palette index —
+    // this is the CPU-side half of the "no bounds check in the shader"
+    // contract documented in entity_skinned.vert. ModelLoader also
+    // validates joints at load time; the clamp is defence-in-depth for
+    // malformed assets, mirroring EnsureSkinnedMesh's identical guard
+    // (out-of-range → bone 0, a visible-but-contained artefact instead
+    // of a GPU read of unwritten palette slots).
+    const std::size_t nodeCount = model->nodes.size();
+    if (nodeCount == 0) {
+        gpuMesh.skinAttributesFailed = true;
+        return false;
+    }
+
+    // Count vertices with the same skip-degenerate-mesh rule as
+    // EnsureModelGpuMesh so record N of this stream describes exactly
+    // vertex N of the packed bind-pose stream (the two bindings advance
+    // in lockstep per gl_VertexIndex).
+    std::size_t totalVertices = 0;
+    for (const auto& mesh : model->meshes) {
+        if (mesh.vertices.empty() || mesh.indices.empty()) {
+            continue;
+        }
+        totalVertices += mesh.vertices.size();
+    }
+    if (totalVertices == 0) {
+        gpuMesh.skinAttributesFailed = true;
+        return false;
+    }
+
+    // Interleaved record matching the skinned pipeline's binding-1
+    // declaration: ivec4 joints at offset 0, vec4 weights at offset 16,
+    // stride 32. A plain struct of scalars has no padding surprises here
+    // (4-byte members, 32-byte total), and the static_assert pins that
+    // against exotic compiler settings.
+    struct SkinAttributeRecord {
+        int32_t joints[4];
+        float weights[4];
+    };
+    static_assert(sizeof(SkinAttributeRecord) == 32,
+                  "SkinAttributeRecord layout must match the skinned "
+                  "pipeline's binding-1 stride (ivec4 + vec4 = 32 B)");
+
+    std::vector<SkinAttributeRecord> packedRecords;
+    packedRecords.reserve(totalVertices);
+    for (const auto& mesh : model->meshes) {
+        if (mesh.vertices.empty() || mesh.indices.empty()) {
+            continue;
+        }
+        for (const auto& vertex : mesh.vertices) {
+            SkinAttributeRecord record{};
+            for (int i = 0; i < 4; ++i) {
+                int32_t jointIndex = vertex.joints[i];
+                if (jointIndex < 0
+                    || static_cast<std::size_t>(jointIndex) >= nodeCount) {
+                    jointIndex = 0;
+                }
+                record.joints[i] = jointIndex;
+                record.weights[i] = vertex.weights[i];
+            }
+            packedRecords.push_back(record);
+        }
+    }
+
+    // One upload per Model per session (the rig never changes at runtime)
+    // — HostVisible+HostCoherent matches the bind-pose VB's tradeoff
+    // reasoning in EnsureModelGpuMesh.
+    RHI::BufferDesc bufferDesc{};
+    bufferDesc.size = packedRecords.size() * sizeof(SkinAttributeRecord);
+    bufferDesc.usage = RHI::BufferUsage::Vertex;
+    bufferDesc.memoryProperties = RHI::MemoryProperty::HostVisible
+                                | RHI::MemoryProperty::HostCoherent;
+    bufferDesc.debugName = "ModelSkinAttributeBuffer";
+    gpuMesh.skinAttributeBuffer =
+        std::make_unique<RHI::VulkanBuffer>(m_device, bufferDesc);
+    gpuMesh.skinAttributeBuffer->UpdateData(packedRecords.data(),
+                                            bufferDesc.size, 0);
+
+    std::cout << "[ScenePass] Uploaded skin attributes for model: "
+              << totalVertices << " verts ("
+              << bufferDesc.size / 1024 << " KB, "
+              << nodeCount << " nodes)\n";
     return true;
 }
 
