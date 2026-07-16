@@ -1230,32 +1230,43 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
         vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
     }
 
-    // ---- Entity draws (proxy cubes + real meshes) -------------------------
+    // ---- Entity draws (proxy cubes + real meshes + skinned meshes) --------
     //
-    // Single bind of the entity pipeline (it's the only graphics pipeline
-    // that consumes the (vec3 position, vec3 normal) layout shared by both
-    // the unit-cube buffer and the per-Model GPU mesh cache). Per-draw we
-    // rebind ONLY the vertex/index buffers — the pipeline state is
-    // identical between the two paths.
+    // The loop interleaves TWO pipelines: m_entityPipeline for static /
+    // bind-pose / cube draws and m_skinnedEntityPipeline for GPU-skinned
+    // draws. Their layouts are deliberately constructed with identical
+    // push-constant ranges and an identical set-0 (texture) descriptor
+    // layout, which makes them Vulkan-"compatible" for set 0 and for push
+    // constants — so pipeline switches do NOT invalidate the bound texture
+    // set or the pushed constants, and all the skip-redundant-bind
+    // tracking below stays valid across switches. Only set 1 (the bone
+    // palette) is exclusive to the skinned layout and is re-bound per
+    // skinned draw (its dynamic offset changes every draw anyway).
     //
-    // Bind tracking: `boundIsCube` lets us skip a redundant
-    // vkCmdBindVertexBuffers / vkCmdBindIndexBuffer when consecutive draws
-    // share the same source. The common case is several enemies of the
-    // same variant in a row (all dog_regular, then all dog_fast, etc.) so
-    // this saves a real number of bind calls per frame at no correctness
-    // cost. We start with -1 / nullptr meaning "nothing bound yet" so the
-    // first draw always emits its bind.
+    // Bind tracking: the last* trackers let us skip a redundant
+    // vkCmdBindVertexBuffers / vkCmdBindIndexBuffer / pipeline /
+    // descriptor bind when consecutive draws share the same source. The
+    // common case is several enemies of the same variant in a row (all
+    // dog_regular, then all dog_fast, etc.) so this saves a real number
+    // of bind calls per frame at no correctness cost. Everything starts
+    // at nullptr / VK_NULL_HANDLE meaning "nothing bound yet" so the
+    // first draw always emits its binds.
     if (drawEntities) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_entityPipeline);
-
         struct EntityPC {
             float mvp[16];
             float color[4];
         } pc{};
 
+        VkPipeline lastBoundPipeline = VK_NULL_HANDLE;
+
         // Track which buffers are currently bound so adjacent draws of the
         // same shape skip the bind cost. nullptr = nothing bound yet.
+        // lastSkinAttributeBuffer tracks vertex binding 1 (joints+weights),
+        // consumed only by the skinned pipeline; a stale binding 1 while
+        // the static pipeline is bound is harmless because that pipeline
+        // declares no binding-1 attributes.
         const RHI::VulkanBuffer* lastVertexBuffer = nullptr;
+        const RHI::VulkanBuffer* lastSkinAttributeBuffer = nullptr;
         const RHI::VulkanBuffer* lastIndexBuffer = nullptr;
 
         // Track which baseColor descriptor set is currently bound. Same
@@ -1265,37 +1276,153 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
         // draw always emits a vkCmdBindDescriptorSets.
         VkDescriptorSet lastBoundTextureSet = VK_NULL_HANDLE;
 
+        // ---- Bone-palette ring slot for this frame ----------------------
+        // Advance the ring once per entity-drawing Execute. Slot reuse is
+        // safe because the ring depth equals the swapchain's frames-in-
+        // flight count: before this frame was recorded, VulkanSwapchain::
+        // AcquireNextImage blocked on the in-flight fence of the frame
+        // submitted kBonePaletteRingSlots frames ago, and fences signal in
+        // queue-submission order — so every draw that read the slot we are
+        // about to overwrite has provably retired. (Full reasoning on the
+        // ring declaration in ScenePass.hpp.)
+        BonePaletteFrameSlot* paletteSlot = nullptr;
+        if (m_skinnedEntityPipeline != VK_NULL_HANDLE) {
+            const std::size_t ringIndex = static_cast<std::size_t>(
+                m_paletteFrameCounter % kBonePaletteRingSlots);
+            ++m_paletteFrameCounter;
+            if (m_bonePaletteRing[ringIndex].buffer != nullptr) {
+                paletteSlot = &m_bonePaletteRing[ringIndex];
+            }
+        }
+        uint32_t gpuSkinnedDrawsThisFrame = 0;
+
         for (const auto& e : entities) {
             // Path (c): skinned mesh — the entity has an animator, a per-
-            // entity bone palette, and a model. CPU-skin the model's
-            // vertices into the per-entity dynamic VB and reuse the per-
-            // Model cached IB. EnsureSkinnedMesh internally calls
-            // EnsureModelGpuMesh so we don't need to gate on it separately.
-            // Falls through to path (b) on failure (mismatched bone count,
-            // alloc failure) so the entity at least appears in bind pose.
-            const bool wantsSkinning = (e.skinningKey != nullptr)
-                                       && (!e.bonePalette.empty())
-                                       && (e.model != nullptr);
-            const bool useSkinned = wantsSkinning
-                                    && EnsureSkinnedMesh(e.skinningKey,
-                                                          e.model,
-                                                          e.bonePalette);
+            // entity bone palette, and a model. Which implementation runs
+            // is the m_skinningMode routing decision (CLI-wired):
+            //   GpuPalette (default) — upload the palette into this
+            //     frame's ring slot and draw through the skinned pipeline;
+            //     the vertex shader does the per-vertex blend.
+            //   CpuVertex (--enable-cpu-skinning) — legacy host loop via
+            //     EnsureSkinnedMesh, kept for A/B triage.
+            //   BindPose (--disable-gpu-skinning) — ignore the palette.
+            // Every failure inside a route falls through to path (b) so
+            // the entity at least appears in bind pose rather than
+            // disappearing.
+            const bool carriesPalette = (e.skinningKey != nullptr)
+                                        && (!e.bonePalette.empty())
+                                        && (e.model != nullptr);
+
+            bool useGpuSkinned = false;
+            bool useCpuSkinned = false;
+            uint32_t paletteDynamicOffset = 0;
+            if (carriesPalette) {
+                switch (m_skinningMode) {
+                case SkinningMode::GpuPalette: {
+                    // Palette size guard (mirrors EnsureSkinnedMesh's):
+                    // the palette must be one matrix per model node —
+                    // that's the contract the skeleton was built under in
+                    // CatEntity::loadModel, and it's what makes the
+                    // clamped joint indices in the skin-attribute buffer
+                    // valid palette indices. A mismatch means a stale
+                    // animator (entity swapped models); <= 256 is the
+                    // shader's fixed array bound. Either way: bind-pose
+                    // fallback keeps the entity visible while upstream
+                    // wiring is fixed, and the one-shot log makes the
+                    // silent-looking fallback greppable.
+                    const bool paletteSizeOk =
+                        e.bonePalette.size() <= kMaxBonesPerPalette
+                        && e.bonePalette.size() == e.model->nodes.size();
+                    if (!paletteSizeOk) {
+                        static bool paletteMismatchLogged = false;
+                        if (!paletteMismatchLogged) {
+                            paletteMismatchLogged = true;
+                            std::cerr << "[ScenePass] GPU skinning: palette size "
+                                      << e.bonePalette.size()
+                                      << " vs model nodes "
+                                      << e.model->nodes.size()
+                                      << " (max " << kMaxBonesPerPalette
+                                      << ") — falling back to bind-pose for "
+                                      << "mismatched entities\n";
+                        }
+                    } else if (paletteSlot != nullptr
+                               && gpuSkinnedDrawsThisFrame < kMaxGpuSkinnedDrawsPerFrame
+                               && EnsureModelGpuMesh(e.model)
+                               && EnsureModelSkinAttributes(e.model)) {
+                        // Reserve this draw's 16 KB slice of the frame's
+                        // palette buffer and memcpy the palette in. Host-
+                        // coherent memory: the write is visible to the GPU
+                        // at vkQueueSubmit with no explicit flush.
+                        paletteDynamicOffset =
+                            gpuSkinnedDrawsThisFrame * kBonePaletteBytesPerDraw;
+                        paletteSlot->buffer->UpdateData(
+                            e.bonePalette.data(),
+                            e.bonePalette.size() * sizeof(Engine::mat4),
+                            paletteDynamicOffset);
+                        ++gpuSkinnedDrawsThisFrame;
+                        useGpuSkinned = true;
+                    }
+                    break;
+                }
+                case SkinningMode::CpuVertex:
+                    // Legacy CPU path: EnsureSkinnedMesh internally calls
+                    // EnsureModelGpuMesh (for the shared IB) and applies
+                    // its own palette-size guard.
+                    useCpuSkinned = EnsureSkinnedMesh(e.skinningKey,
+                                                      e.model,
+                                                      e.bonePalette);
+                    break;
+                case SkinningMode::BindPose:
+                    break;
+                }
+            }
 
             // Path (b): real GLB mesh — try to ensure (and use) the per-Model
             // cached buffers. Falls back to path (a) if the upload failed
             // (e.g., model with no vertex data) so the entity still shows up
             // as a proxy cube and a reviewer can see something is wrong
             // rather than nothing at all.
-            const bool useRealMesh = !useSkinned
+            const bool useRealMesh = !useGpuSkinned && !useCpuSkinned
                                      && (e.model != nullptr)
                                      && EnsureModelGpuMesh(e.model);
 
             const RHI::VulkanBuffer* vbToBind = nullptr;
+            const RHI::VulkanBuffer* skinAttributesToBind = nullptr;
             const RHI::VulkanBuffer* ibToBind = nullptr;
             uint32_t indexCount = 0;
             Engine::mat4 modelMatrix;
 
-            if (useSkinned) {
+            if (useGpuSkinned) {
+                // GPU-skinned draw: binding 0 is the SAME bind-pose VB the
+                // static path uses (the shader deforms it in-flight),
+                // binding 1 is the per-Model joints+weights side-car, and
+                // the IB is shared — zero per-frame vertex re-upload, just
+                // the 16 KB palette written above. Cache entries verified
+                // present by the Ensure* calls in the routing block.
+                const GpuMesh& gpuMesh = m_modelMeshCache[e.model];
+                vbToBind = gpuMesh.vertexBuffer.get();
+                skinAttributesToBind = gpuMesh.skinAttributeBuffer.get();
+                ibToBind = gpuMesh.indexBuffer.get();
+                indexCount = gpuMesh.indexCount;
+                modelMatrix = e.modelMatrix;
+
+                // One-time proof-of-life for the playtest log: greppable
+                // evidence that the GPU path (not CPU, not bind-pose) is
+                // what animated this session — the same regression-canary
+                // pattern as the lunge/flinch/bob first-observed logs in
+                // MeshSubmissionSystem.
+                static bool firstGpuSkinnedDrawLogged = false;
+                if (!firstGpuSkinnedDrawLogged) {
+                    firstGpuSkinnedDrawLogged = true;
+                    std::cout << "[ScenePass] GPU skinning active: first "
+                              << "skinned draw recorded (bones="
+                              << e.bonePalette.size()
+                              << ", paletteBytes="
+                              << e.bonePalette.size() * sizeof(Engine::mat4)
+                              << ", ringSlots=" << kBonePaletteRingSlots
+                              << ")\n";
+                }
+            } else if (useCpuSkinned) {
                 // Skinned VB carries the deformed vertex stream; IB is the
                 // shared bind-pose topology cached per-Model. Looked up by
                 // operator[] which we just verified inserted via
@@ -1338,7 +1465,39 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
                 modelMatrix = cubeModel;
             }
 
-            if (vbToBind != lastVertexBuffer) {
+            // Pipeline for this draw — skinned draws take the skinned
+            // pipeline, everything else the static entity pipeline. The
+            // switch is skip-tracked like the buffer binds; layout
+            // compatibility (identical push ranges + set-0 layout, see
+            // the block comment above the loop) means a switch does not
+            // invalidate the texture set or the previous push constants.
+            const VkPipeline pipelineForDraw =
+                useGpuSkinned ? m_skinnedEntityPipeline : m_entityPipeline;
+            if (pipelineForDraw != lastBoundPipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipelineForDraw);
+                lastBoundPipeline = pipelineForDraw;
+            }
+
+            if (useGpuSkinned) {
+                // Skinned draws feed two vertex bindings in one call:
+                // binding 0 = shared bind-pose stream, binding 1 = the
+                // joints+weights side-car. Both trackers update together
+                // so a following static draw of the same model skips its
+                // binding-0 rebind.
+                if (vbToBind != lastVertexBuffer
+                    || skinAttributesToBind != lastSkinAttributeBuffer) {
+                    VkBuffer vertexBufferHandles[2] = {
+                        vbToBind->GetVkBuffer(),
+                        skinAttributesToBind->GetVkBuffer(),
+                    };
+                    VkDeviceSize vertexBufferOffsets[2] = { 0, 0 };
+                    vkCmdBindVertexBuffers(cmd, 0, 2, vertexBufferHandles,
+                                           vertexBufferOffsets);
+                    lastVertexBuffer = vbToBind;
+                    lastSkinAttributeBuffer = skinAttributesToBind;
+                }
+            } else if (vbToBind != lastVertexBuffer) {
                 VkBuffer vbHandle = vbToBind->GetVkBuffer();
                 VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &vbHandle, &offset);
@@ -1350,6 +1509,21 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
                 lastIndexBuffer = ibToBind;
             }
 
+            // Bone-palette set (set 1, skinned pipeline only). Re-bound
+            // every skinned draw because the DYNAMIC offset selects this
+            // draw's 16 KB palette slice — the descriptor set itself is
+            // one-per-frame-slot, so this is a cheap offset rebind, not a
+            // descriptor allocation. Bound with the skinned layout (the
+            // only layout that has a set 1); this does not disturb set 0.
+            if (useGpuSkinned) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_skinnedEntityPipelineLayout,
+                                        /*firstSet*/ 1, /*setCount*/ 1,
+                                        &paletteSlot->descriptorSet,
+                                        /*dynamicOffsetCount*/ 1,
+                                        &paletteDynamicOffset);
+            }
+
             // Bind the per-Model baseColor descriptor set. The cube proxy
             // path (e.model == nullptr) and any model that lacked a
             // baseColorImageCpu both end up with the default-white
@@ -1357,6 +1531,13 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             // VK_NULL_HANDLE and the fragment shader's sampler always
             // reads valid data. EnsureModelTexture is idempotent: cache
             // hit returns immediately, cache miss does the upload.
+            //
+            // Bound with m_entityPipelineLayout even when the skinned
+            // pipeline is active: the two layouts share the set-0 layout
+            // and push ranges, which per the pipeline-layout-compatibility
+            // rules makes a set-0 bind through either layout valid for
+            // both pipelines (and is why lastBoundTextureSet tracking
+            // survives pipeline switches).
             VkDescriptorSet textureSet = EnsureModelTexture(e.model);
             if (textureSet != lastBoundTextureSet) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1375,6 +1556,10 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             pc.color[2] = e.color.z;
             pc.color[3] = 1.0F;
 
+            // Pushed through m_entityPipelineLayout for BOTH pipelines —
+            // valid because the skinned layout declares byte-identical
+            // push ranges (push-constant compatibility), and it keeps this
+            // hot loop free of per-draw layout selection branches.
             vkCmdPushConstants(cmd, m_entityPipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(EntityPC), &pc);
