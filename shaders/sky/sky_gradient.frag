@@ -127,9 +127,13 @@ void main() {
     //
     // The clamp() on the lateral term keeps it non-negative so a halo
     // off-screen doesn't darken the opposite side via subtraction.
+    // pcSky.zenith.w scales the halo (1 = full, 0 = off). The fixed-sky
+    // override path (ScenePass::SetSkyOverride — used for web parity,
+    // whose reference is a flat #87CEEB with no sun) pushes 0 here; the
+    // animated day-cycle path pushes 1 and keeps the warm horizon accent.
     float sunScreenX = SUN_DIR.x * 0.5 + 0.5;        // -1..1 -> 0..1
     float lateral    = clamp(1.0 - abs(inUv.x - sunScreenX) * 1.5, 0.0, 1.0);
-    float haloStrength = horizonT * lateral * 0.40;
+    float haloStrength = horizonT * lateral * 0.40 * pcSky.zenith.w;
     color = mix(color, SUN_HALO, haloStrength);
 
     outColor = vec4(color, 1.0);

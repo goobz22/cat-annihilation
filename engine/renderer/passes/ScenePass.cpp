@@ -1118,10 +1118,16 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
         // Fixed-sky override (SetSkyOverride) trumps the animated cycle —
         // the game layer pins the sky when mirroring a reference whose
         // backdrop never changes (the web build's constant #87CEEB).
+        // zenith.w doubles as the shader's sun-halo scale: the animated
+        // cycle keeps the warm horizon accent (1.0), a pinned flat sky
+        // has no sun to accent (0.0) — without this, halo-tinted pixels
+        // framed every parity capture in tan.
+        skyPushBytes[3] = 1.0F;
         if (m_skyOverrideEnabled) {
             skyPushBytes[0] = m_skyOverride[0];
             skyPushBytes[1] = m_skyOverride[1];
             skyPushBytes[2] = m_skyOverride[2];
+            skyPushBytes[3] = 0.0F;
             skyPushBytes[4] = m_skyOverride[3];
             skyPushBytes[5] = m_skyOverride[4];
             skyPushBytes[6] = m_skyOverride[5];

@@ -624,6 +624,7 @@ private:
     std::shared_ptr<CatEngine::Model> proceduralTreePineFoliage_;
     std::shared_ptr<CatEngine::Model> proceduralTreeOakFoliage_;
     std::shared_ptr<CatEngine::Model> proceduralTreeBush_;
+    std::shared_ptr<CatEngine::Model> proceduralRock_;
 
     // Non-owning pointer to the main-loop-owned GameConfig. Menus read
     // starting values and write through here when the Settings panel's
