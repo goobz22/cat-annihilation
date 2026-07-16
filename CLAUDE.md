@@ -81,9 +81,25 @@ React Three Fiber + Three.js + Zustand. Full state-management rules in
 
 ## Current status
 
+- **1:1 WEB-PARITY CAMPAIGN (2026-07-16, active goal): the native game must
+  play exactly like the web build.** Read
+  [docs/parity/PARITY_MATRIX.md](docs/parity/PARITY_MATRIX.md) FIRST — its
+  Fix log lists what already landed (waves/enemies/camera/controls/
+  progression/combat/forest/render), its "Open" section is the work queue,
+  and its "Deliberate divergences" section is settled policy (don't
+  re-litigate). All shared constants live in
+  [game/config/WebParityConfig.hpp](game/config/WebParityConfig.hpp)
+  (every value cited to the LIVE web literal; pinned by
+  `tests/unit/test_web_parity_config.cpp`); live code branches on
+  `WebParity::kEnabled`. The green-signal gate is
+  `bun scripts/cat-test-gate.ts --json` (build + 30 s autoplay run).
 - Native engine: subsystems listed in the README are all real (not stubbed);
   V1 areas flagged as "will get deeper" are tracked in
   [ENGINE_BACKLOG.md](ENGINE_BACKLOG.md).
 - Web port: hybrid architecture (Zustand + Local state). Dynamic systems
   converted to local state. Terrain/positioning bugs resolved. Wave popups
-  working.
+  working. Boots via `bun run dev` (three-stdlib pinned 2.36.1 via
+  package.json overrides — do not remove, drei's nested 2.35 breaks
+  three 0.184). NOTE: the R3F scene cannot render in a hidden Chrome
+  window (rAF throttled) — unattended web verification needs a visible
+  window or Playwright.
