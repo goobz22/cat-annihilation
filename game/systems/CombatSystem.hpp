@@ -138,13 +138,19 @@ public:
      * @param position Starting position
      * @param direction Direction and speed
      * @param damage Damage to deal on hit
+     * @param speedOverride Flight speed in units/second; <= 0 uses the
+     *        system default (projectileSpeed_). The web reference's arrow
+     *        flies at 25 (LocalProjectileSystem.tsx:246) while the system
+     *        default stays 30 for the native-balance paths, so the player
+     *        bow passes the web value explicitly.
      * @return Entity ID of the spawned projectile
      */
     CatEngine::Entity spawnProjectile(
         CatEngine::Entity owner,
         const Engine::vec3& position,
         const Engine::vec3& direction,
-        float damage
+        float damage,
+        float speedOverride = 0.0f
     );
 
     /**

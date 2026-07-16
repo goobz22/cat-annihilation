@@ -991,7 +991,8 @@ void PlayerControlSystem::updateAutoplay(float dt) {
                 // elemental_magic.hpp:383). A public getter is overkill
                 // for one callsite; if the speed ever changes, both this
                 // file and that header must be updated together.
-                static constexpr float kProjectileTravelSpeed = 25.0F;
+                static constexpr float kProjectileTravelSpeed =
+                    WebParity::kEnabled ? WebParity::kSpellProjectileSpeed : 25.0F;
                 Engine::vec3 leadPos = targetPos;
                 if (auto* targetMovement =
                         ecs_->getComponent<MovementComponent>(target)) {

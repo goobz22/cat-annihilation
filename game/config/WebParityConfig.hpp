@@ -165,6 +165,12 @@ inline constexpr float kProjectileSpawnHeight = 1.0f;
 inline constexpr float kBowProjectileDamage = 30.0f;
 inline constexpr float kBowProjectileSpeed = 25.0f;
 
+// Spell projectiles fly at 15 (LocalProjectileSystem.tsx:212 — the spell
+// branch's speed literal, slower than the arrow's 25). ElementalMagic's
+// PROJECTILE_SPEED consumes this under parity; the pre-parity native
+// tuning was 25 for every spell.
+inline constexpr float kSpellProjectileSpeed = 15.0f;
+
 // ---------------------------------------------------------------------
 // Weapon skills — reference: the LIVE award/damage sites, NOT gameConfig's
 // WEAPONS table (same live-path warning as above).

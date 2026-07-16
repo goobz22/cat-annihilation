@@ -594,12 +594,14 @@ CatEngine::Entity CombatSystem::spawnProjectile(
     CatEngine::Entity owner,
     const Engine::vec3& position,
     const Engine::vec3& direction,
-    float damage
+    float damage,
+    float speedOverride
 ) {
     Projectile projectile;
     projectile.owner = owner;
     projectile.position = position;
-    projectile.velocity = direction.normalized() * projectileSpeed_;
+    projectile.velocity = direction.normalized() *
+                          (speedOverride > 0.0f ? speedOverride : projectileSpeed_);
     projectile.damage = damage;
     projectile.lifetime = 0.0f;
     projectile.active = true;

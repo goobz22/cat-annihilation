@@ -96,6 +96,7 @@ TEST_CASE("weapon-skill rewards and curve match the web literals", "[web-parity]
     CHECK(WebParity::swordDamageForLevel(5) == 80.0f);
     CHECK(WebParity::kWeaponXpPerHit == 10);
     CHECK(WebParity::kWeaponXpPerKill == 15);
+    CHECK(WebParity::kSpellProjectileSpeed == 15.0f);  // LocalProjectileSystem.tsx:212
     CHECK(WebParity::kShieldBashDamage == 35.0f);
     CHECK(WebParity::kShieldBashCooldownSeconds == 0.6f);
     CHECK(WebParity::kShieldBashPushback == 3.0f);

@@ -4,6 +4,7 @@
 #include "../../engine/ecs/Entity.hpp"
 #include "../../engine/math/Vector.hpp"
 #include "../../engine/cuda/particles/ParticleSystem.hpp"
+#include "../config/WebParityConfig.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -399,8 +400,13 @@ private:
     // contexts without a CombatSystem (unit tests, headless utilities).
     CombatSystem* combatSystem_ = nullptr;
 
-    // Constants
-    static constexpr float PROJECTILE_SPEED = 25.0f;
+    // Constants. Spell flight speed follows the web reference under parity
+    // (15 u/s, LocalProjectileSystem.tsx:212 — see WebParityConfig.hpp);
+    // the pre-parity native tuning was 25. PlayerControlSystem's autoplay
+    // lead-prediction constant mirrors this value — the two must move
+    // together (kProjectileTravelSpeed in PlayerControlSystem.cpp).
+    static constexpr float PROJECTILE_SPEED =
+        WebParity::kEnabled ? WebParity::kSpellProjectileSpeed : 25.0f;
     static constexpr float SPELL_HIT_RADIUS = 1.5f;
     static constexpr int MAX_LEVEL = 10;
 };
