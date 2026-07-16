@@ -10,9 +10,12 @@ export default defineConfig({
     },
   },
   server: {
-    // 3100, NOT 3000 — ThothOS's dev server owns :3000 on this machine
-    // (operator directive 2026-07-16). Keep this port clear of 3000/3007.
-    port: 3100,
+    // 5173 (vite's default), NOT 3000 — ThothOS's dev server owns :3000 on
+    // this machine (operator directive 2026-07-16), and :3100 is occupied
+    // by another local service. strictPort so a clash fails loudly instead
+    // of silently hopping back toward a ThothOS port.
+    port: 5173,
+    strictPort: true,
     open: true,
   },
   build: {
