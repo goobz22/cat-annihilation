@@ -136,37 +136,63 @@ public:
 
         // ---- Path (c) "skinned mesh" extras -----------------------------
         // When `skinningKey` is non-null AND `bonePalette` is non-empty AND
-        // `model` is non-null, ScenePass routes the draw through path (c):
-        // CPU skinning. For each vertex it computes
-        //   skinMatrix = sum_i(weights[i] * bonePalette[joints[i]])
-        //   skinnedPos = skinMatrix * position
-        //   skinnedNormal = mat3(skinMatrix) * normal
-        // and uploads the deformed (position, normal) stream into a
-        // per-entity dynamic vertex buffer keyed by `skinningKey` (typically
-        // the entity's Animator pointer — stable for the entity's lifetime
-        // and unique per entity even when many entities share the same
-        // Model*, e.g. 16 NPCs spawning the same ember_leader.glb each get
-        // their own pose). The matching index buffer is reused from the
-        // per-Model cache — same triangle topology, different vertex stream.
+        // `model` is non-null, ScenePass routes the draw through a skinned
+        // path selected by the active SkinningMode (see SetSkinningMode):
         //
-        // WHY CPU skinning before going GPU: the existing entity pipeline
-        // already consumes the (vec3 position, vec3 normal) layout this
-        // path produces, so this lights up animated cats with no new
-        // shader, no new descriptor sets, no new pipeline. A follow-up
-        // iteration replaces this with GPU skinning (extending the cached
-        // GpuMesh to a 40-byte joints+weights layout, allocating a per-
-        // frame bone-palette UBO, switching to shaders/compiled/
-        // skinned.vert.spv) once the visible win is locked in. CPU skinning
-        // costs ~1 ms/frame at 150k verts and one entity, well within
-        // budget for the player + handful of dogs that drive the gameplay
-        // signal — NPCs stay bind-pose this iteration to keep upload
-        // bandwidth reasonable until GPU skinning lands.
+        //   GpuPalette (the DEFAULT, 2026-07-16 GPU-skinning iteration):
+        //     the palette is memcpy'd into a per-frame dynamic-UBO ring and
+        //     the draw runs the skinned entity pipeline, whose vertex stage
+        //     (shaders/scene/entity_skinned.vert) computes
+        //       skinMatrix = sum_i(weights[i] * bonePalette[joints[i]])
+        //     per vertex on the GPU. The bind-pose VB/IB from the per-Model
+        //     cache are reused untouched; only a parallel joints+weights
+        //     attribute buffer (EnsureModelSkinAttributes) and the 16 KB
+        //     palette upload are added per draw. This is what makes a full
+        //     wave of ~20 animated 120-150k-vertex Meshy GLBs hold frame
+        //     rate — the per-vertex work rides the GPU's vertex pipeline
+        //     instead of a single CPU thread.
+        //
+        //   CpuVertex (legacy, forced by --enable-cpu-skinning for A/B
+        //     comparison): EnsureSkinnedMesh performs the same weighted
+        //     blend on the host per vertex and re-uploads the deformed
+        //     (position, normal, uv) stream into a per-entity dynamic
+        //     vertex buffer keyed by `skinningKey` (typically the entity's
+        //     Animator pointer — stable for the entity's lifetime and
+        //     unique per entity even when many entities share the same
+        //     Model*). Measured 2-5 fps at wave scale — kept only as the
+        //     triage/regression baseline for the GPU path.
+        //
+        //   BindPose (--disable-gpu-skinning without --enable-cpu-skinning):
+        //     the palette is ignored and the draw falls through to path (b).
+        //
+        // Both skinned paths share the per-Model index buffer — skinning
+        // deforms vertex positions only, never topology.
         //
         // Empty `bonePalette` OR null `skinningKey` falls through to path
-        // (b) (bind-pose mesh) so unanimated entities stay efficient.
+        // (b) (bind-pose mesh) so unanimated entities stay efficient. The
+        // palette from Animator::getCurrentSkinningMatrices has each node's
+        // inverseBindMatrix baked in, so identity pose == bind pose and the
+        // three routes are visually interchangeable at rest.
         std::vector<Engine::mat4> bonePalette;
         const void* skinningKey = nullptr;
     };
+
+    // Which implementation animated (palette-carrying) EntityDraws route
+    // through. Wired from main.cpp's CLI parsing right after renderer init
+    // (mirroring SetRibbonsEnabled): default GpuPalette; --enable-cpu-skinning
+    // forces CpuVertex (the legacy per-vertex host loop, kept for A/B
+    // triage); --disable-gpu-skinning without the CPU flag forces BindPose
+    // (the pre-GPU-skinning behaviour, useful to bisect "is the skinned
+    // pipeline itself the regression?"). Runtime-switchable — the GPU
+    // resources are created unconditionally at Setup so flipping the mode
+    // never needs a pipeline rebuild.
+    enum class SkinningMode {
+        GpuPalette,   // default: vertex-shader skinning, palette via dynamic UBO
+        CpuVertex,    // legacy: EnsureSkinnedMesh host loop (slow, A/B only)
+        BindPose,     // skip skinning entirely; draw the static mesh
+    };
+    void SetSkinningMode(SkinningMode mode) { m_skinningMode = mode; }
+    SkinningMode GetSkinningMode() const { return m_skinningMode; }
 
     // Record draw commands for the current frame. Runs the terrain pass (if
     // uploaded) then the entity cubes, all inside one render pass so they
@@ -287,6 +313,44 @@ private:
     void DestroyEntityPipelineAndMesh();
     bool CreateSkyPipeline();
     void DestroySkyPipeline();
+
+    // ---- GPU skinning (2026-07-16 iteration) ---------------------------
+    //
+    // CreateBonePaletteResources(): allocate the per-frame bone-palette
+    // ring — kBonePaletteRingSlots host-coherent uniform buffers, each
+    // sized kMaxGpuSkinnedDrawsPerFrame × kBonePaletteBytesPerDraw, plus
+    // the dynamic-UBO descriptor set layout / pool / one descriptor set
+    // per ring slot. Must run BEFORE CreateSkinnedEntityPipeline (the
+    // skinned pipeline layout references the palette set layout). Failure
+    // is non-fatal to the pass: Setup logs and the entity loop falls back
+    // to bind-pose draws (the pre-GPU-skinning visual), never a crash.
+    //
+    // CreateSkinnedEntityPipeline(): clone of the live entity pipeline
+    // (same render pass, blend/depth state, entity.frag fragment stage,
+    // identical push-constant ranges, same set-0 texture layout) with the
+    // entity_skinned.vert vertex stage, a second vertex-buffer binding for
+    // joints+weights, and set-1 = the bone-palette dynamic UBO. Identical
+    // push ranges + identical set-0 layout make the two pipeline layouts
+    // Vulkan-"compatible" for set 0 and push constants, so the entity draw
+    // loop can interleave static and skinned draws without re-pushing or
+    // re-binding the texture set on every pipeline switch.
+    bool CreateBonePaletteResources();
+    void DestroyBonePaletteResources();
+    bool CreateSkinnedEntityPipeline();
+    void DestroySkinnedEntityPipeline();
+
+    // Lazy uploader for the per-Model skin-attribute side-car buffer
+    // (binding 1 of the skinned pipeline): an interleaved
+    // (ivec4 joints, vec4 weights) stream, stride 32 B, packed in the
+    // same skip-degenerate-mesh order as EnsureModelGpuMesh so the two
+    // vertex streams stay index-aligned. Joint indices are clamped into
+    // [0, model->nodes.size()) at pack time, which is what lets
+    // entity_skinned.vert index its 256-slot palette with no bounds
+    // check. Requires the model's GpuMesh cache entry to already exist
+    // (callers run EnsureModelGpuMesh first). Idempotent; returns false
+    // on allocation failure (negative-cached so we don't repack every
+    // frame) and the caller falls back to a bind-pose draw.
+    bool EnsureModelSkinAttributes(const CatEngine::Model* model);
 
     // Lazy uploader: on first encounter of a Model, repack every Mesh's
     // (position, normal) attributes into a single interleaved buffer
@@ -555,6 +619,83 @@ private:
     VkPipelineLayout m_entityPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_entityPipeline = VK_NULL_HANDLE;
 
+    // ---- GPU-skinned entity pipeline (2026-07-16 iteration) ----------------
+    //
+    // Sibling of m_entityPipeline: same render pass / depth / blend /
+    // entity.frag fragment stage, but the vertex stage is
+    // entity_skinned.vert, the vertex input adds a binding-1
+    // joints+weights stream, and the layout adds set-1 = the bone-palette
+    // dynamic UBO. The fragment shader module is SHARED with the static
+    // pipeline (m_entityFragShader) — only the vertex module is new.
+    // Cached next to the other pipelines and destroyed with them.
+    VkShaderModule m_skinnedEntityVertShader = VK_NULL_HANDLE;
+    VkPipelineLayout m_skinnedEntityPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_skinnedEntityPipeline = VK_NULL_HANDLE;
+
+    // ---- Per-frame bone-palette ring ---------------------------------------
+    //
+    // Palette upload mechanism (design decision, documented once here):
+    // one host-visible + host-coherent UNIFORM buffer per ring slot, each
+    // large enough for kMaxGpuSkinnedDrawsPerFrame palettes of
+    // kMaxBonesPerPalette mat4s, bound through a single
+    // VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC descriptor set per slot.
+    // Each GPU-skinned draw memcpys its palette into the slot at
+    // (drawIndex × kBonePaletteBytesPerDraw) and binds set 1 with that
+    // value as the dynamic offset — one descriptor set per FRAME, not per
+    // draw, so descriptor-pool pressure stays constant no matter how many
+    // dogs a wave spawns.
+    //
+    // WHY a dynamic UBO instead of an SSBO or per-draw push data:
+    //   * 256 mat4 = 16384 B = exactly Vulkan's guaranteed-minimum
+    //     maxUniformBufferRange, so a `mat4 bones[256]` UBO block is
+    //     portable to every conformant device, and UBO reads are the
+    //     fastest uniform-access path on the desktop GPUs this targets.
+    //   * kBonePaletteBytesPerDraw (16384) is a multiple of every legal
+    //     minUniformBufferOffsetAlignment (spec caps it at 256), so the
+    //     per-draw dynamic offsets are always valid.
+    //   * Push constants max out at 128-256 B — three orders of magnitude
+    //     too small for a palette.
+    //
+    // Lifetime / synchronization: ring depth matches the swapchain's
+    // frames-in-flight count (VulkanSwapchain::MAX_FRAMES_IN_FLIGHT == 2;
+    // mirrored here as kBonePaletteRingSlots because that constant is
+    // private to the swapchain). Execute() advances m_paletteFrameCounter
+    // once per entity-drawing frame, so a slot is rewritten no sooner
+    // than two submitted frames after its last use. VulkanSwapchain::
+    // AcquireNextImage blocks on the in-flight fence of the frame slot
+    // being reused — i.e. before the CPU records (and writes palettes
+    // for) frame N, the GPU has provably retired frame N-2 — and Vulkan
+    // fences signal in queue-submission order, so every draw that read
+    // the slot being overwritten has completed. HostCoherent memory needs
+    // no explicit flush: host writes made before vkQueueSubmit are
+    // visible to the submitted commands by the implicit host→device
+    // memory dependency.
+    struct BonePaletteFrameSlot {
+        std::unique_ptr<RHI::VulkanBuffer> buffer;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    };
+    static constexpr uint32_t kBonePaletteRingSlots = 2;
+    static constexpr uint32_t kMaxBonesPerPalette = 256;
+    static constexpr uint32_t kBonePaletteBytesPerDraw =
+        kMaxBonesPerPalette * 16 * sizeof(float);  // 256 mat4 = 16 KB
+    // 64 palettes/frame = 1 MiB per ring slot. Gameplay peaks at ~21
+    // skinned draws (player cat + 19 dogs + corpse latch overlap); 3×
+    // headroom costs 2 MiB of host-visible memory total and means the
+    // overflow fallback (bind-pose for draw 65+) should never trigger in
+    // practice.
+    static constexpr uint32_t kMaxGpuSkinnedDrawsPerFrame = 64;
+    std::array<BonePaletteFrameSlot, kBonePaletteRingSlots> m_bonePaletteRing{};
+    VkDescriptorSetLayout m_bonePaletteDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_bonePaletteDescriptorPool = VK_NULL_HANDLE;
+    // Monotonic per-Execute counter selecting the ring slot; wraps via
+    // modulo. uint64_t so wraparound is a non-issue (2.27 M years at
+    // 60 fps).
+    uint64_t m_paletteFrameCounter = 0;
+
+    // Active skinning route for palette-carrying draws. Default GPU —
+    // the whole point of this iteration is animation ON at full fps.
+    SkinningMode m_skinningMode = SkinningMode::GpuPalette;
+
     // Shared unit-cube mesh (extents ±0.5, 24 verts, 36 indices)
     std::unique_ptr<RHI::VulkanBuffer> m_cubeVertexBuffer;
     std::unique_ptr<RHI::VulkanBuffer> m_cubeIndexBuffer;
@@ -576,6 +717,20 @@ private:
         std::unique_ptr<RHI::VulkanBuffer> vertexBuffer;
         std::unique_ptr<RHI::VulkanBuffer> indexBuffer;
         uint32_t indexCount = 0;
+
+        // ---- GPU-skinning side-car (2026-07-16) -------------------------
+        // Parallel (ivec4 joints, vec4 weights) stream for binding 1 of
+        // the skinned entity pipeline, allocated lazily by
+        // EnsureModelSkinAttributes only for models that actually get a
+        // GPU-skinned draw (static props never pay the ~4 MB). Lives in
+        // the same cache entry as the bind-pose buffers because its
+        // lifetime and eviction rules are identical (per-Model, session-
+        // long, torn down with the cache at Shutdown). Null means "not
+        // uploaded yet"; `skinAttributesFailed` negative-caches an
+        // allocation failure so the hot path doesn't retry the pack +
+        // alloc every frame — the model just stays on the bind-pose path.
+        std::unique_ptr<RHI::VulkanBuffer> skinAttributeBuffer;
+        bool skinAttributesFailed = false;
     };
     std::unordered_map<const CatEngine::Model*, GpuMesh> m_modelMeshCache;
 
