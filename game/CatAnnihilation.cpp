@@ -804,6 +804,7 @@ void CatAnnihilation::loadAssets() {
         proceduralTreePineFoliage_  = std::move(meshes.pineFoliage);
         proceduralTreeOakFoliage_   = std::move(meshes.oakFoliage);
         proceduralTreeBush_         = std::move(meshes.bush);
+        proceduralRock_             = std::move(meshes.rock);
 
         // Diag: vertex/index counts for the four primitives so the log
         // shows we built non-degenerate geometry. If a future change
@@ -1513,6 +1514,110 @@ void CatAnnihilation::handleInput() {
 // Render
 // ============================================================================
 
+namespace {
+
+// Web-parity forest layout — the EXACT scatter the threejs reference
+// builds in ForestEnvironment.tsx (placement logic lines 360-456):
+//   - 100 "ring" trees: random angle, distance 20 + rand*200, 70% pine /
+//     30% oak, scale 0.5-1.0 (tsx:369-390)
+//   - grid trees: x,z in [-300, 300] step 80, skip cells within 50 of
+//     the origin, jittered ±20 per axis, 60% pine / 40% oak, scale
+//     0.4-1.0 (tsx:397-421)
+//   - 60 bushes in a 10-160 ring, scale 0.5-1.0 (tsx:429-442)
+//   - 40 rocks in a 5-125 ring, random Y spin, scale 0.5-1.5 (tsx:449-463)
+//
+// Two deliberate deltas from the web, both documented in
+// docs/parity/PARITY_MATRIX.md "Deliberate divergences":
+//   - a FIXED RNG seed (the web re-randomises every page load; the native
+//     build needs bit-stable golden frames), and
+//   - grid cells beyond ±240 are dropped because the native terrain is a
+//     512-unit plane (web: 10000) — those trees would float over the void.
+//
+// This replaces the old Poisson-disk Forest source for RENDERING under
+// parity: Forest's density (0.02 trees/m²) is ~100x the web's, which is
+// what forced the 16-tree draw budget and the "wall of green" playtest
+// complaint. ~200 instances of 170-vert primitives draw comfortably
+// without any budget. Forest itself still runs for its physics colliders.
+struct WebForestInstance {
+    Engine::vec3 position{0.0F, 0.0F, 0.0F};
+    float rotationY = 0.0F;
+    float scale = 1.0F;
+    enum class Kind { Pine, Oak, Bush, Rock } kind = Kind::Pine;
+};
+
+const std::vector<WebForestInstance>& GetWebParityForest() {
+    static const std::vector<WebForestInstance> instances = [] {
+        std::vector<WebForestInstance> built;
+        built.reserve(220);
+        std::mt19937 rng(20260716U);
+        std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+        constexpr float kTau = 2.0F * Engine::Math::PI;
+
+        // Ring trees (tsx:369-390).
+        for (int i = 0; i < 100; ++i) {
+            const float angle = unit(rng) * kTau;
+            const float distance = 20.0F + unit(rng) * 200.0F;
+            WebForestInstance tree;
+            tree.position = Engine::vec3(std::cos(angle) * distance, 0.0F,
+                                         std::sin(angle) * distance);
+            tree.kind = unit(rng) > 0.3F ? WebForestInstance::Kind::Pine
+                                         : WebForestInstance::Kind::Oak;
+            tree.scale = 0.5F + unit(rng) * 0.5F;
+            built.push_back(tree);
+        }
+
+        // Grid trees with center cutout + jitter (tsx:397-421).
+        for (float gridX = -300.0F; gridX <= 300.0F; gridX += 80.0F) {
+            for (float gridZ = -300.0F; gridZ <= 300.0F; gridZ += 80.0F) {
+                if (std::sqrt(gridX * gridX + gridZ * gridZ) < 50.0F) {
+                    continue;
+                }
+                const float x = gridX + (unit(rng) - 0.5F) * 40.0F;
+                const float z = gridZ + (unit(rng) - 0.5F) * 40.0F;
+                if (std::abs(x) > 240.0F || std::abs(z) > 240.0F) {
+                    continue; // past the native terrain edge (see docblock)
+                }
+                WebForestInstance tree;
+                tree.position = Engine::vec3(x, 0.0F, z);
+                tree.kind = unit(rng) > 0.4F ? WebForestInstance::Kind::Pine
+                                             : WebForestInstance::Kind::Oak;
+                tree.scale = 0.4F + unit(rng) * 0.6F;
+                built.push_back(tree);
+            }
+        }
+
+        // Bushes (tsx:429-442).
+        for (int i = 0; i < 60; ++i) {
+            const float angle = unit(rng) * kTau;
+            const float distance = 10.0F + unit(rng) * 150.0F;
+            WebForestInstance bush;
+            bush.position = Engine::vec3(std::cos(angle) * distance, 0.0F,
+                                         std::sin(angle) * distance);
+            bush.kind = WebForestInstance::Kind::Bush;
+            bush.scale = 0.5F + unit(rng) * 0.5F;
+            built.push_back(bush);
+        }
+
+        // Rocks (tsx:449-463).
+        for (int i = 0; i < 40; ++i) {
+            const float angle = unit(rng) * kTau;
+            const float distance = 5.0F + unit(rng) * 120.0F;
+            WebForestInstance rock;
+            rock.position = Engine::vec3(std::cos(angle) * distance, 0.0F,
+                                         std::sin(angle) * distance);
+            rock.kind = WebForestInstance::Kind::Rock;
+            rock.rotationY = unit(rng) * kTau;
+            rock.scale = 0.5F + unit(rng) * 1.0F;
+            built.push_back(rock);
+        }
+
+        return built;
+    }();
+    return instances;
+}
+
+} // namespace
+
 void CatAnnihilation::render() {
     // Per-frame top-level render entry. Early-out cheaply on uninitialized
     // state so window callbacks fired during shutdown can't crash. World /
@@ -1805,6 +1910,85 @@ void CatAnnihilation::render() {
                 const bool proceduralReady =
                     proceduralTreeTrunk_ && proceduralTreePineFoliage_ &&
                     proceduralTreeOakFoliage_ && proceduralTreeBush_;
+
+                // Web parity: draw the reference's exact ~200-instance
+                // scatter (GetWebParityForest above) instead of the dense
+                // Poisson Forest, with no distance cull and no draw budget
+                // — the sparse layout plus frustum culling is cheap, and
+                // the web camera never needs trees hidden to stay
+                // readable. Colors are the LINEAR decode of the web hex
+                // values (#654321 trunk / #228B22 foliage / #3a5f38 bush /
+                // #777777 rock) because entity.frag's output goes through
+                // the swapchain's sRGB encode.
+                if (WebParity::kEnabled && proceduralReady && proceduralRock_) {
+                    const Engine::vec3 trunkLinear(0.130F, 0.056F, 0.015F);
+                    const Engine::vec3 foliageLinear(0.016F, 0.258F, 0.016F);
+                    const Engine::vec3 bushLinear(0.042F, 0.115F, 0.040F);
+                    const Engine::vec3 rockLinear(0.185F, 0.185F, 0.185F);
+
+                    for (const auto& prop : GetWebParityForest()) {
+                        const CatEngine::Model* trunkModel = nullptr;
+                        const CatEngine::Model* bodyModel = nullptr;
+                        Engine::vec3 bodyColor = foliageLinear;
+                        float baseRadius = 3.5F;
+                        switch (prop.kind) {
+                            case WebForestInstance::Kind::Pine:
+                                trunkModel = proceduralTreeTrunk_.get();
+                                bodyModel = proceduralTreePineFoliage_.get();
+                                baseRadius = 3.5F;
+                                break;
+                            case WebForestInstance::Kind::Oak:
+                                trunkModel = proceduralTreeTrunk_.get();
+                                bodyModel = proceduralTreeOakFoliage_.get();
+                                baseRadius = 4.0F;
+                                break;
+                            case WebForestInstance::Kind::Bush:
+                                bodyModel = proceduralTreeBush_.get();
+                                bodyColor = bushLinear;
+                                baseRadius = 0.7F;
+                                break;
+                            case WebForestInstance::Kind::Rock:
+                                bodyModel = proceduralRock_.get();
+                                bodyColor = rockLinear;
+                                baseRadius = 0.75F;
+                                break;
+                        }
+
+                        const float instanceRadius = baseRadius * prop.scale;
+                        const Engine::vec3 sphereCenter(
+                            prop.position.x,
+                            prop.position.y + instanceRadius,
+                            prop.position.z);
+                        if (!cullFrustum.intersectsSphere(sphereCenter,
+                                                          instanceRadius)) {
+                            continue;
+                        }
+
+                        const Engine::mat4 modelMatrix =
+                            Engine::mat4::translate(prop.position) *
+                            Engine::mat4::rotateY(prop.rotationY) *
+                            Engine::mat4::scale(Engine::vec3(prop.scale));
+
+                        if (trunkModel != nullptr) {
+                            CatEngine::Renderer::ScenePass::EntityDraw d;
+                            d.position    = prop.position;
+                            d.halfExtents = Engine::vec3(instanceRadius);
+                            d.color       = trunkLinear;
+                            d.model       = trunkModel;
+                            d.modelMatrix = modelMatrix;
+                            entityDraws.push_back(std::move(d));
+                        }
+                        {
+                            CatEngine::Renderer::ScenePass::EntityDraw d;
+                            d.position    = prop.position;
+                            d.halfExtents = Engine::vec3(instanceRadius);
+                            d.color       = bodyColor;
+                            d.model       = bodyModel;
+                            d.modelMatrix = modelMatrix;
+                            entityDraws.push_back(std::move(d));
+                        }
+                    }
+                } else
                 // 2026-04-26 SURVIVAL-PORT iter 4 — tree submission
                 // re-enabled. The earlier `false &&` gate was a
                 // diagnostic short to verify the cat was visible
