@@ -102,6 +102,14 @@ inline constexpr float kPlayerTurnSpeed = 4.25f;  // gameConfig.ts:11, rad/s (A/
 inline constexpr float kCameraDistance = 10.5f;
 inline constexpr float kCameraHeight = 8.4f;
 
+// BasicScene.tsx:191 — fixed sky backdrop #87CEEB, never animated (the
+// web build has no day/night cycle in survival). Stored as the
+// srgb_to_linear DECODE of (135,206,235)/255 because the native sky
+// shader's output passes through the swapchain's linear→sRGB encode.
+inline constexpr float kSkyLinearR = 0.2418f;
+inline constexpr float kSkyLinearG = 0.6174f;
+inline constexpr float kSkyLinearB = 0.8315f;
+
 // ---------------------------------------------------------------------
 // Progression — reference: src/lib/store/gameStore.ts (live paths).
 // ---------------------------------------------------------------------
