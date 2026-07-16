@@ -180,15 +180,26 @@ if (!quick && stages[stages.length - 1]!.ok) {
 // topColorPct<=0.35, distinctColors>=50). Fps gates are the regression-halt
 // signal the user has been chasing since 2026-04-26.
 if (!quick && stages[stages.length - 1]!.ok) {
-  const openclawRoot = resolve(PROJECT_ROOT, '..', '..', 'openclaw')
-  const verifierPath = resolve(openclawRoot, 'bridge', 'cat-verify.ts')
-  if (!existsSync(verifierPath)) {
+  // openclaw's checkout location varies by machine (this box keeps it at
+  // %USERPROFILE%/openclaw, NOT as a sibling of "App Development"). Probe the
+  // known candidates in priority order — an env override first so CI or a
+  // relocated checkout never needs a code edit — instead of hardcoding one
+  // layout and tool-erroring (exit 2) on every other box.
+  const openclawCandidates = [
+    process.env.OPENCLAW_ROOT,
+    resolve(PROJECT_ROOT, '..', '..', 'openclaw'),
+    resolve(process.env.USERPROFILE ?? process.env.HOME ?? '', 'openclaw'),
+  ].filter((p): p is string => !!p)
+  const verifierPath = openclawCandidates
+    .map((root) => resolve(root, 'bridge', 'cat-verify.ts'))
+    .find((p) => existsSync(p))
+  if (!verifierPath) {
     stages.push({
       name: 'cat-verify',
       ok: false,
       exitCode: null,
       durationMs: 0,
-      summary: `bridge/cat-verify.ts not found at ${verifierPath}`,
+      summary: `bridge/cat-verify.ts not found; probed: ${openclawCandidates.join(', ')}`,
     })
   } else {
     stages.push(
