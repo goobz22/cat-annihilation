@@ -608,6 +608,14 @@ private:
     // until AssetManager teardown at shutdown.
     std::unordered_map<int, std::shared_ptr<CatEngine::Model>> treeModels_;
 
+    // Which player weapon last damaged each enemy — the native mirror of the
+    // web's per-enemy `lastDamageSource` (LocalEnemySystem.tsx damageEnemy),
+    // consumed by onEnemyKilled to award the +15 kill bonus to the weapon
+    // that landed the killing blow. Entries are erased on kill; a dead
+    // enemy's entity id may be recycled by the ECS, so stale entries are
+    // overwritten by the next hit before they can misattribute.
+    std::unordered_map<CatEngine::Entity, std::string> lastPlayerWeaponHit_;
+
     // 2026-04-26 SURVIVAL-PORT — procedural tree primitives that bypass
     // the oversized Meshy GLB pipeline. Each tree instance emits TWO
     // EntityDraws per frame: trunk model + foliage model (or just bush
