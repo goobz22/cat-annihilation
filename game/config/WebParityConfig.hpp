@@ -207,4 +207,82 @@ inline float weaponXpForLevel(int level) {
     return static_cast<float>(std::floor(total / 2.5));
 }
 
+// ---------------------------------------------------------------------
+// Pre-game menu — reference: src/components/ui/GameModeSelection.tsx
+// (the mode-select page + the "Customize Your Cat" screen the web shows
+// before a survival run starts). MainMenu consumes these directly so the
+// native menu can never drift from the web strings/swatches without this
+// table (and its pinning test) changing too.
+// ---------------------------------------------------------------------
+
+// GameModeSelection.tsx:312-313 — the web's menu heading. Deliberately
+// NOT the app name: the web titles its menu "🐱 Cat Warriors" even though
+// the product is Cat Annihilation, and parity mirrors the web. The 🐱
+// emoji is dropped because the native ImGui font atlas has no emoji
+// coverage; the words are the parity target.
+inline constexpr const char* kMenuHeading = "Cat Warriors";
+inline constexpr const char* kMenuSubheading = "Choose your adventure";
+
+// GameModeSelection.tsx:322-323 — survival mode card title + subtitle.
+inline constexpr const char* kSurvivalCardTitle = "Survival Mode";
+inline constexpr const char* kSurvivalCardSubtitle = "Endless waves of enemies";
+
+// GameModeSelection.tsx:341-342 — story mode card title + subtitle. The
+// native card renders greyed-out with a "coming soon" hint: story mode
+// is P3-deferred until survival is 1:1 (docs/parity/PARITY_MATRIX.md).
+inline constexpr const char* kStoryCardTitle = "Story Mode";
+inline constexpr const char* kStoryCardSubtitle = "Quest-driven clan adventure";
+
+// GameModeSelection.tsx:179-180 — customize-screen headings. The web
+// subheading is mode-dependent ("<Clan> Warrior" on the story path);
+// only the survival string ships because story mode is deferred (above).
+inline constexpr const char* kCustomizeHeading = "Customize Your Cat";
+inline constexpr const char* kCustomizeSubheading = "Survival Warrior";
+
+// GameModeSelection.tsx:162 (colors.fur) — the 10 fur swatches, in the
+// web's exact order, as the exact 0-255 sRGB ints of the web hex
+// literals. The names are native-only labels (the web renders unlabeled
+// swatch buttons): the first six hexes ARE the CSS named colors listed,
+// the last four are the Tailwind gray ramp (800/700/600/300).
+struct FurSwatch {
+    const char* name;
+    int red;   // sRGB 0-255, exactly the web hex literal
+    int green;
+    int blue;
+};
+inline constexpr FurSwatch kFurSwatches[] = {
+    {"Brown",        0x96, 0x4B, 0x00}, // #964B00
+    {"Saddle Brown", 0x8B, 0x45, 0x13}, // #8B4513
+    {"Chocolate",    0xD2, 0x69, 0x1E}, // #D2691E
+    {"Peru",         0xCD, 0x85, 0x3F}, // #CD853F
+    {"Sandy Brown",  0xF4, 0xA4, 0x60}, // #F4A460
+    {"Burlywood",    0xDE, 0xB8, 0x87}, // #DEB887
+    {"Charcoal",     0x2D, 0x37, 0x48}, // #2D3748
+    {"Slate",        0x4A, 0x55, 0x68}, // #4A5568
+    {"Gray",         0x71, 0x80, 0x96}, // #718096
+    {"Silver",       0xE2, 0xE8, 0xF0}, // #E2E8F0
+};
+inline constexpr int kFurSwatchCount =
+    static_cast<int>(sizeof(kFurSwatches) / sizeof(kFurSwatches[0]));
+
+// GameModeSelection.tsx:19 — the initial primaryColor is '#964B00',
+// i.e. colors.fur[0]: the web opens the customize screen with the first
+// swatch already highlighted.
+inline constexpr int kDefaultFurSwatchIndex = 0;
+
+// sRGB -> linear decode for one 0-255 channel (the exact IEC 61966-2-1
+// piecewise curve). Same rationale as kSkyLinear* above: the fur tint is
+// fed to the entity tint push constant, which the shader multiplies in
+// LINEAR space before the swapchain's linear->sRGB encode — so handing
+// the shader the raw web hex would double-encode it and wash the color
+// out. kSkyLinear* bakes its three decoded floats; the 10 swatches
+// decode through this helper instead of baking 30 more magic floats.
+// Not constexpr for the same reason as catXpForLevel: std::pow.
+inline float srgbChannelToLinear(int srgbChannel255) {
+    const double channel = static_cast<double>(srgbChannel255) / 255.0;
+    return static_cast<float>(channel <= 0.04045
+                                  ? channel / 12.92
+                                  : std::pow((channel + 0.055) / 1.055, 2.4));
+}
+
 } // namespace CatGame::WebParity
