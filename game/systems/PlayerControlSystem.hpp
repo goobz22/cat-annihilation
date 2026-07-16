@@ -5,10 +5,12 @@
 #include "../../engine/core/Input.hpp"
 #include "../../engine/math/Vector.hpp"
 #include "../../engine/math/Transform.hpp"
+#include "../config/WebParityConfig.hpp"  // WebParity::kHotbarInitialSlot default
 
 namespace CatGame {
 
 class Terrain;
+struct CombatComponent;
 
 
 /**
@@ -251,6 +253,23 @@ public:
      */
     bool isFollowPlayerYawEnabled() const { return followPlayerYawEnabled_; }
 
+    /**
+     * @return the active web-parity hotbar slot (0-based). Slots 0-3 carry
+     *         the seeded water-spell / sword / bow / shield; 4-8 are empty.
+     *         This is the agreed read interface for the HUD agent, which
+     *         renders the hotbar selection from the live game object.
+     */
+    int getActiveHotbarSlot() const { return activeHotbarSlot_; }
+
+    /**
+     * @return a static, human-readable name for the active hotbar item
+     *         ("Water Spell", "Sword", "Bow", "Shield", or "(empty)").
+     *         Returned as a string literal so the caller may hold the pointer
+     *         freely. Companion read interface to getActiveHotbarSlot() for
+     *         the HUD agent.
+     */
+    const char* getActiveHotbarItemName() const;
+
 private:
     // Input processing
     void processMovementInput(float dt);
@@ -259,6 +278,26 @@ private:
     void processAttackInput();
     void processBlockInput();
     void processDodgeInput(float dt);
+
+    // --- Web-parity hotbar (weapon selection + per-item attack) ----------
+    // Reads number keys 1-7 into activeHotbarSlot_ (slots 0-6), logging every
+    // change so a playtest can confirm switching without a HUD. Runs before
+    // the movement/attack pipeline so a slot change on this frame's press is
+    // live for the same frame's attack.
+    void processHotbarSelection();
+
+    // Refreshes the two CombatComponent contract fields the shield agent
+    // reads: facingYaw (the cat's world yaw at frame start) and shieldRaised
+    // (true only while slot 3 / shield is active). Called every human-driven
+    // frame regardless of the active slot.
+    void updateHotbarCombatFlags();
+
+    // Per-item attack dispatch, invoked from processAttackInput when spacebar
+    // or left-click fires. Each mirrors the matching web action; see the .cpp
+    // for the exact web citations.
+    void performSwordAttack(CombatComponent* combat);
+    void performBowAttack();
+    void performSpellCast();
 
     // Autoplay AI: replaces keyboard/mouse-driven input with a minimal
     // chase-and-attack policy. Implemented alongside the standard input path
@@ -305,6 +344,16 @@ private:
     // Optional — null = no tree collision check, player walks through trees
     // (the regression we are fixing here).
     const class Forest* forest_ = nullptr;
+
+    // Web-parity hotbar state. The 9-slot quick inventory is seeded exactly
+    // like gameStore.ts:288-298 (slot 0 water spell, 1 sword, 2 bow, 3 shield,
+    // 4-8 empty), and the initial active slot is 0 (gameStore.ts:379) so a
+    // fresh game left-clicks a water spell just like the web build. Number
+    // keys 1-7 select slots 0-6 (LocalProjectileSystem.tsx:294-297); empty
+    // slots select but do nothing on attack. Only the human-input path reads
+    // or writes this — autoplay keeps its own melee+spell policy and never
+    // touches the hotbar.
+    int activeHotbarSlot_ = WebParity::kHotbarInitialSlot;
 
     // Autoplay spell cadence: a level-1 single-target ranged spell is cast
     // at most every kAutoplayCastInterval seconds, guaranteeing a steady

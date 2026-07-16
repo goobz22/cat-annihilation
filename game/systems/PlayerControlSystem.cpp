@@ -16,6 +16,40 @@
 
 namespace CatGame {
 
+namespace {
+
+// Web-parity hotbar item identity for a given slot. The seed mirrors
+// gameStore.ts:288-298 initialInventory exactly: slot 0 water spell,
+// 1 sword, 2 bow, 3 shield, and 4-8 empty. Number keys 1-7 select slots
+// 0-6 (LocalProjectileSystem.tsx:294-297); the empty slots are selectable
+// but inert on attack, matching the web's null quick-slots.
+enum class HotbarItem { Spell, Sword, Bow, Shield, Empty };
+
+HotbarItem hotbarItemForSlot(int slot) {
+    switch (slot) {
+        case 0: return HotbarItem::Spell;   // 💧 water-spell (gameStore.ts:289)
+        case 1: return HotbarItem::Sword;   // ⚔️ sword       (gameStore.ts:290)
+        case 2: return HotbarItem::Bow;     // 🏹 bow         (gameStore.ts:291)
+        case 3: return HotbarItem::Shield;  // 🛡️ shield      (gameStore.ts:292)
+        default: return HotbarItem::Empty;  // slots 4-8 null (gameStore.ts:293-297)
+    }
+}
+
+// Human-readable label for logging + the HUD getter. Returns a string
+// literal (static storage), so returning it as a bare const char* is safe.
+const char* hotbarItemName(HotbarItem item) {
+    switch (item) {
+        case HotbarItem::Spell:  return "Water Spell";
+        case HotbarItem::Sword:  return "Sword";
+        case HotbarItem::Bow:    return "Bow";
+        case HotbarItem::Shield: return "Shield";
+        case HotbarItem::Empty:  return "(empty)";
+    }
+    return "(empty)";
+}
+
+} // namespace
+
 PlayerControlSystem::PlayerControlSystem(Engine::Input* input, int priority)
     : System(priority)
     , input_(input)
@@ -70,6 +104,16 @@ void PlayerControlSystem::update(float dt) {
         updateAutoplay(dt);
         updateCamera(dt);
         return;
+    }
+
+    // Web-parity hotbar: resolve the active slot from number keys and refresh
+    // the shield/facing flags the shield agent reads. Done first so a slot
+    // change on this frame's key press is live for this frame's attack, and so
+    // facingYaw is captured at frame start — before processMovementInput turns
+    // the cat with A/D this frame.
+    if constexpr (WebParity::kEnabled) {
+        processHotbarSelection();
+        updateHotbarCombatFlags();
     }
 
     // Process all input
@@ -347,6 +391,16 @@ void PlayerControlSystem::processMouseLook(float dt) {
 }
 
 void PlayerControlSystem::processJumpInput() {
+    // Web parity: the threejs survival build has no jump. The cat is ground-
+    // locked (CatCharacter/index.tsx movement is turn + forward/back only, and
+    // processMovementInput unconditionally snaps Y to the heightmap), and
+    // Space is repurposed as the ATTACK key (LocalProjectileSystem.tsx:287).
+    // Firing movement->jump() here would both fight the ground-snap and steal
+    // the Space press from processAttackInput, so we no-op under parity.
+    if constexpr (WebParity::kEnabled) {
+        return;
+    }
+
     auto* movement = ecs_->getComponent<MovementComponent>(playerEntity_);
 
     if (!movement) {
@@ -362,6 +416,30 @@ void PlayerControlSystem::processAttackInput() {
     auto* combat = ecs_->getComponent<CombatComponent>(playerEntity_);
 
     if (!combat) {
+        return;
+    }
+
+    if constexpr (WebParity::kEnabled) {
+        // Web attack input: spacebar OR left-mouse fires the ACTIVE hotbar
+        // item's action — sword swing (CatCharacter/index.tsx:199-213 left
+        // click) or spell/arrow projectile (LocalProjectileSystem.tsx:285-308
+        // spacebar + left click). Edge-triggered so exactly one action per
+        // press; right-mouse is NOT a block gate here (the web build reserves
+        // right-click for the shield bash, which the shield agent owns).
+        const bool attackPressed =
+            input_->isKeyPressed(Engine::Input::Key::Space) ||
+            input_->isMouseButtonPressed(Engine::Input::MouseButton::Left);
+        if (!attackPressed) {
+            return;
+        }
+
+        switch (hotbarItemForSlot(activeHotbarSlot_)) {
+            case HotbarItem::Sword:  performSwordAttack(combat); break;
+            case HotbarItem::Bow:    performBowAttack();         break;
+            case HotbarItem::Spell:  performSpellCast();         break;
+            case HotbarItem::Shield: break;  // shield has no attack action
+            case HotbarItem::Empty:  break;  // empty slot: selectable, inert
+        }
         return;
     }
 
@@ -384,6 +462,146 @@ void PlayerControlSystem::processAttackInput() {
             combatSystem_->performAttack(playerEntity_, attackType);
         }
     }
+}
+
+const char* PlayerControlSystem::getActiveHotbarItemName() const {
+    return hotbarItemName(hotbarItemForSlot(activeHotbarSlot_));
+}
+
+void PlayerControlSystem::processHotbarSelection() {
+    // Number keys 1-7 → hotbar slots 0-6, exactly like the web build
+    // (LocalProjectileSystem.tsx:294-297: setActiveSlot(parseInt(key) - 1)).
+    // We only react to the edge (isKeyPressed) so holding a number key doesn't
+    // re-log every frame, and we log at info level on an actual change so a
+    // playtest can verify switching with no HUD wired yet.
+    struct KeySlot {
+        Engine::Input::Key key;
+        int slot;
+    };
+    static constexpr KeySlot kBindings[] = {
+        {Engine::Input::Key::Num1, 0},  // water spell
+        {Engine::Input::Key::Num2, 1},  // sword
+        {Engine::Input::Key::Num3, 2},  // bow
+        {Engine::Input::Key::Num4, 3},  // shield
+        {Engine::Input::Key::Num5, 4},  // empty
+        {Engine::Input::Key::Num6, 5},  // empty
+        {Engine::Input::Key::Num7, 6},  // empty
+    };
+
+    for (const auto& binding : kBindings) {
+        if (input_->isKeyPressed(binding.key) && binding.slot != activeHotbarSlot_) {
+            activeHotbarSlot_ = binding.slot;
+            Engine::Logger::info(
+                std::string("[hotbar] slot ") + std::to_string(activeHotbarSlot_) +
+                " -> " + hotbarItemName(hotbarItemForSlot(activeHotbarSlot_)));
+        }
+    }
+}
+
+void PlayerControlSystem::updateHotbarCombatFlags() {
+    auto* combat = ecs_->getComponent<CombatComponent>(playerEntity_);
+    auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
+    if (combat == nullptr || transform == nullptr) {
+        return;
+    }
+
+    // facingYaw: the cat's world yaw recovered from its Y-axis transform
+    // quaternion (q = (cos(θ/2), 0, sin(θ/2), 0) ⇒ θ = 2·atan2(q.y, q.w)).
+    // This is the SAME yaw processMovementInput / updateAutoplay use to drive
+    // locomotion, so the shield agent's "1.2 units in front" barrier lines up
+    // with the direction the cat actually walks and shoots.
+    combat->facingYaw = 2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
+
+    // shieldRaised: true for exactly the frames the shield slot (index 3) is
+    // active, mirroring the web gate (LocalEnemySystem.tsx:231 checks
+    // inventory[3].id==='shield' && activeSlot===3). Any other slot clears it,
+    // so the barrier only exists while the player is holding the shield up.
+    combat->shieldRaised =
+        (hotbarItemForSlot(activeHotbarSlot_) == HotbarItem::Shield);
+}
+
+void PlayerControlSystem::performSwordAttack(CombatComponent* combat) {
+    // Sword: the existing web-tuned melee path. The player's CombatComponent
+    // is seeded (CatAnnihilation.cpp:2591-2595) with 40 damage / 2.0 range /
+    // attackSpeed 2.0 (⇒ 500 ms cooldown, web SWORD ATTACK_DURATION) and
+    // equippedWeapon stays Sword for the whole run — the hotbar never calls
+    // equipWeapon, so these values are never clobbered. startAttack() spikes
+    // attackCooldown; CombatSystem::processMeleeAttacks detects that first
+    // frame and applies the damage. performAttack() queues the combo step
+    // (a no-op when the player has no ComboComponent). The startAttack()
+    // cooldown gate is what enforces the 500 ms swing rate.
+    if (combat->startAttack() && combatSystem_ != nullptr) {
+        combatSystem_->performAttack(playerEntity_, "L");
+    }
+}
+
+void PlayerControlSystem::performBowAttack() {
+    if (combatSystem_ == nullptr) {
+        return;
+    }
+    auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
+    if (transform == nullptr) {
+        return;
+    }
+
+    // Bow: spawn an arrow directly through CombatSystem's projectile pool.
+    // Web (LocalProjectileSystem.tsx:236-248) spawns it 2 units in front at
+    // y+1 flying at speed 25; on an enemy hit it deals 30
+    // (GlobalCollisionSystem.tsx:126-129). We spawn along the cat's facing and
+    // feed the web damage (kBowProjectileDamage). We go straight to
+    // spawnProjectile rather than flipping equippedWeapon to Bow because (a)
+    // that would clobber the web-tuned sword stats via the auto-projectile
+    // path, and (b) the web bow has no cooldown — one arrow per input press
+    // (this call is edge-gated in processAttackInput) matches that.
+    //
+    // NOTE (recorded in the port report): spawnProjectile applies CombatSystem's
+    // fixed projectileSpeed_ member (30 m/s), so the arrow currently flies at
+    // 30 rather than the web's 25. projectileSpeed_ is owned by CombatSystem,
+    // not the hotbar agent; the 5 m/s delta is documented, not silently
+    // absorbed.
+    const float yaw =
+        2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
+    const Engine::vec3 facing(std::sin(yaw), 0.0f, -std::cos(yaw));
+    const Engine::vec3 spawnPosition =
+        transform->position +
+        facing * WebParity::kProjectileSpawnForwardDistance +
+        Engine::vec3(0.0f, WebParity::kProjectileSpawnHeight, 0.0f);
+
+    combatSystem_->spawnProjectile(playerEntity_, spawnPosition, facing,
+                                   WebParity::kBowProjectileDamage);
+}
+
+void PlayerControlSystem::performSpellCast() {
+    if (magicSystem_ == nullptr) {
+        return;
+    }
+    auto* transform = ecs_->getComponent<Engine::Transform>(playerEntity_);
+    if (transform == nullptr) {
+        return;
+    }
+
+    // Spell (water): route the cast through ElementalMagicSystem — the same
+    // entry point updateAutoplay uses — so the human cast reuses the native
+    // water_bolt projectile, its per-element hit burst, and elemental XP. Web
+    // casts a flat-20-damage sphere 2 units in front (LocalProjectileSystem
+    // .tsx:192-205); native water_bolt also deals 20, so the damage matches
+    // (the projectile speed differs — native 25 vs web 15 — an accepted delta
+    // owned by the magic system). We aim at a point well along the cat's
+    // facing so the bolt's launch direction matches where the cat looks.
+    //
+    // Web spells are spammable with no mana/cooldown. canCastSpell() inside
+    // castSpell() applies water_bolt's own ~1-1.5 s cooldown, so mashing the
+    // attack key can have a recast refused; per the task that is acceptable
+    // and noted rather than gutting the magic system's cooldown model.
+    constexpr float kSpellAimDistance = 20.0f;  // native aim reach for the cast
+    constexpr const char* kWaterSpellId = "water_bolt";
+    const float yaw =
+        2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
+    const Engine::vec3 facing(std::sin(yaw), 0.0f, -std::cos(yaw));
+    const Engine::vec3 aimPoint =
+        transform->position + facing * kSpellAimDistance;
+
+    magicSystem_->castSpell(playerEntity_, std::string(kWaterSpellId), aimPoint);
 }
 
 void PlayerControlSystem::processBlockInput() {

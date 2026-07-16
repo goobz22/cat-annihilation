@@ -128,4 +128,41 @@ inline float catXpForLevel(int level) {
     return static_cast<float>(std::floor(total / 5.4));
 }
 
+// ---------------------------------------------------------------------
+// Hotbar + per-weapon attack — reference: the 9-slot quick inventory in
+// src/lib/store/gameStore.ts (item seed + active slot), the per-item action
+// in src/components/game/LocalProjectileSystem.tsx (spell/bow projectile
+// spawn), and the on-hit damage in src/components/game/GlobalCollisionSystem.tsx.
+//
+// LIVE-PATH WARNING (mirrors the wave-config note above): the web build does
+// NOT use gameConfig.ts WEAPONS.BOW here — LocalProjectileSystem.tsx hardcodes
+// the arrow speed (25) and GlobalCollisionSystem.tsx hardcodes the on-hit
+// damage (30), OVERRIDING WEAPONS.BOW (BASE_DAMAGE 25 / PROJECTILE_SPEED 15,
+// gameConfig.ts:38-44). We cite the executed literals, not the dead config.
+// ---------------------------------------------------------------------
+
+// gameStore.ts:288-298 (initialInventory) — slot 0 water spell, 1 sword,
+// 2 bow, 3 shield, 4-8 null. gameStore.ts:379 (activeSlot: 0) — a fresh run
+// starts with the water spell selected. Number keys 1-7 select slots 0-6
+// (LocalProjectileSystem.tsx:294-297: setActiveSlot(parseInt(key) - 1)).
+inline constexpr int kHotbarSlotCount = 9;
+inline constexpr int kHotbarInitialSlot = 0;
+
+// Spell/bow projectiles both spawn 2 units in front of the cat at y = 1
+// (LocalProjectileSystem.tsx:195-198 spell, 238-241 bow — identical offset:
+// x + sin(rot)*2, y = 1, z + cos(rot)*2). On the native side the cat walks
+// terrain so the height is applied as +1 above the cat's ground position.
+inline constexpr float kProjectileSpawnForwardDistance = 2.0f;
+inline constexpr float kProjectileSpawnHeight = 1.0f;
+
+// Bow — LocalProjectileSystem.tsx:246 spawns the arrow at speed 25;
+// GlobalCollisionSystem.tsx:126-129 deals 30 on an enemy hit. Only the
+// damage is consumable by the native projectile path (CombatSystem::
+// spawnProjectile takes a damage value); the speed is a fixed CombatSystem
+// member (projectileSpeed_ = 30), so kBowProjectileSpeed records the web
+// target for reference/tests even though the native arrow currently flies at
+// 30 — a CombatSystem-owned constant the hotbar agent does not own.
+inline constexpr float kBowProjectileDamage = 30.0f;
+inline constexpr float kBowProjectileSpeed = 25.0f;
+
 } // namespace CatGame::WebParity

@@ -38,6 +38,29 @@ struct CombatComponent {
     float attackSpeedMultiplier = 1.0f;   // Attack speed modifier
     bool canAttack = true;                // Can the entity attack? (disarmed, stunned, etc.)
 
+    // ===== Web-parity hotbar shield state (shared agent contract) =====
+    // These two fields are the agreed hand-off between the hotbar input agent
+    // (PlayerControlSystem, the sole WRITER) and the shield agent (the sole
+    // READER). They live on CombatComponent so the shield barrier / front-arc
+    // damage negation can be resolved from the player's combat state without
+    // reaching back into PlayerControlSystem. Mirrors the web shield gate at
+    // src/components/game/LocalEnemySystem.tsx:231 (inventory[3].id==='shield'
+    // && activeSlot===3) plus the 1.2-unit-in-front shield centre it derives
+    // from the cat's facing.
+
+    // True for exactly the frames the shield hotbar slot (index 3) is the
+    // active item. PlayerControlSystem sets it every frame in human play
+    // (false whenever any other slot is active); autoplay never raises it.
+    bool shieldRaised = false;
+
+    // World-space yaw the player faced at the start of the frame (radians).
+    // Native facing convention: facing = (sin yaw, 0, -cos yaw) — the SAME
+    // formula PlayerControlSystem uses to drive locomotion, so the shield
+    // barrier the reader places "in front" of the cat lines up exactly with
+    // the direction the cat walks and shoots. Recovered from the player
+    // transform as 2 * atan2(rotation.y, rotation.w).
+    float facingYaw = 0.0f;
+
     /**
      * Get the cooldown duration for the current attack speed
      * @return Cooldown duration in seconds

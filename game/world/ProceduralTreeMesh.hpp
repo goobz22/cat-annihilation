@@ -75,6 +75,16 @@ struct ProceduralTreeMeshes {
     // the lower poly count multiplies through Forest's bush count
     // savings.
     std::shared_ptr<CatEngine::Model> bush;
+
+    // Rock: dodecahedron with circumradius 0.5, flat-shaded, centred at
+    // the origin — ForestEnvironment.tsx:211-226 scatters 40 of these
+    // (`<dodecahedronGeometry args={[0.5, 0]}>`, #777777, random Y spin,
+    // scale 0.5-1.5). three.js's PolyhedronGeometry normalises every
+    // vertex onto the radius sphere and emits non-indexed triangles with
+    // per-face normals, so the native build duplicates vertices per
+    // triangle to reproduce the faceted look (smooth normals would read
+    // as a lumpy ball, not a rock).
+    std::shared_ptr<CatEngine::Model> rock;
 };
 
 // Build all four primitives. Idempotent in the sense that calling it

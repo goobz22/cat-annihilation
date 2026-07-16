@@ -1,6 +1,7 @@
 #include "ProceduralTreeMesh.hpp"
 
 #include <cmath>
+#include <utility>
 
 namespace CatGame {
 
@@ -267,6 +268,88 @@ static void AppendSphere(CatEngine::Mesh& mesh,
 // animations, no skinning skeleton needed. We DO populate
 // boundsMin/boundsMax so any future code that iterates Mesh bounds
 // (e.g. AABB-based culling, debug overlays) doesn't see zero-bounds
+// Faceted dodecahedron matching three.js `DodecahedronGeometry(radius, 0)`
+// (the web port's rock, ForestEnvironment.tsx:211-226). three's
+// PolyhedronGeometry normalises the 20 canonical vertices onto the
+// radius sphere and emits NON-indexed triangles, which gives each
+// triangle a constant (face) normal — the faceted read that makes a
+// half-metre prop look like a rock instead of a pebble-smooth ball. We
+// reproduce that by duplicating the three corner vertices per triangle
+// and assigning them the face normal.
+static void AppendDodecahedron(CatEngine::Mesh& mesh,
+                               float radius,
+                               const glm::vec3& centre)
+{
+    // Canonical dodecahedron vertex table (three.js DodecahedronGeometry
+    // source): the 8 cube corners (±1,±1,±1) plus the 12 rectangle
+    // vertices built from the golden ratio t and its reciprocal r.
+    const float t = (1.0F + std::sqrt(5.0F)) / 2.0F;
+    const float r = 1.0F / t;
+    const glm::vec3 canonical[20] = {
+        {-1, -1, -1}, {-1, -1,  1}, {-1,  1, -1}, {-1,  1,  1},
+        { 1, -1, -1}, { 1, -1,  1}, { 1,  1, -1}, { 1,  1,  1},
+        { 0, -r, -t}, { 0, -r,  t}, { 0,  r, -t}, { 0,  r,  t},
+        {-r, -t,  0}, {-r,  t,  0}, { r, -t,  0}, { r,  t,  0},
+        {-t,  0, -r}, { t,  0, -r}, {-t,  0,  r}, { t,  0,  r},
+    };
+    // 36 triangles = 12 pentagonal faces × 3 fan triangles, in three.js's
+    // published index order so the silhouette matches the web rock
+    // exactly frame-for-frame in side-by-side captures.
+    static constexpr uint32_t kIndices[36 * 3] = {
+        3, 11, 7,   3, 7, 15,   3, 15, 13,
+        7, 19, 17,  7, 17, 6,   7, 6, 15,
+        17, 4, 8,   17, 8, 10,  17, 10, 6,
+        8, 0, 16,   8, 16, 2,   8, 2, 10,
+        0, 12, 1,   0, 1, 18,   0, 18, 16,
+        6, 10, 2,   6, 2, 13,   6, 13, 15,
+        2, 16, 18,  2, 18, 3,   2, 3, 13,
+        18, 1, 9,   18, 9, 11,  18, 11, 3,
+        4, 14, 12,  4, 12, 0,   4, 0, 8,
+        11, 9, 5,   11, 5, 19,  11, 19, 7,
+        19, 5, 14,  19, 14, 4,  19, 4, 17,
+        1, 12, 14,  1, 14, 5,   1, 5, 9,
+    };
+
+    for (int tri = 0; tri < 36; ++tri) {
+        glm::vec3 corners[3];
+        for (int lane = 0; lane < 3; ++lane) {
+            // Normalise onto the radius sphere — the canonical table has
+            // mixed vertex magnitudes (√3 for cube corners, √(r²+t²) for
+            // the rectangles); three.js projects them all to `radius`.
+            corners[lane] =
+                glm::normalize(canonical[kIndices[tri * 3 + lane]]) * radius;
+        }
+
+        glm::vec3 faceNormal = glm::cross(corners[1] - corners[0],
+                                          corners[2] - corners[0]);
+        // Orient outward: for a convex solid centred at the origin the
+        // face normal must point away from the centre. This guards the
+        // hand-copied index table against a winding slip — a flipped
+        // face would be backface-culled into a hole in the rock.
+        const glm::vec3 faceCentroid =
+            (corners[0] + corners[1] + corners[2]) / 3.0F;
+        if (glm::dot(faceNormal, faceCentroid) < 0.0F) {
+            std::swap(corners[1], corners[2]);
+            faceNormal = -faceNormal;
+        }
+        faceNormal = glm::normalize(faceNormal);
+
+        const uint32_t firstIndex = static_cast<uint32_t>(mesh.vertices.size());
+        for (int lane = 0; lane < 3; ++lane) {
+            CatEngine::Vertex vert{};
+            vert.position = centre + corners[lane];
+            vert.normal = faceNormal;
+            // Planar UV projection — the rock is flat-colored (#777777
+            // via EntityDraw::color) so the coordinates only need to be
+            // finite, not artistic.
+            vert.texcoord0 = glm::vec2(corners[lane].x / radius * 0.5F + 0.5F,
+                                       corners[lane].z / radius * 0.5F + 0.5F);
+            mesh.vertices.push_back(vert);
+            mesh.indices.push_back(firstIndex + static_cast<uint32_t>(lane));
+        }
+    }
+}
+
 // AABBs collapsed at the origin.
 static std::shared_ptr<CatEngine::Model> WrapMeshAsModel(CatEngine::Mesh&& mesh) {
     if (!mesh.vertices.empty()) {
@@ -342,6 +425,16 @@ ProceduralTreeMeshes BuildProceduralTreeMeshes() {
                      /*heightSegs*/ 8,
                      /*centre   */ glm::vec3(0.0F, 0.0F, 0.0F));
         result.bush = WrapMeshAsModel(std::move(bushMesh));
+    }
+
+    // Rock: faceted dodecahedron, circumradius 0.5, at the origin.
+    {
+        CatEngine::Mesh rockMesh;
+        rockMesh.name = "rock_procedural";
+        AppendDodecahedron(rockMesh,
+                           /*radius*/ 0.5F,
+                           /*centre*/ glm::vec3(0.0F, 0.0F, 0.0F));
+        result.rock = WrapMeshAsModel(std::move(rockMesh));
     }
 
     return result;

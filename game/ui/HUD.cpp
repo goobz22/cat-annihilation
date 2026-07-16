@@ -122,21 +122,26 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
 
     // -------------------------------------------------- Health bar (bottom-left).
     // Keep well clear of the Windows taskbar in windowed mode — the client area can
-    // be ~40px shorter than the reported screenHeight.
+    // be ~40px shorter than the reported screenHeight. The X/width/Y here are hoisted
+    // so the active-weapon indicator (above) and level/XP bar (below) can align to the
+    // same bottom-left stat column instead of hardcoding the geometry three times.
+    const float healthBarWidth = 360.0F;
+    const float healthBarHeight = 32.0F;
+    const float healthBarX = 32.0F;
+    const float healthBarY = height - healthBarHeight - 120.0F;
     {
-        const float barWidth = 360.0F;
-        const float barHeight = 32.0F;
-        const float x = 32.0F;
-        const float y = height - barHeight - 120.0F;
         const ImU32 bgColor = IM_COL32(20, 20, 30, 200);
         const ImU32 fillColor = (healthRatio < 0.3F)
             ? IM_COL32(230, 60, 50, 230)
             : IM_COL32(60, 200, 90, 230);
         const ImU32 borderColor = IM_COL32(255, 255, 255, 160);
 
-        draw->AddRectFilled(ImVec2(x, y), ImVec2(x + barWidth, y + barHeight), bgColor, 6.0F);
-        draw->AddRectFilled(ImVec2(x, y), ImVec2(x + barWidth * healthRatio, y + barHeight), fillColor, 6.0F);
-        draw->AddRect(ImVec2(x, y), ImVec2(x + barWidth, y + barHeight), borderColor, 6.0F, 0, 2.0F);
+        draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
+                            ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), bgColor, 6.0F);
+        draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
+                            ImVec2(healthBarX + healthBarWidth * healthRatio, healthBarY + healthBarHeight), fillColor, 6.0F);
+        draw->AddRect(ImVec2(healthBarX, healthBarY),
+                      ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), borderColor, 6.0F, 0, 2.0F);
 
         if (regular != nullptr) {
             ImGui::PushFont(regular);
@@ -145,11 +150,88 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
         std::snprintf(label, sizeof(label), "HP  %d / %d",
                       static_cast<int>(m_currentHealth), static_cast<int>(m_maxHealth));
         const ImVec2 labelSize = ImGui::CalcTextSize(label);
-        draw->AddText(ImVec2(x + (barWidth - labelSize.x) * 0.5F, y + (barHeight - labelSize.y) * 0.5F),
+        draw->AddText(ImVec2(healthBarX + (healthBarWidth - labelSize.x) * 0.5F,
+                             healthBarY + (healthBarHeight - labelSize.y) * 0.5F),
                       IM_COL32(255, 255, 255, 240), label);
         if (regular != nullptr) {
             ImGui::PopFont();
         }
+    }
+
+    // ------------------------------------ Active weapon indicator (above HP bar).
+    // Mirrors the web InventoryHotbar's active-slot label (InventoryHotbar.tsx:66-70):
+    // the selected item's name plus its 1-based slot key. Native has no on-screen
+    // hotbar grid yet, so this compact readout is the survival player's only cue for
+    // which weapon/spell number-key 1-9 is live. Coloured amber (#fbbf24) to match the
+    // web active-slot highlight border (styles/components/inventory.css:27). Hidden
+    // until a name is fed, so it never shows a blank "[1]" before the hotbar wires up.
+    if (!m_activeWeaponName.empty()) {
+        if (bold != nullptr) {
+            ImGui::PushFont(bold);
+        }
+        char weaponText[80];
+        std::snprintf(weaponText, sizeof(weaponText), "%s  [%u]",
+                      m_activeWeaponName.c_str(), m_activeWeaponSlot);
+        const ImVec2 weaponSize = ImGui::CalcTextSize(weaponText);
+        // Sit one text-height above the HP bar, left-aligned to the same column.
+        const float weaponY = healthBarY - weaponSize.y - 8.0F;
+        draw->AddText(ImVec2(healthBarX, weaponY), IM_COL32(251, 191, 36, 245), weaponText);
+        if (bold != nullptr) {
+            ImGui::PopFont();
+        }
+    }
+
+    // ------------------------------------- Cat level + XP bar (below the HP bar).
+    // Mirrors web CatStats: '🐱 Lv.{level}' (CatStats.tsx:125-127) plus the XP progress
+    // bar (CatStats.tsx:133-137) whose fill = xpIntoLevel/xpNeededForLevel. Native feeds
+    // LevelingSystem::getXPProgress() (already normalised 0..1). Styled to match the HP
+    // bar's primitives (rounded track + fill + border) so the two stats read as one
+    // column, but thinner to echo the web bar's slim 6px track. Colours cite the web
+    // CSS: track #374151 (ui.css:50), amber gradient #fbbf24→#f59e0b (ui.css:58), and
+    // the 'LVL N' caption in cat-level orange #ff6b35 (ui.css:32).
+    {
+        const float xpRowY = healthBarY + healthBarHeight + 10.0F;
+        const float xpBarHeight = 14.0F;
+
+        // 'LVL N' caption to the left of the bar (web renders the level as its own text
+        // segment ahead of the XP bar). Drawn bold in cat-level orange.
+        if (bold != nullptr) {
+            ImGui::PushFont(bold);
+        }
+        char levelLabel[32];
+        std::snprintf(levelLabel, sizeof(levelLabel), "LVL %u", m_catLevel);
+        const ImVec2 levelSize = ImGui::CalcTextSize(levelLabel);
+        // Vertically centre the caption on the (thinner) XP bar.
+        draw->AddText(ImVec2(healthBarX, xpRowY + (xpBarHeight - levelSize.y) * 0.5F),
+                      IM_COL32(255, 107, 53, 245), levelLabel);
+        if (bold != nullptr) {
+            ImGui::PopFont();
+        }
+
+        // XP bar occupies the column width remaining after the caption, and ends flush
+        // with the HP bar's right edge so both bars share the same right margin.
+        const float xpBarX = healthBarX + levelSize.x + 12.0F;
+        const float xpBarRight = healthBarX + healthBarWidth;
+        const float xpBarWidth = xpBarRight - xpBarX;
+        const float xpRatio = std::clamp(m_xpProgress, 0.0F, 1.0F);
+
+        const ImU32 xpTrackColor = IM_COL32(55, 65, 81, 220);   // web #374151
+        const ImU32 xpBorderColor = IM_COL32(255, 255, 255, 120);
+
+        draw->AddRectFilled(ImVec2(xpBarX, xpRowY),
+                            ImVec2(xpBarRight, xpRowY + xpBarHeight), xpTrackColor, 4.0F);
+        // Horizontal amber gradient (#fbbf24 → #f59e0b) over just the filled portion,
+        // reproducing the web linear-gradient(90deg, ...) fill.
+        if (xpRatio > 0.0F) {
+            const float xpFillRight = xpBarX + xpBarWidth * xpRatio;
+            const ImU32 xpFillLeft = IM_COL32(251, 191, 36, 235);   // web #fbbf24
+            const ImU32 xpFillEnd = IM_COL32(245, 158, 11, 235);    // web #f59e0b
+            draw->AddRectFilledMultiColor(ImVec2(xpBarX, xpRowY),
+                                          ImVec2(xpFillRight, xpRowY + xpBarHeight),
+                                          xpFillLeft, xpFillEnd, xpFillEnd, xpFillLeft);
+        }
+        draw->AddRect(ImVec2(xpBarX, xpRowY),
+                      ImVec2(xpBarRight, xpRowY + xpBarHeight), xpBorderColor, 4.0F, 0, 1.5F);
     }
 
     // ---------------------------------------------- Wave / enemies (top-center)
@@ -303,6 +385,21 @@ void HUD::setCombo(uint32_t combo) {
     if (combo > 0) {
         m_comboDisplayTime = 0.0F;
     }
+}
+
+void HUD::setActiveWeapon(const std::string& itemName, uint32_t slotNumber) {
+    m_activeWeaponName = itemName;
+    m_activeWeaponSlot = slotNumber;
+}
+
+void HUD::setCatLevel(uint32_t level) {
+    m_catLevel = level;
+}
+
+void HUD::setXpProgress(float progress) {
+    // Clamp on ingest as well as on render so a stray >1 (e.g. a level-up frame
+    // before recalculation) can never overflow the bar fill.
+    m_xpProgress = std::clamp(progress, 0.0F, 1.0F);
 }
 
 // ============================================================================

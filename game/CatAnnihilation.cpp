@@ -1454,6 +1454,24 @@ void CatAnnihilation::updateUI(float dt) {
                                         static_cast<uint32_t>(std::max(total, 0)));
             }
             activeHud.setScore(static_cast<uint32_t>(enemiesKilled_));
+
+            // Active weapon indicator — mirrors web InventoryHotbar's active-slot
+            // label (InventoryHotbar.tsx:66-70). The hotbar selection lives in
+            // PlayerControlSystem; getActiveHotbarSlot() is 0-based, so +1 to match
+            // the web's 1-9 slot keys.
+            if (playerControlSystem_ != nullptr) {
+                activeHud.setActiveWeapon(
+                    playerControlSystem_->getActiveHotbarItemName(),
+                    static_cast<uint32_t>(playerControlSystem_->getActiveHotbarSlot()) + 1U);
+            }
+
+            // Cat level + XP bar — mirrors web CatStats level (CatStats.tsx:125-127)
+            // and XP progress bar (CatStats.tsx:133-137). getXPProgress() is already
+            // the normalised 0..1 fraction the bar fill expects.
+            if (levelingSystem_ != nullptr) {
+                activeHud.setCatLevel(static_cast<uint32_t>(std::max(levelingSystem_->getLevel(), 1)));
+                activeHud.setXpProgress(levelingSystem_->getXPProgress());
+            }
         }
     }
 }

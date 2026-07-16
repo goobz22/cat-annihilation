@@ -84,6 +84,36 @@ public:
      */
     void setCombo(uint32_t combo);
 
+    /**
+     * @brief Set the currently-selected hotbar weapon/spell for the active-weapon
+     *        indicator drawn beside the health bar.
+     *
+     * Mirrors the web InventoryHotbar's active-slot label (InventoryHotbar.tsx:66-70),
+     * which prints the active item's name plus its 1-based slot key.
+     *
+     * @param itemName Display name of the active item ("Spell"/"Sword"/"Bow"/"Shield").
+     *                 An empty string hides the indicator (nothing equipped/known yet).
+     * @param slotNumber 1-based hotbar slot (web shows keys 1-9, InventoryHotbar.tsx:60-62)
+     */
+    void setActiveWeapon(const std::string& itemName, uint32_t slotNumber);
+
+    /**
+     * @brief Set the cat's current level for the level/XP readout.
+     *
+     * Mirrors web CatStats '🐱 Lv.{level}' (CatStats.tsx:125-127).
+     * @param level Current cat level (>= 1)
+     */
+    void setCatLevel(uint32_t level);
+
+    /**
+     * @brief Set XP progress toward the next level (0.0 - 1.0) for the XP bar fill.
+     *
+     * Mirrors web CatStats' xpIntoLevel/xpNeededForLevel bar (CatStats.tsx:34-36,133-137);
+     * native feeds LevelingSystem::getXPProgress() which is already normalised 0..1.
+     * @param progress Fraction of the current level completed, clamped to [0,1] on render.
+     */
+    void setXpProgress(float progress);
+
     // ========================================================================
     // Visual Effects
     // ========================================================================
@@ -233,6 +263,16 @@ private:
     uint32_t m_totalEnemies = 0;
     uint32_t m_score = 0;
     uint32_t m_combo = 0;
+
+    // Active hotbar weapon/spell indicator (mirrors web InventoryHotbar active-slot
+    // label). Empty name = nothing to show yet, so the indicator stays hidden.
+    std::string m_activeWeaponName;
+    uint32_t m_activeWeaponSlot = 1;
+
+    // Cat progression readout (mirrors web CatStats level + XP bar). m_xpProgress is
+    // a 0..1 fraction of the current level, fed from LevelingSystem::getXPProgress().
+    uint32_t m_catLevel = 1;
+    float m_xpProgress = 0.0F;
 
     // Visual options
     bool m_showCrosshair = true;
