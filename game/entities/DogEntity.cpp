@@ -3,6 +3,7 @@
 #include "../components/MovementComponent.hpp"
 #include "../components/MeshComponent.hpp"
 #include "../components/LocomotionStateMachine.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../../engine/math/Quaternion.hpp"
 #include "../../engine/core/Logger.hpp"
@@ -343,6 +344,20 @@ CatEngine::Entity DogEntity::create(CatEngine::ECS* ecs,
     // Get stats for this enemy type
     EnemyStats stats = getStatsForType(type);
 
+    // Under web parity every variant shares the single dog profile the
+    // threejs reference ships (LocalEnemySystem.tsx has exactly one enemy
+    // type). The variant GLB + scale + score survive as visual/reward
+    // flavor; combat-relevant numbers flatten to the web literals so the
+    // survival experience is 1:1. Flip WebParity::kEnabled off to restore
+    // the native per-variant balance (fast/big/boss stat spreads).
+    if constexpr (WebParity::kEnabled) {
+        stats.health = 100.0f;  // web base; wave scaling arrives via healthMultiplier
+        stats.moveSpeed = WebParity::kEnemyMoveSpeed;
+        stats.attackDamage = WebParity::kEnemyAttackDamage;
+        stats.attackRange = WebParity::kEnemyAttackRange;
+        stats.aggroRange = WebParity::kEnemyAggroRange;
+    }
+
     // Create entity
     auto entity = ecs->createEntity();
 
@@ -360,6 +375,12 @@ CatEngine::Entity DogEntity::create(CatEngine::ECS* ecs,
     enemy.attackRange = stats.attackRange;
     enemy.aggroRange = stats.aggroRange;
     enemy.scoreValue = stats.scoreValue;
+    if constexpr (WebParity::kEnabled) {
+        // The web dog swings once per second and never idles — it is
+        // chasing from the frame it spawns (LocalEnemySystem.tsx:211,349).
+        enemy.attackCooldown = WebParity::kEnemyAttackCooldown;
+        enemy.idleWaitTime = WebParity::kEnemyIdleWait;
+    }
     ecs->addComponent(entity, enemy);
 
     // Add Health component

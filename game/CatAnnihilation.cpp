@@ -4,6 +4,7 @@
 #include "components/GameComponents.hpp"
 #include "components/EnemyComponent.hpp"
 #include "config/GameplayConfig.hpp"
+#include "config/WebParityConfig.hpp"
 #include "../engine/core/Logger.hpp"
 #include "../engine/math/Vector.hpp"
 #include "../engine/math/Matrix.hpp"
@@ -197,16 +198,19 @@ void CatAnnihilation::initializeSystems() {
     enemyAISystem_ = ecs_.createSystem<EnemyAISystem>(25);
     waveSystem_ = ecs_.createSystem<WaveSystem>(30);
 
-    // Tune wave pacing so the first round is actually survivable: fewer
-    // enemies, spawned over a longer window, farther from the player.
+    // Wave pacing mirrors the threejs reference (WebParityConfig.hpp; the
+    // count/HP formulas and the even spawn ring live inside WaveSystem's
+    // parity branches). 200 ms spawn stagger, 4 s popup window after the
+    // 2 s clear gate, dogs encircling at 8-15 m — the same rhythm the web
+    // build plays at.
     if (waveSystem_ != nullptr) {
         WaveConfig waveConfig;
         waveConfig.baseEnemyCount = 3;
-        waveConfig.enemyCountMultiplier = 2.0f;  // 3 / 5 / 7 / 9 / 11
-        waveConfig.spawnDelay = 1.5f;            // one dog per 1.5 s
-        waveConfig.transitionDelay = 5.0f;       // breathing room between waves
-        waveConfig.minSpawnDistance = 25.0f;
-        waveConfig.spawnRadius = 40.0f;
+        waveConfig.enemyCountMultiplier = 2.0f;
+        waveConfig.spawnDelay = WebParity::kSpawnStaggerSeconds;
+        waveConfig.transitionDelay = WebParity::kWaveTransitionSeconds;
+        waveConfig.minSpawnDistance = WebParity::kSpawnDistanceMin;
+        waveConfig.spawnRadius = WebParity::kSpawnDistanceMax;
         waveSystem_->setConfig(waveConfig);
     }
 
@@ -418,8 +422,12 @@ void CatAnnihilation::initializeSystems() {
         });
     }
 
-    // Run a short campaign — finishing wave 5 flips the state machine to
-    // Victory so the end-screen overlay appears.
+    // Survival is ENDLESS, matching the web reference ("Face unlimited
+    // waves" — LocalEnemySystem.tsx:701 increments the wave with no upper
+    // bound; the only terminal state is player death). The old wave-5
+    // Victory cap turned a survival run into a 5-wave campaign the web
+    // build never had; with parity off (WebParity::kEnabled == false) the
+    // finite-campaign behavior returns for portfolio captures.
     if (waveSystem_ != nullptr) {
         waveSystem_->setOnWaveStart([](int wave) {
             Engine::Logger::info("[wave] Starting wave " + std::to_string(wave));
@@ -427,8 +435,10 @@ void CatAnnihilation::initializeSystems() {
         waveSystem_->setOnWaveComplete([this](int waveNumber) {
             waveNumber_ = waveNumber;
             Engine::Logger::info("[wave] Completed wave " + std::to_string(waveNumber));
-            if (waveNumber >= 5 && currentState_ == GameState::Playing) {
-                setState(GameState::Victory);
+            if constexpr (!WebParity::kEndlessWaves) {
+                if (waveNumber >= 5 && currentState_ == GameState::Playing) {
+                    setState(GameState::Victory);
+                }
             }
         });
     }
@@ -1383,9 +1393,8 @@ void CatAnnihilation::updateUI(float dt) {
                 const int liveWave = waveSystem_->getCurrentWave();
                 activeHud.setWave(static_cast<uint32_t>(std::max(liveWave, 1)));
                 const int remaining = waveSystem_->getEnemiesRemaining();
-                const int total = waveSystem_->getConfig().baseEnemyCount +
-                    (std::max(liveWave, 1) - 1) *
-                    static_cast<int>(waveSystem_->getConfig().enemyCountMultiplier);
+                const int total =
+                    waveSystem_->getEnemiesTotalForWave(std::max(liveWave, 1));
                 activeHud.setEnemyCount(static_cast<uint32_t>(std::max(remaining, 0)),
                                         static_cast<uint32_t>(std::max(total, 0)));
             }

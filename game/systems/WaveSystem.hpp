@@ -71,6 +71,15 @@ public:
     int getEnemiesRemaining() const;
 
     /**
+     * Total enemies a given wave spawns, from the SAME formula spawning
+     * uses. The HUD must read this instead of re-deriving a count — its
+     * previous linear mirror drifted from the live curve and displayed
+     * totals that never matched what actually spawned (docs/parity/
+     * PARITY_MATRIX.md, waves domain).
+     */
+    int getEnemiesTotalForWave(int waveNumber) const { return calculateEnemyCount(waveNumber); }
+
+    /**
      * Start the first wave
      */
     void startWaves();

@@ -802,6 +802,11 @@ set(UNIT_TEST_SOURCES
     # the extractor memcpy'd u8vec4 joints as i32x4. Builds hermetic GLBs in
     # the temp dir — no dependency on the gitignored art assets.
     unit/test_model_loader_joints.cpp
+    # test_web_parity_config.cpp pins every constant in
+    # game/config/WebParityConfig.hpp to the threejs reference (wave count/HP
+    # formulas, enemy profile, spawn ring, pacing, player/camera rig,
+    # progression rewards). Header-only + STL, no engine linkage.
+    unit/test_web_parity_config.cpp
 )
 
 # Collect integration test sources.

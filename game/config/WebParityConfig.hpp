@@ -1,0 +1,123 @@
+#pragma once
+
+// WebParityConfig.hpp — the single source of truth for every gameplay
+// constant the native engine must share with the threejs web reference.
+//
+// WHY THIS FILE EXISTS: the 2026-07-16 parity audit (docs/parity/
+// PARITY_MATRIX.md) found the repo carrying THREE competing native wave
+// configs (GameplayConfig::Waves and BalanceConfig::Waves both dead,
+// WaveConfig overridden ad hoc in CatAnnihilation.cpp) while the web
+// reference ALSO ignores its own gameConfig.ts and hardcodes literals in
+// LocalEnemySystem.tsx. Reconciling numbers meant chasing five files on
+// two sides. This header ends that: each constant below is the LIVE web
+// value, cited to the exact web file:line that executes it (NOT the dead
+// gameConfig.ts entries), and the native live paths consume ONLY this
+// header. tests/unit/test_web_parity_config.cpp pins every value, so a
+// drift from the reference is a failing build, not a playtest surprise.
+//
+// The web reference is the behavioral contract ("the same game that is
+// running in threejs, 1:1" — owner directive 2026-07-16). Where the
+// native engine keeps richer content (dog-variant stats, boss waves,
+// 20-spell elemental magic), that content stays in the code behind
+// `kEnabled == false` branches so flipping one flag restores the
+// native-flavor balance for experimentation without archaeology.
+
+#include <cmath>
+
+namespace CatGame::WebParity {
+
+// Master switch. true = the game plays exactly like the threejs build:
+// web wave formulas, web enemy stats (all variants share the single web
+// dog profile; variant GLBs stay as visual variety), no boss waves, web
+// spawn ring and pacing. false = the pre-parity native balance.
+inline constexpr bool kEnabled = true;
+
+// ---------------------------------------------------------------------
+// Waves — reference: src/components/game/LocalEnemySystem.tsx (the live
+// literals; gameConfig.ts WAVES is defined but never imported there).
+// ---------------------------------------------------------------------
+
+// LocalEnemySystem.tsx:529-531 — floor((3 + wave*2) * 1.5).
+// Wave 1..5 => 7, 10, 13, 16, 19. Strictly increasing; no sine overlay.
+inline constexpr int enemiesForWave(int wave) {
+    return static_cast<int>((3 + wave * 2) * 3 / 2);
+}
+
+// LocalEnemySystem.tsx:552-554 — every enemy: 100 + (wave-1)*20 HP.
+// Wave 1..5 => 100, 120, 140, 160, 180.
+inline constexpr float enemyHealthForWave(int wave) {
+    return 100.0f + static_cast<float>(wave - 1) * 20.0f;
+}
+
+// Expressed as the multiplier DogEntity::create applies to the parity
+// base health of 100 — keeps the existing healthMultiplier plumbing.
+inline constexpr float enemyHealthMultiplierForWave(int wave) {
+    return enemyHealthForWave(wave) / 100.0f;
+}
+
+// LocalEnemySystem.tsx:526-550 — spawn ring: evenly-spaced angles
+// (angle = i * 2π/count), distance uniform in [8, 15], around the player.
+inline constexpr float kSpawnDistanceMin = 8.0f;
+inline constexpr float kSpawnDistanceMax = 15.0f;
+
+// LocalEnemySystem.tsx:568-595 — enemies revealed with a 200 ms stagger.
+inline constexpr float kSpawnStaggerSeconds = 0.2f;
+
+// LocalEnemySystem.tsx:676-768 — after the field clears: 2000 ms gate,
+// then the wave popup runs 4000 ms before the next wave spawns.
+inline constexpr float kWaveClearGateSeconds = 2.0f;
+inline constexpr float kWaveTransitionSeconds = 4.0f;
+
+// LocalEnemySystem.tsx:701,744 — survival is ENDLESS: no wave cap, no
+// victory state; the run ends only on player death.
+inline constexpr bool kEndlessWaves = true;
+
+// ---------------------------------------------------------------------
+// Enemy profile — reference: LocalEnemySystem.tsx literals (single dog
+// type). Under parity every spawned variant shares this profile; the
+// variant GLBs remain purely visual.
+// ---------------------------------------------------------------------
+inline constexpr float kEnemyMoveSpeed = 1.5f;        // tsx:211 chase speed
+inline constexpr float kEnemyAttackDamage = 15.0f;    // tsx:372 damagePlayer(15)
+inline constexpr float kEnemyAttackRange = 1.2f;      // tsx:211/356
+inline constexpr float kEnemyAttackCooldown = 1.0f;   // tsx:349 (1000 ms)
+// tsx:211 — web enemies have NO aggro gating: they chase from the moment
+// they spawn. A native aggroRange beyond any reachable distance plus a
+// zero idle wait reproduces that.
+inline constexpr float kEnemyAggroRange = 10000.0f;
+inline constexpr float kEnemyIdleWait = 0.0f;
+
+// ---------------------------------------------------------------------
+// Player — reference: src/config/gameConfig.ts PLAYER (these ARE the
+// live values: CatCharacter/index.tsx imports GAME_CONFIG for movement)
+// + BasicScene.tsx CameraFollow literals.
+// ---------------------------------------------------------------------
+inline constexpr float kPlayerWalkSpeed = 6.0f;   // gameConfig.ts:9
+inline constexpr float kPlayerRunSpeed = 12.0f;   // gameConfig.ts:10
+inline constexpr float kPlayerTurnSpeed = 4.25f;  // gameConfig.ts:11, rad/s (A/D tank turn)
+
+// BasicScene.tsx:142-157 — camera welded behind the cat's facing:
+// pos = player - facing * 10.5, height 8.4, lookAt(player.x, 0, player.z),
+// hard snap (no lerp).
+inline constexpr float kCameraDistance = 10.5f;
+inline constexpr float kCameraHeight = 8.4f;
+
+// ---------------------------------------------------------------------
+// Progression — reference: src/lib/store/gameStore.ts (live paths).
+// ---------------------------------------------------------------------
+inline constexpr float kLevelUpHealthBonus = 20.0f;     // gameStore.ts:869 (+20 max HP/level)
+inline constexpr float kNineLivesRevivePercent = 0.3f;  // gameStore.ts:679 (revive at 30%)
+inline constexpr int kXpPerKill = 5;                    // LocalEnemySystem.tsx:637 addCatXP(5)
+
+// gameStore.ts:838-846 (calculateCatXPForLevel) — RuneScape-style curve:
+// total XP to reach `level` = floor(sum_{i=1}^{level-1} floor(i + 500*2^(i/6)) / 5.4).
+// Not constexpr (std::pow); the leveling system evaluates it at runtime.
+inline float catXpForLevel(int level) {
+    double total = 0.0;
+    for (int i = 1; i < level; ++i) {
+        total += std::floor(static_cast<double>(i) + 500.0 * std::pow(2.0, i / 6.0));
+    }
+    return static_cast<float>(std::floor(total / 5.4));
+}
+
+} // namespace CatGame::WebParity

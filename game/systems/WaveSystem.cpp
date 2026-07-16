@@ -1,5 +1,6 @@
 #include "WaveSystem.hpp"
 #include "WaveDifficulty.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../components/EnemyComponent.hpp"
 #include "../components/HealthComponent.hpp"
 #include "../components/MovementComponent.hpp"
@@ -65,8 +66,14 @@ void WaveSystem::update(float dt) {
             updateInProgress(dt);
             break;
         case WaveState::Completed:
-            // Automatically transition
-            transitionToState(WaveState::Transition);
+            // The web reference holds a 2 s "field is clear" gate after the
+            // last kill before the wave popup starts (LocalEnemySystem.tsx:
+            // 676 waveCompleteTime check); mirroring it keeps the wave
+            // rhythm identical. Outside parity the transition is immediate,
+            // as it always was.
+            if (!WebParity::kEnabled || stateTimer_ >= WebParity::kWaveClearGateSeconds) {
+                transitionToState(WaveState::Transition);
+            }
             break;
         case WaveState::Transition:
             updateTransition(dt);
@@ -310,12 +317,17 @@ void WaveSystem::spawnEnemy() {
     // Compute finalHealth for the log line below. DogEntity::getStatsForType
     // is private, so re-derive the per-variant baseline here — this mirror
     // is narrow (4 cases, no drift risk) and confined to a log string.
+    // Under web parity every variant is flattened to the reference's single
+    // 100 HP dog profile inside DogEntity::create, so mirror that too.
     float baseHealth = 50.0f;
     switch (enemyType) {
         case EnemyType::Dog:      baseHealth = 50.0f;  break;
         case EnemyType::BigDog:   baseHealth = 100.0f; break;
         case EnemyType::FastDog:  baseHealth = 25.0f;  break;
         case EnemyType::BossDog:  baseHealth = 300.0f; break;
+    }
+    if constexpr (WebParity::kEnabled) {
+        baseHealth = 100.0f;
     }
     float finalHealth = baseHealth * healthScaling;
 
@@ -372,14 +384,29 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
         return kFarFromOriginSentinel;
     }
 
-    // Random angle around player
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<> angleDis(0.0, 2.0 * Engine::Math::PI);
     std::uniform_real_distribution<> radiusDis(config_.minSpawnDistance, config_.spawnRadius);
 
-    float angle = angleDis(gen);
-    float radius = radiusDis(gen);
+    float angle = static_cast<float>(angleDis(gen));
+    float radius = static_cast<float>(radiusDis(gen));
+
+    // Web parity: the reference encircles the player deterministically —
+    // angle = i * 2π/count for the i-th spawn of the wave, radius uniform
+    // in [8, 15] (LocalEnemySystem.tsx:526-550). Even spacing guarantees
+    // the player is surrounded rather than occasionally rushed from one
+    // random side, which reads as a completely different wave feel.
+    if constexpr (WebParity::kEnabled) {
+        const int waveTotal = calculateEnemyCount(currentWave_);
+        if (waveTotal > 0) {
+            angle = static_cast<float>(enemiesSpawned_ % waveTotal) *
+                    (2.0f * Engine::Math::PI / static_cast<float>(waveTotal));
+        }
+        std::uniform_real_distribution<> parityRadius(WebParity::kSpawnDistanceMin,
+                                                      WebParity::kSpawnDistanceMax);
+        radius = static_cast<float>(parityRadius(gen));
+    }
 
     // Calculate position
     Engine::vec3 offset(
@@ -406,13 +433,16 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
 }
 
 int WaveSystem::calculateEnemyCount(int waveNumber) const {
-    // 2026-05-16: delegate to the dense/sparse curve in WaveDifficulty.hpp
-    // (backlog ENGINE_BACKLOG.md "Wave-difficulty curve"). The previous
-    // linear formula `base + (N-1)*mul` is still available via
-    // WaveDifficulty::linearEnemyCount() for golden-image reproducibility,
-    // but the default config curves the rhythm so the particle sim sees
-    // dense / sparse / baseline / dense / sparse ... instead of a
-    // monotonic ramp.
+    // Web parity: the threejs reference ramp floor((3 + wave*2) * 1.5) —
+    // 7/10/13/16/19 for waves 1-5, strictly monotonic (WebParityConfig.hpp,
+    // pinned by tests/unit/test_web_parity_config.cpp). The dense/sparse
+    // sine curve below (2026-05-16, WaveDifficulty.hpp) stays available for
+    // the native-flavor balance when parity is switched off: it varies the
+    // particle-sim load wave-over-wave, but its non-monotonic counts (wave 2
+    // spawning fewer dogs than wave 1) diverge from the reference.
+    if constexpr (WebParity::kEnabled) {
+        return WebParity::enemiesForWave(waveNumber);
+    }
     WaveDifficultyConfig difficulty;
     difficulty.baseEnemyCount = static_cast<float>(config_.baseEnemyCount);
     difficulty.enemyCountMultiplier = config_.enemyCountMultiplier;
@@ -421,6 +451,12 @@ int WaveSystem::calculateEnemyCount(int waveNumber) const {
 }
 
 float WaveSystem::calculateHealthScaling(int waveNumber) const {
+    // Web parity: the reference scales every enemy to 100 + (wave-1)*20 HP;
+    // expressed as a multiplier over the parity base HP of 100 so the
+    // existing DogEntity::create(healthMultiplier) plumbing carries it.
+    if constexpr (WebParity::kEnabled) {
+        return WebParity::enemyHealthMultiplierForWave(waveNumber);
+    }
     WaveDifficultyConfig difficulty;
     difficulty.baseEnemyCount = static_cast<float>(config_.baseEnemyCount);
     difficulty.enemyCountMultiplier = config_.enemyCountMultiplier;
@@ -429,6 +465,12 @@ float WaveSystem::calculateHealthScaling(int waveNumber) const {
 }
 
 bool WaveSystem::isBossWave(int waveNumber) const {
+    // The web reference has no boss concept — every wave is the uniform
+    // dog ramp — so parity disables boss waves outright. The boss GLB and
+    // stats remain reachable via --starting-wave captures with parity off.
+    if constexpr (WebParity::kEnabled) {
+        return false;
+    }
     return (waveNumber % config_.bossWaveInterval) == 0;
 }
 
