@@ -2522,15 +2522,26 @@ void CatAnnihilation::createPlayer() {
         }
     }
     // Beefy survival-game stats: enough HP + damage to realistically clear
-    // five waves on the first attempt, still tense because dog counts scale
-    // (wave 5 = 11 dogs). Fast-swing sword (attackSpeed 3 -> cooldown 0.33s).
-    playerEntity_ = CatEntity::createCustom(ecs_, spawnPosition,
-                                            /*maxHealth*/ 400.0f,
-                                            /*moveSpeed*/ 12.0f,
-                                            /*attackDamage*/ 60.0f);
+    // Web parity: the reference cat walks at MOVEMENT_SPEED 6 (Shift runs
+    // at 12 via MovementComponent::speedModifier — PlayerControlSystem's
+    // tank-control branch), swings the sword for 40 at 2.0 range on a
+    // 500 ms cooldown, and starts at 100 max HP that then grows +20 per
+    // cat level (gameConfig.ts WEAPONS.SWORD + PLAYER, gameStore.ts:906).
+    // The old 400 HP / 12 speed / 60 dmg tuning made the native cat ~4x
+    // the web cat and is preserved below for the parity-off balance.
+    playerEntity_ = CatEntity::createCustom(
+        ecs_, spawnPosition,
+        /*maxHealth*/ WebParity::kEnabled ? 100.0f : 400.0f,
+        /*moveSpeed*/ WebParity::kEnabled ? WebParity::kPlayerWalkSpeed : 12.0f,
+        /*attackDamage*/ WebParity::kEnabled ? 40.0f : 60.0f);
     if (auto* combat = ecs_.getComponent<CombatComponent>(playerEntity_)) {
-        combat->attackSpeed = 3.0f;       // 0.33 s cooldown
-        combat->attackRange = 4.0f;       // a touch wider than default
+        if constexpr (WebParity::kEnabled) {
+            combat->attackSpeed = 2.0f;   // web ATTACK_DURATION 500 ms
+            combat->attackRange = 2.0f;   // web SWORD.RANGE
+        } else {
+            combat->attackSpeed = 3.0f;   // 0.33 s cooldown
+            combat->attackRange = 4.0f;   // a touch wider than default
+        }
     }
 
     // Set player entity in control system

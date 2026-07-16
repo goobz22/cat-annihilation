@@ -1,6 +1,7 @@
 #include "PlayerControlSystem.hpp"
 #include "CombatSystem.hpp"
 #include "elemental_magic.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../components/GameComponents.hpp"
 #include "../components/EnemyComponent.hpp"
 #include "../world/Terrain.hpp"
