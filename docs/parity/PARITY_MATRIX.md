@@ -19,13 +19,23 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 - **Terrain stays 512×512** (web: 10000×10000 plane). With fog fully saturating by 150 units the edge sits deep inside pure fog color and reads as the same horizon; growing the extent would explode the Poisson forest generation.
 - **Native-only survival flavor behind `WebParity::kEnabled == false`**: 20-spell elemental magic depth, per-variant stats, boss waves, finite 5-wave Victory campaign, free mouse-orbit camera.
 
+### Landed after the first pass (same campaign, later commits)
+
+- ✅ **Combat** — hotbar keys 1-7 (slots seeded [water spell, sword, bow, shield] per gameStore.ts:288-298), space/left-click dispatches the active item (sword melee / bow arrow 30 dmg / water_bolt cast), shield = physical barrier 1.2 ahead r0.9 with front-90° damage negation, HUD shows active weapon + cat level/XP bar. Recorded deltas: arrow 30 u/s vs web 25, water_bolt 25 u/s vs web 15 + native spell cooldown (web spammable) — constants + citations in WebParityConfig.
+- ✅ **Forest population** — web scatter verbatim (100 ring trees 20-220m, jittered grid step 80 w/ 50m cutout, 60 bushes, 40 new dodecahedron rocks), deterministic seed, no draw budget; linear-decoded colors. Verified in frame dump: cat + dogs + trees + bushes + rocks all visible, web proportions.
+- ✅ **Gate recalibration** — cat-verify topColorPct ceiling 0.35 → 0.85 (openclaw/bridge/cat-verify.ts): the web reference's own flat-grass framing measures ~71-80% top color; 0.35 was tuned for the retired heightmap art. Degenerate one-color frames (99.3% inside-foliage) still fail.
+
 ### Open (next iterations)
 
-- 🟡 Forest population: native draws ≤16 trees in a 12-18m ring (`kTreeDrawBudget`/`kTreeDistanceCullMetres`, CatAnnihilation.cpp:1825-1828) vs web ~150 trees to 300m + 60 bushes + 40 rocks (native has NO rocks). Raise budget/cull + add bushes/rocks.
-- 🟡 Combat: hotbar 1-7 weapon switching, bow, shield barrier, human spell casting (in flight via workflow).
-- 🟡 Regeneration ability (L5, 2 HP/s), Agility (L10), weapon-skill XP/level damage scaling.
-- 🟡 Menus: game-mode selection screen, pause menu parity, game-over stats parity.
+- 🟡 Regeneration ability (L5, 2 HP/s), Agility (L10), weapon-skill XP/level damage scaling (web sword dmg = 40 + 10/(skill level-1)).
+- 🟡 Menus: game-mode selection screen + pre-game cat-customization screen (web shows "Customize Your Cat" with fur/eye color pickers before survival; native has the customization SYSTEM loaded — 25 accessories/15 presets — but no pre-game UI), pause menu parity, game-over stats parity.
+- 🟡 Spell/arrow projectile speeds (25/15 web) need per-call speed plumbing in CombatSystem/ElementalMagic.
+- 🟡 Low-health vignette (HUD.cpp:319) is native-only — web has no screen-edge damage vignette; decide keep (better feedback) or gate under parity.
 - 🟡 Story mode (P3, deferred until survival is 1:1).
+
+### Verification notes
+
+- The unattended web reference can only be screenshot when the user's Chrome window is visible — Chrome throttles rAF to 0 in hidden windows and the R3F scene never mounts (known hidden-tab hydration phantom). Side-by-side captures need either a visible window or a Playwright run.
 
 
 Generated 2026-07-16 by a 12-agent comparison workflow (10 domain reviewers, surface enumerator, completeness critic).

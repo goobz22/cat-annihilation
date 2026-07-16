@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-16T08:51:10.066Z",
+  "ts": "2026-07-16T16:09:37.109Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
@@ -7,24 +7,24 @@
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 30,
+      "durationMs": 31,
       "summary": "passed (0.0s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 30,
+      "durationMs": 29,
       "summary": "passed (0.0s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 32861,
-      "summary": "passed (32.9s)"
+      "durationMs": 32009,
+      "summary": "passed (32.0s)"
     }
   ],
-  "gitSha": "d545959",
+  "gitSha": "98630a4",
   "invocation": "--json"
 }
