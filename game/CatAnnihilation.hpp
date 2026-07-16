@@ -670,6 +670,10 @@ private:
 
     // Game statistics
     float gameTime_ = 0.0F;
+
+    // gameTime_ stamp taken when the current wave began — lets the
+    // wave-complete popup report "cleared in N s" without a second clock.
+    float waveStartGameTime_ = 0.0F;
     float totalPlayTime_ = 0.0F;
     int enemiesKilled_ = 0;
     int waveNumber_ = 0;

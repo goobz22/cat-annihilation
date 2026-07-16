@@ -462,12 +462,34 @@ void CatAnnihilation::initializeSystems() {
     // build never had; with parity off (WebParity::kEnabled == false) the
     // finite-campaign behavior returns for portfolio captures.
     if (waveSystem_ != nullptr) {
-        waveSystem_->setOnWaveStart([](int wave) {
+        waveSystem_->setOnWaveStart([this](int wave) {
             Engine::Logger::info("[wave] Starting wave " + std::to_string(wave));
+            waveStartGameTime_ = gameTime_;
+            // Web WaveDisplay's transition overlay announces the incoming
+            // round + dog count ("ROUND X — N dogs this round",
+            // WaveDisplay.tsx:66-81). WavePopup::showWaveStart is the
+            // native build of that banner; it had never been called.
+            if (gameUI_ != nullptr && wave > 0) {
+                gameUI_->getWavePopup().showWaveStart(
+                    static_cast<uint32_t>(wave),
+                    static_cast<uint32_t>(waveSystem_->getEnemiesTotalForWave(wave)));
+            }
         });
         waveSystem_->setOnWaveComplete([this](int waveNumber) {
             waveNumber_ = waveNumber;
             Engine::Logger::info("[wave] Completed wave " + std::to_string(waveNumber));
+            // Web WaveTransition.tsx staggers "WAVE X COMPLETE!" → "WAVE
+            // X+1 STARTING SOON..." → "N ENEMIES INCOMING" during the 2 s
+            // clear gate + 4 s transition. The native popup carries the
+            // same information (kills, clear time, next wave size).
+            if (gameUI_ != nullptr && waveSystem_ != nullptr) {
+                gameUI_->getWavePopup().showWaveComplete(
+                    static_cast<uint32_t>(waveNumber),
+                    static_cast<uint32_t>(enemiesKilled_),
+                    gameTime_ - waveStartGameTime_,
+                    static_cast<uint32_t>(
+                        waveSystem_->getEnemiesTotalForWave(waveNumber + 1)));
+            }
             if constexpr (!WebParity::kEndlessWaves) {
                 if (waveNumber >= 5 && currentState_ == GameState::Playing) {
                     setState(GameState::Victory);
