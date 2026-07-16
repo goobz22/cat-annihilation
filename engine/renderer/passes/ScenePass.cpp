@@ -2896,11 +2896,15 @@ bool ScenePass::LoadGrassTexture() {
     m_grassTexture.width  = CatGame::GrassTextureBuffer::Width;
     m_grassTexture.height = CatGame::GrassTextureBuffer::Height;
 
+    // srgbEncodedSource = true: the grass buffer is authored as sRGB hex
+    // bytes mirroring the web canvas (#7fb069 base + blade scribbles), so
+    // the sampler must decode to linear before lighting.
     if (!Create2DTextureFromRGBA(m_grassTexture.width, m_grassTexture.height,
                                  buf.rgba.data(), "grass-procedural",
                                  m_grassTexture.image,
                                  m_grassTexture.memory,
-                                 m_grassTexture.view)) {
+                                 m_grassTexture.view,
+                                 /*srgbEncodedSource=*/true)) {
         // Diagnostic was printed inside the helper. Leave descriptorSet
         // null so the draw path falls back to the default-white set.
         std::cerr << "[ScenePass] LoadGrassTexture: image upload failed\n";
@@ -3012,7 +3016,8 @@ bool ScenePass::Create2DTextureFromRGBA(uint32_t width, uint32_t height,
                                         const char* debugName,
                                         VkImage& outImage,
                                         VkDeviceMemory& outMemory,
-                                        VkImageView& outView) {
+                                        VkImageView& outView,
+                                        bool srgbEncodedSource) {
     if (width == 0U || height == 0U || rgbaBytes == nullptr) {
         std::cerr << "[ScenePass] Create2DTextureFromRGBA: bad inputs ("
                   << width << "x" << height << ", data="
@@ -3053,12 +3058,17 @@ bool ScenePass::Create2DTextureFromRGBA(uint32_t width, uint32_t height,
     }
 
     // ---- Step 1: device-local VkImage --------------------------------
-    // VK_FORMAT_R8G8B8A8_UNORM (NOT _SRGB): Meshy textures are already
-    // in linear-ish space (the JPEG bakes lighting into the colour map
-    // and treats the result as albedo). Sampling as UNORM and letting
-    // the swapchain's sRGB encode handle the gamma curve avoids the
-    // double-decode washout that _SRGB sampling would produce on this
-    // asset pipeline. See entity.frag's matching comment.
+    // Format is caller-declared via srgbEncodedSource:
+    //   - UNORM (default): Meshy baked-albedo JPEGs. Sampling raw and
+    //     letting the swapchain's sRGB encode handle gamma matches how
+    //     those assets were tuned. See entity.frag's matching comment.
+    //   - SRGB: sources authored as sRGB hex bytes (the procedural grass
+    //     canvas mirrors the web's #7fb069 literals). These MUST be
+    //     decoded to linear at sample time — treating them as UNORM
+    //     meant lighting ran on gamma-encoded values and the sRGB
+    //     swapchain encoded them a SECOND time, washing the entire
+    //     ground out pale (the 2026-07-16 parity audit's measured
+    //     (175,199,166) for a #7fb069 source is exactly double-encode).
     //
     // TRANSFER_SRC_BIT in usage: vkCmdBlitImage in GenerateMipmapChain
     // reads from mip(i-1) to write into mip(i). Vulkan validation rejects
@@ -3069,10 +3079,13 @@ bool ScenePass::Create2DTextureFromRGBA(uint32_t width, uint32_t height,
     // CPU mip-down approach (decode each level on host, vkCmdCopyBufferToImage
     // each level individually), which is ~6x more memory + ~10x more
     // staging traffic for the same result.
+    const VkFormat textureFormat =
+        srgbEncodedSource ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.format = textureFormat;
     imageInfo.extent = { width, height, 1U };
     imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
@@ -3174,7 +3187,7 @@ bool ScenePass::Create2DTextureFromRGBA(uint32_t width, uint32_t height,
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = outImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format = textureFormat;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = mipLevels;
