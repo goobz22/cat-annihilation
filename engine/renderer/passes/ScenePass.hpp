@@ -389,12 +389,19 @@ private:
     // texture. Returns false on any Vulkan allocation / upload failure;
     // out_* are left at VK_NULL_HANDLE in that case so the caller's
     // cleanup is uniform with the success path.
+    // srgbEncodedSource: pass true when rgbaBytes are AUTHORED in sRGB
+    // (hex colors like the procedural grass canvas). The image+view are
+    // then created VK_FORMAT_R8G8B8A8_SRGB so the sampler decodes to
+    // linear before lighting, and the sRGB swapchain encodes exactly
+    // once on output. Leaving it false (Meshy baked-albedo JPEGs) keeps
+    // the historical UNORM raw-passthrough behavior.
     bool Create2DTextureFromRGBA(uint32_t width, uint32_t height,
                                  const uint8_t* rgbaBytes,
                                  const char* debugName,
                                  VkImage& outImage,
                                  VkDeviceMemory& outMemory,
-                                 VkImageView& outView);
+                                 VkImageView& outView,
+                                 bool srgbEncodedSource = false);
 
     // Helper: generate the full mipmap chain for a freshly-uploaded RGBA8
     // texture and leave every level in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
