@@ -94,16 +94,15 @@ layout(push_constant) uniform EntityFragPC {
 const vec3 SUN_DIR   = normalize(vec3(0.35, 0.85, 0.4));
 const vec3 SUN_COLOR = vec3(1.0, 0.96, 0.88);
 
-// SKY_COLOR — must stay in lockstep with the swapchain clear color in
-// engine/renderer/Renderer.cpp AND the SKY_COLOR constant in
-// shaders/scene/scene.frag. The fog blends entity albedo TO this value
-// so a fully-fogged dog reads the same RGB as the empty sky region above
-// it. Drift between this constant and the terrain shader's value would
-// show up as an entity that fades to a slightly different shade than the
-// terrain behind it — easy to spot in a frame dump as a faint coloured
-// halo around fully-distant enemies. Keeping the literal in three places
-// is the unfortunate cost of not yet having a shared GLSL header system.
-const vec3 SKY_COLOR = vec3(0.50, 0.72, 0.95);
+// FOG_COLOR — must stay in lockstep with scene.frag's FOG_COLOR: both
+// are the LINEAR decode of the web reference's #4c6156 forest haze
+// (ForestEnvironment.tsx <fog args={['#4c6156', 30, 150]}>). Entities
+// must fade into the SAME haze as the terrain behind them — the old
+// value here was a pale sky blue, which put a ghostly blue halo around
+// distant dogs while the ground behind them fogged to green-grey.
+// Keeping the literal in two shaders is the unfortunate cost of not yet
+// having a shared GLSL header system.
+const vec3 FOG_COLOR = vec3(0.0723, 0.1193, 0.0929);
 
 void main() {
     // Sample the authored baseColor texture with hardware-filtered linear
@@ -153,7 +152,7 @@ void main() {
     // pure sky. The clamp guards against a NaN cameraPos producing a
     // NaN fogFactor that would propagate to outColor as a black pixel.
     float fogFactor = clamp(pcf.fogParams.x, 0.0, 1.0);
-    vec3 finalColor = mix(litColor, SKY_COLOR, fogFactor);
+    vec3 finalColor = mix(litColor, FOG_COLOR, fogFactor);
 
     outColor = vec4(finalColor, 1.0);
 }

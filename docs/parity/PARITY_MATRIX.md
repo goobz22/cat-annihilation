@@ -1,5 +1,33 @@
 # Cat Annihilation — threejs → native parity matrix
 
+## Fix log (2026-07-16 campaign)
+
+Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinned where noted:
+
+- ✅ **Skinned-model outage** — glTF JOINTS_0 u8/u16 misread as i32 took down the player cat + all 4 dog GLBs; componentType-aware extraction + `tests/unit/test_model_loader_joints.cpp` (hermetic GLB fixtures).
+- ✅ **Wave/enemy behavior** — web formulas (count `floor((3+wave*2)*1.5)`, HP `100+(wave-1)*20`), always-chase aggro, even 8-15m spawn ring, 200ms stagger, 2s clear gate + 4s transition, ENDLESS waves (wave-5 Victory cap removed). Source of truth: `game/config/WebParityConfig.hpp` (every constant cited to the LIVE web literal); pinned by `tests/unit/test_web_parity_config.cpp`.
+- ✅ **Camera + controls** — locked-behind rig (10.5 back / 8.4 up / 38.7° tilt, hard snap, yaw-only offset) now the human camera; tank controls (A/D turn 4.25 rad/s, W/S along facing, Shift run 2x); player profile 100 HP / walk 6 / run 12 / sword 40 dmg 2.0 range 500ms.
+- ✅ **Progression** — LevelUpEvent finally published (+20 max HP/level, ratio-preserving heal), Nine Lives revive at 30% wired into the death path, kill XP flat 5, web XP curve (L2 = 104 XP), max level 99.
+- ✅ **Wave popups** — WavePopup showWaveStart/showWaveComplete wired (was fully built, never called).
+- ✅ **Autoplay kite policy** — test harness survives web difficulty (retreat at sprint from pack centroid when surrounded; was stand-and-trade tuned for the old 400 HP god-stats). Gate GREEN end-to-end for the first time.
+- ✅ **Web reference boots again** — three-stdlib 2.36.1 override (drei's nested 2.35 imported `LuminanceFormat`, removed in three 0.184).
+- ✅ **Fog + gamma + sky class fixes** — (1) `FOG_NORMAL_FALLOFF` capped flat-ground fog at 60%, removed; (2) sRGB-authored grass loaded as UNORM double-encoded the whole ground pale — per-texture sRGB flag added; (3) all shader hex colors linearized (fog #4c6156 in scene.frag + entity.frag — entities previously fogged to SKY blue); (4) entity fog exp²→linear 30/150; (5) sky pinned to web #87CEEB via `ScenePass::SetSkyOverride` (day-night cycle was painting it dawn-lavender).
+
+### Deliberate divergences (documented, not bugs)
+
+- **Dog variant GLBs stay** as pure VISUAL variety (regular/fast/big rotation) with identical web stats — the owner's Meshy art direction; the web's single brown-box dog is the stats reference, not the art reference. Boss waves OFF under parity (`WebParity::kEnabled`), reachable with parity off.
+- **Terrain stays 512×512** (web: 10000×10000 plane). With fog fully saturating by 150 units the edge sits deep inside pure fog color and reads as the same horizon; growing the extent would explode the Poisson forest generation.
+- **Native-only survival flavor behind `WebParity::kEnabled == false`**: 20-spell elemental magic depth, per-variant stats, boss waves, finite 5-wave Victory campaign, free mouse-orbit camera.
+
+### Open (next iterations)
+
+- 🟡 Forest population: native draws ≤16 trees in a 12-18m ring (`kTreeDrawBudget`/`kTreeDistanceCullMetres`, CatAnnihilation.cpp:1825-1828) vs web ~150 trees to 300m + 60 bushes + 40 rocks (native has NO rocks). Raise budget/cull + add bushes/rocks.
+- 🟡 Combat: hotbar 1-7 weapon switching, bow, shield barrier, human spell casting (in flight via workflow).
+- 🟡 Regeneration ability (L5, 2 HP/s), Agility (L10), weapon-skill XP/level damage scaling.
+- 🟡 Menus: game-mode selection screen, pause menu parity, game-over stats parity.
+- 🟡 Story mode (P3, deferred until survival is 1:1).
+
+
 Generated 2026-07-16 by a 12-agent comparison workflow (10 domain reviewers, surface enumerator, completeness critic).
 The WEB game (src/, React Three Fiber) is the behavioral reference; the NATIVE engine (game/ + engine/) is the port.
 Statuses: ✅ parity · 🟡 partial (delta spelled out) · ❌ missing · 🔵 native-only (web has no equivalent).

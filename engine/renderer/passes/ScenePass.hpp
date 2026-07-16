@@ -3,6 +3,7 @@
 #include "../../math/Matrix.hpp"
 #include "../../math/Vector.hpp"
 #include <vulkan/vulkan.h>
+#include <array>
 #include <chrono>
 #include <memory>
 #include <unordered_map>
@@ -208,6 +209,18 @@ public:
         m_dayCycleSeconds = seconds;
     }
     float GetDayCycleSeconds() const { return m_dayCycleSeconds; }
+
+    // Pin the sky to fixed LINEAR-space zenith/horizon colors, bypassing
+    // the dawn/midday/dusk cycle entirely. The game layer uses this to
+    // mirror references whose sky never animates (the web build's fixed
+    // #87CEEB backdrop); pass the srgb_to_linear-decoded values since the
+    // sky shader's output goes through the swapchain's sRGB encode.
+    void SetSkyOverride(float zenithR, float zenithG, float zenithB,
+                        float horizonR, float horizonG, float horizonB) {
+        m_skyOverride = { zenithR, zenithG, zenithB,
+                          horizonR, horizonG, horizonB };
+        m_skyOverrideEnabled = true;
+    }
 
     // Bind the live ParticleSystem so the ribbon path can read the live
     // particle count (and, in iteration 3d sub-task (b), launch the device
@@ -524,6 +537,12 @@ private:
     // for golden-image / determinism work). Default 30 s biases for
     // portfolio-screenshot visibility — see SetDayCycleSeconds() docblock.
     float m_dayCycleSeconds = 30.0F;
+
+    // Fixed-sky override state (SetSkyOverride): six floats packed
+    // zenith-rgb then horizon-rgb, linear space. Disabled by default so
+    // the animated cycle remains the engine's out-of-the-box behavior.
+    bool m_skyOverrideEnabled = false;
+    std::array<float, 6> m_skyOverride{};
 
     std::unique_ptr<RHI::VulkanBuffer> m_vertexBuffer;
     std::unique_ptr<RHI::VulkanBuffer> m_indexBuffer;

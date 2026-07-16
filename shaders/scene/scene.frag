@@ -78,7 +78,13 @@ const vec3 SKY_COLOR = vec3(0.50, 0.72, 0.95);
 // match the linear formula directly here. If a future iteration wants
 // the exp² aesthetic back (e.g. for an open-sky biome) it can branch
 // on a uniform — that's not in scope for survival parity.
-const vec3  FOG_COLOR = vec3(76.0/255.0, 97.0/255.0, 86.0/255.0);
+// LINEAR-SPACE fog color. The web reference authors #4c6156 as an sRGB
+// hex; this shader's output goes through the swapchain's linear→sRGB
+// encode, so the constant must hold the DECODED linear value
+// srgb_to_linear(76,97,86 / 255) — writing the raw hex bytes here (the
+// previous value) meant the swapchain re-encoded them and the displayed
+// haze came out a washed-out (147,163,155) instead of #4c6156.
+const vec3  FOG_COLOR = vec3(0.0723, 0.1193, 0.0929);
 const float FOG_NEAR  = 30.0;
 const float FOG_FAR   = 150.0;
 

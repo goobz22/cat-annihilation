@@ -17,6 +17,7 @@
 #include "../engine/rhi/vulkan/VulkanDevice.hpp"
 #include "../engine/renderer/Renderer.hpp"
 #include "../engine/renderer/MeshSubmissionSystem.hpp"
+#include "config/WebParityConfig.hpp"
 #include "../engine/renderer/passes/UIPass.hpp"
 #include "../engine/renderer/passes/ScenePass.hpp"
 #include "../engine/audio/AudioEngine.hpp"
@@ -888,6 +889,20 @@ int main(int argc, char* argv[]) {
                              (cmdArgs.dayNightRateSec > 0.0F
                                   ? " (cycling enabled)"
                                   : " (frozen at midday for determinism)"));
+
+        // Web parity: the reference sky is a constant #87CEEB backdrop
+        // with no gradient and no day/night animation (BasicScene.tsx:191)
+        // — pin both sky stops to its linear decode. This deliberately
+        // overrides whatever --day-night-rate resolved to above; the
+        // animated dawn/dusk cycle is native-only flavor that painted the
+        // survival sky lavender in every parity frame dump.
+        if constexpr (CatGame::WebParity::kEnabled) {
+            scenePass->SetSkyOverride(
+                CatGame::WebParity::kSkyLinearR, CatGame::WebParity::kSkyLinearG,
+                CatGame::WebParity::kSkyLinearB, CatGame::WebParity::kSkyLinearR,
+                CatGame::WebParity::kSkyLinearG, CatGame::WebParity::kSkyLinearB);
+            Engine::Logger::info("[parity] sky pinned to web #87CEEB (day cycle overridden)");
+        }
     }
 
     // ========================================================================

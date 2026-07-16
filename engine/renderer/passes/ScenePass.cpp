@@ -1115,6 +1115,18 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             0.0F,
         };
 
+        // Fixed-sky override (SetSkyOverride) trumps the animated cycle —
+        // the game layer pins the sky when mirroring a reference whose
+        // backdrop never changes (the web build's constant #87CEEB).
+        if (m_skyOverrideEnabled) {
+            skyPushBytes[0] = m_skyOverride[0];
+            skyPushBytes[1] = m_skyOverride[1];
+            skyPushBytes[2] = m_skyOverride[2];
+            skyPushBytes[4] = m_skyOverride[3];
+            skyPushBytes[5] = m_skyOverride[4];
+            skyPushBytes[6] = m_skyOverride[5];
+        }
+
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
         vkCmdPushConstants(cmd, m_skyPipelineLayout,
                            VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1147,13 +1159,6 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
     const Engine::mat4 invVP = viewProj.inverse();
     const Engine::vec3 camWorldPos =
         invVP.transformPoint(Engine::vec3(0.0F, 0.0F, 0.0F));
-
-    // Fog tuning — must match shaders/scene/scene.frag's FOG_DENSITY exactly.
-    // Drift between this constant and the terrain shader's value would
-    // produce entities that fog at a slightly different rate than the
-    // terrain behind them (e.g., a dog at 80 m would be more or less hazy
-    // than the grass under its feet), which reads as broken atmosphere.
-    constexpr float kFogDensity = 0.012F;
 
     // ---- Terrain ----------------------------------------------------------
     if (drawTerrain) {
@@ -1370,10 +1375,13 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             const float dx = entityWorld.x - camWorldPos.x;
             const float dz = entityWorld.z - camWorldPos.z;
             const float horizDist = std::sqrt(dx * dx + dz * dz);
-            const float densityScaled = kFogDensity * horizDist;
-            // exp_squared profile, same as scene.frag — gentle near
-            // the camera, saturates faster at depth than plain exp.
-            const float fogFactor = 1.0F - std::exp(-densityScaled * densityScaled);
+            // Linear near/far profile, identical to scene.frag's terrain
+            // fog (the web reference's three.js Fog: near=30, far=150).
+            // The old exp² profile here saturated on a different curve
+            // than the ground, so a dog and the grass directly behind it
+            // hazed at visibly different densities mid-range.
+            const float fogFactor =
+                std::clamp((horizDist - 30.0F) / (150.0F - 30.0F), 0.0F, 1.0F);
 
             // vec4 fogParams: .x carries the fog factor, .yzw reserved
             // for future per-draw lighting params (see entity.frag's
