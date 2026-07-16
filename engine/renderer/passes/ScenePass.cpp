@@ -77,6 +77,20 @@ bool ScenePass::Setup(RHI::VulkanDevice* device, RHI::VulkanSwapchain* swapchain
     }
     if (!CreatePipeline()) return false;
     if (!CreateEntityPipelineAndMesh()) return false;
+    // GPU skinning (2026-07-16): palette ring MUST come up before the
+    // skinned pipeline (the pipeline layout references the palette
+    // descriptor set layout). Failure of either is non-fatal by design —
+    // the entity loop's routing checks m_skinnedEntityPipeline !=
+    // VK_NULL_HANDLE per draw and falls back to bind-pose (the exact
+    // pre-GPU-skinning visual) rather than crashing, mirroring the sky /
+    // ribbon degradation contracts above. That keeps a stripped shader
+    // directory (CI without entity_skinned.vert.spv) bootable while the
+    // stderr line surfaces the regression to a reviewer.
+    if (!CreateBonePaletteResources() || !CreateSkinnedEntityPipeline()) {
+        std::cerr << "[ScenePass] GPU-skinning setup failed — animated "
+                  << "entities fall back to bind-pose (static mesh); "
+                  << "terrain/entity rendering unaffected\n";
+    }
     // Sky pipeline is created EAGERLY (same as other pipelines) but its
     // failure is non-fatal: the renderer falls back to the flat sky-blue
     // clear that's already in the framebuffer when we begin the render
@@ -125,6 +139,14 @@ void ScenePass::Shutdown() {
 
     DestroyRibbonPipelineAndBuffers();
     DestroySkyPipeline();
+    // Skinned pipeline before its two descriptor set layouts die: the
+    // pipeline layout references BOTH m_bonePaletteDescriptorSetLayout
+    // (freed in DestroyBonePaletteResources below) and
+    // m_textureDescriptorSetLayout (freed in DestroyTextureResources
+    // further down). Safe because the vkDeviceWaitIdle above drained
+    // every frame that could still be running skinned draws.
+    DestroySkinnedEntityPipeline();
+    DestroyBonePaletteResources();
     DestroyEntityPipelineAndMesh();
     // Per-Model GPU mesh cache (path (b)). Releasing the unique_ptr<VulkanBuffer>
     // values destroys their underlying VkBuffer/VkDeviceMemory through the
