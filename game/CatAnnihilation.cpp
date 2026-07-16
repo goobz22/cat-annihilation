@@ -2884,6 +2884,25 @@ void CatAnnihilation::createPlayer() {
         }
     }
 
+    // Fur color from the pre-game customize screen (web "Customize Your
+    // Cat", GameModeSelection.tsx:162 swatches): the chosen swatch's
+    // linear decode replaces the fixed EmberClan tint CatEntity stamps by
+    // default, multiplying over the Meshy tabby texture the same way the
+    // clan tints do. Eyes stay the texture's own — a whole-body tint can't
+    // recolor a baked eye region (recorded delta, PARITY_MATRIX.md).
+    if constexpr (WebParity::kEnabled) {
+        if (gameUI_ != nullptr && gameUI_->getMainMenu().hasSelectedFurColor()) {
+            if (auto* mesh = ecs_.getComponent<MeshComponent>(playerEntity_)) {
+                float furR = 1.0f;
+                float furG = 1.0f;
+                float furB = 1.0f;
+                gameUI_->getMainMenu().getSelectedFurLinear(furR, furG, furB);
+                mesh->hasTintOverride = true;
+                mesh->tintOverride = Engine::vec3(furR, furG, furB);
+            }
+        }
+    }
+
     // Set player entity in control system
     if (playerControlSystem_ != nullptr) {
         playerControlSystem_->setPlayerEntity(playerEntity_);
