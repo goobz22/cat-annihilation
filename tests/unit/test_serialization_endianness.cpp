@@ -19,6 +19,7 @@
 #include "engine/core/serialization.hpp"
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -97,4 +98,40 @@ TEST_CASE("BinaryReader round-trips primitive types byte-exact",
     }
 
     std::filesystem::remove(tmpPath, cleanupErr);
+}
+
+TEST_CASE("decompressData rejects an odd compressed size instead of over-reading",
+          "[serialization][security][decompress]") {
+    // Round-3 audit (2026-07-17), MED. The RLE decompressData reads a
+    // (byte,count) PAIR per iteration but checked `inPos < compressedSize` only
+    // ONCE per iteration, so an ODD compressedSize entered a final iteration
+    // that read compressedData[compressedSize] — one byte PAST the buffer —
+    // from attacker-controlled save data and BEFORE the CRC32 gate in
+    // loadFromFile. A valid RLE stream is always even (pair-encoded), so an odd
+    // length is inherently corrupt and must fail gracefully, not over-read.
+    //
+    // The backing buffer is 1 byte LONGER than the declared compressedSize so
+    // the pre-fix over-read lands on a known sentinel rather than true UB, while
+    // still proving the loop reads past compressedSize. Layout: 'A',2 (a valid
+    // pair) then a lone 'B' with NO paired count -> odd compressedSize = 3.
+    std::vector<char> backing = {'A', 2, 'B', /*sentinel past compressedSize*/ 99};
+    const size_t compressedSize = 3;  // odd
+    const size_t originalSize = 3;
+
+    // Post-fix: the loop requires a full pair, stops after 'A',2 (outPos=2 !=
+    // originalSize=3) and throws "size mismatch". Pre-fix: it read backing[3]
+    // (past compressedSize) as the count and completed originalSize WITHOUT
+    // throwing, so this REQUIRE_THROWS fails first when the guard is reverted.
+    REQUIRE_THROWS(Engine::decompressData(backing.data(), compressedSize, originalSize));
+
+    // Positive control: a valid stream round-trips and its compressed size is
+    // always even, so the guard never rejects a legitimate stream.
+    const char original[] = {'X', 'X', 'X', 'Y', 'Z', 'Z'};
+    size_t cs = 0;
+    char* compressed = Engine::compressData(original, sizeof(original), cs);
+    REQUIRE(cs % 2 == 0);
+    char* roundtrip = Engine::decompressData(compressed, cs, sizeof(original));
+    REQUIRE(std::memcmp(roundtrip, original, sizeof(original)) == 0);
+    delete[] compressed;
+    delete[] roundtrip;
 }

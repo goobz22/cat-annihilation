@@ -302,7 +302,15 @@ char* decompressData(const char* compressedData, size_t compressedSize, size_t o
     size_t outPos = 0;
     size_t inPos = 0;
 
-    while (inPos < compressedSize && outPos < originalSize) {
+    // Each iteration consumes a (byte, count) PAIR, so BOTH bytes must be in
+    // range before we read them: require inPos+1 < compressedSize, not just
+    // inPos < compressedSize. The old single check let an ODD compressedSize
+    // enter a final iteration that read compressedData[compressedSize] — one
+    // byte past the buffer — from attacker-controlled save data, BEFORE the
+    // CRC32 gate in loadFromFile (2026-07-17 audit). A valid RLE stream is
+    // always even (pair-encoded); an odd length is corrupt and now stops here,
+    // leaving outPos < originalSize so the size-mismatch throw below rejects it.
+    while (inPos + 1 < compressedSize && outPos < originalSize) {
         char byte = compressedData[inPos++];
         uint8_t count = static_cast<uint8_t>(compressedData[inPos++]);
 
