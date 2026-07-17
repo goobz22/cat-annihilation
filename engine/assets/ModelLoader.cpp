@@ -714,14 +714,37 @@ void ModelLoader::ExtractMaterials(const GLTFData& data, Model& model) {
 
 template<typename T>
 std::vector<T> ModelLoader::ExtractBufferData(
-    const uint8_t* bufferData,
+    const std::vector<uint8_t>& buffer,
     size_t offset,
     size_t count,
     size_t stride,
     size_t componentSize
 ) {
     std::vector<T> result(count);
-    const uint8_t* src = bufferData + offset;
+    if (count == 0) {
+        return result;
+    }
+
+    // Bounds-check the accessor extent against the buffer size BEFORE any
+    // memcpy. The last byte this read touches is at
+    //   offset + (count-1)*effectiveStride + componentSize - 1
+    // (effectiveStride == componentSize for a tightly-packed accessor). A
+    // malformed/third-party glTF whose offset/count/stride runs past the
+    // buffer was a raw OOB read here — a crash or silent garbage vertices
+    // that slipped past the entities' load-failure try/catch (2026-07-17
+    // audit). Throw the same way the loader's other asset guards do so it
+    // degrades to a proxy cube instead of UB.
+    const size_t effectiveStride = (stride == 0) ? componentSize : stride;
+    const size_t requiredBytes =
+        offset + (count - 1) * effectiveStride + componentSize;
+    if (requiredBytes > buffer.size() || requiredBytes < offset) {
+        throw std::runtime_error(
+            "glTF accessor reads " + std::to_string(requiredBytes) +
+            " bytes but the buffer is only " + std::to_string(buffer.size()) +
+            " (out-of-range offset/count/stride in a corrupt glTF)");
+    }
+
+    const uint8_t* src = buffer.data() + offset;
 
     if (stride == 0 || stride == componentSize) {
         // Tightly packed
@@ -791,10 +814,35 @@ std::vector<glm::ivec4> WidenJointLanes(const uint8_t* src, size_t count, size_t
     return result;
 }
 
-std::vector<glm::ivec4> ExtractJointIndices(const uint8_t* bufferData, size_t offset,
+std::vector<glm::ivec4> ExtractJointIndices(const std::vector<uint8_t>& buffer, size_t offset,
                                             size_t count, size_t stride, int componentType,
                                             const std::string& meshName) {
-    const uint8_t* src = bufferData + offset;
+    // Lane width from the declared component type; a JOINTS_0 element is 4
+    // lanes. Validate the read extent against the buffer BEFORE WidenJointLanes
+    // memcpys from it — same OOB-read hardening as ExtractBufferData
+    // (2026-07-17 audit). Unknown componentType falls through to the throw
+    // below without touching memory.
+    size_t laneSize = 0;
+    switch (componentType) {
+        case kGltfUnsignedByte:  laneSize = sizeof(uint8_t);  break;
+        case kGltfUnsignedShort: laneSize = sizeof(uint16_t); break;
+        case kGltfUnsignedInt:   laneSize = sizeof(uint32_t); break;
+        default: break;
+    }
+    if (laneSize != 0 && count != 0) {
+        const size_t elementSize = 4 * laneSize;
+        const size_t effectiveStride = (stride == 0) ? elementSize : stride;
+        const size_t requiredBytes =
+            offset + (count - 1) * effectiveStride + elementSize;
+        if (requiredBytes > buffer.size() || requiredBytes < offset) {
+            throw std::runtime_error(
+                "mesh '" + meshName + "': JOINTS_0 reads " +
+                std::to_string(requiredBytes) + " bytes but the buffer is only " +
+                std::to_string(buffer.size()) + " (corrupt glTF accessor)");
+        }
+    }
+
+    const uint8_t* src = buffer.data() + offset;
     switch (componentType) {
         case kGltfUnsignedByte:  return WidenJointLanes<uint8_t>(src, count, stride);
         case kGltfUnsignedShort: return WidenJointLanes<uint16_t>(src, count, stride);
@@ -900,7 +948,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto positions = ExtractBufferData<glm::vec3>(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, sizeof(glm::vec3)
                 );
 
@@ -922,7 +970,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto normals = ExtractBufferData<glm::vec3>(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, sizeof(glm::vec3)
                 );
 
@@ -944,7 +992,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto tangents = ExtractBufferData<glm::vec4>(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, sizeof(glm::vec4)
                 );
 
@@ -966,7 +1014,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto uvs = ExtractBufferData<glm::vec2>(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, sizeof(glm::vec2)
                 );
 
@@ -987,7 +1035,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto uvs = ExtractBufferData<glm::vec2>(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, sizeof(glm::vec2)
                 );
 
@@ -1033,7 +1081,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto joints = ExtractJointIndices(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, accessor["componentType"], mesh.name
                 );
 
@@ -1095,7 +1143,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                 size_t stride = bufferView.value("byteStride", 0);
 
                 auto weights = ExtractWeights(
-                    data.buffers[bufferView["buffer"]].data(),
+                    data.buffers[bufferView["buffer"]],
                     offset, count, stride, accessor["componentType"], mesh.name
                 );
 
@@ -1116,7 +1164,7 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
 
                 if (componentType == 5123) { // UNSIGNED_SHORT
                     auto indices16 = ExtractBufferData<uint16_t>(
-                        data.buffers[bufferView["buffer"]].data(),
+                        data.buffers[bufferView["buffer"]],
                         offset, count, 0, sizeof(uint16_t)
                     );
                     mesh.indices.resize(count);
@@ -1125,12 +1173,12 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                     }
                 } else if (componentType == 5125) { // UNSIGNED_INT
                     mesh.indices = ExtractBufferData<uint32_t>(
-                        data.buffers[bufferView["buffer"]].data(),
+                        data.buffers[bufferView["buffer"]],
                         offset, count, 0, sizeof(uint32_t)
                     );
                 } else if (componentType == 5121) { // UNSIGNED_BYTE
                     auto indices8 = ExtractBufferData<uint8_t>(
-                        data.buffers[bufferView["buffer"]].data(),
+                        data.buffers[bufferView["buffer"]],
                         offset, count, 0, sizeof(uint8_t)
                     );
                     mesh.indices.resize(count);
@@ -1403,7 +1451,7 @@ void ModelLoader::ExtractSkin(const GLTFData& data, Model& model) {
         const size_t offset =
             accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
         auto ibms = ExtractBufferData<glm::mat4>(
-            data.buffers[bufferView["buffer"]].data(), offset, count, 0,
+            data.buffers[bufferView["buffer"]], offset, count, 0,
             sizeof(glm::mat4));
 
         // Scatter slot-indexed IBMs onto the nodes the joints table names,
@@ -1452,7 +1500,7 @@ void ModelLoader::ExtractAnimations(const GLTFData& data, Model& model) {
             size_t inputOffset = inputAcc.value("byteOffset", 0) + inputBV.value("byteOffset", 0);
 
             channel.times = ExtractBufferData<float>(
-                data.buffers[inputBV["buffer"]].data(),
+                data.buffers[inputBV["buffer"]],
                 inputOffset, inputCount, 0, sizeof(float)
             );
 
@@ -1466,7 +1514,7 @@ void ModelLoader::ExtractAnimations(const GLTFData& data, Model& model) {
 
             if (channel.path == "translation" || channel.path == "scale") {
                 auto values = ExtractBufferData<glm::vec3>(
-                    data.buffers[outputBV["buffer"]].data(),
+                    data.buffers[outputBV["buffer"]],
                     outputOffset, outputCount, 0, sizeof(glm::vec3)
                 );
 
@@ -1477,7 +1525,7 @@ void ModelLoader::ExtractAnimations(const GLTFData& data, Model& model) {
                 }
             } else if (channel.path == "rotation") {
                 auto values = ExtractBufferData<glm::vec4>(
-                    data.buffers[outputBV["buffer"]].data(),
+                    data.buffers[outputBV["buffer"]],
                     outputOffset, outputCount, 0, sizeof(glm::vec4)
                 );
 
