@@ -58,8 +58,18 @@ void appendPod(std::vector<uint8_t>& bytes, const T& value) {
 struct GlbSpec {
     int jointsComponentType = 5121;
     int weightsComponentType = 5126;
-    // Per-vertex joint indices (3 vertices × 4 lanes).
+    // Per-vertex joint indices (3 vertices × 4 lanes). These are JOINT-SLOT
+    // indices (positions in skin.joints), exactly what the glTF spec says
+    // JOINTS_0 holds — NOT node indices.
     int joints[3][4] = {{0, 1, 2, 3}, {3, 2, 1, 0}, {1, 0, 3, 2}};
+    // skin.joints — maps joint slot -> node index. Identity by default so
+    // the componentType tests stay agnostic to the remap; the remap test
+    // shuffles it.
+    std::vector<int> skinJoints = {0, 1, 2, 3};
+    // When true, the skin gains an inverseBindMatrices accessor whose slot-j
+    // matrix carries translation x = -(j+1) — distinctive per slot so a test
+    // can prove each IBM landed on the node skin.joints[j] points at.
+    bool includeIbms = false;
 };
 
 void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
@@ -100,20 +110,40 @@ void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
     for (uint16_t i : {uint16_t{0}, uint16_t{1}, uint16_t{2}}) appendPod(bin, i);
     while (bin.size() % 4 != 0) bin.push_back(0);
 
+    // Optional inverse-bind-matrices section: one column-major mat4 per
+    // joint slot, identity except translation.x = -(slot+1) so each matrix
+    // is uniquely identifiable after the loader scatters them onto nodes.
+    const size_t ibmsOffset = bin.size();
+    if (spec.includeIbms) {
+        for (size_t slot = 0; slot < spec.skinJoints.size(); ++slot) {
+            glm::mat4 ibm{1.0f};
+            ibm[3][0] = -static_cast<float>(slot + 1);
+            for (int column = 0; column < 4; ++column)
+                for (int row = 0; row < 4; ++row) appendPod(bin, ibm[column][row]);
+        }
+    }
+    const size_t ibmsLength = bin.size() - ibmsOffset;
+
     // The JSON chunk references the BIN sections above by byte offset.
-    // Four nodes exist so every joint index in the default spec (max 3)
-    // is in-bounds — the loader validates JOINTS_0 lanes against the node
-    // count because skins aren't extracted yet and the bone palette is
-    // sized one-bone-per-node.
+    // Four nodes exist so every REMAPPED node index (max 3 whatever the
+    // skin.joints permutation) is in-bounds for the one-bone-per-node
+    // palette the entities build.
     const std::string jointsType = std::to_string(spec.jointsComponentType);
     const std::string weightsType = std::to_string(spec.weightsComponentType);
     const std::string weightsNormalized = spec.weightsComponentType == 5126 ? "" : ",\"normalized\":true";
+    std::string skinJson = "\"joints\":[";
+    for (size_t i = 0; i < spec.skinJoints.size(); ++i) {
+        if (i) skinJson += ",";
+        skinJson += std::to_string(spec.skinJoints[i]);
+    }
+    skinJson += "]";
+    if (spec.includeIbms) skinJson += ",\"inverseBindMatrices\":4";
     std::string json = std::string("{")
         + "\"asset\":{\"version\":\"2.0\"},"
         + "\"scene\":0,"
         + "\"scenes\":[{\"nodes\":[0]}],"
         + "\"nodes\":[{\"name\":\"root\",\"children\":[1,2,3]},{\"name\":\"j1\"},{\"name\":\"j2\"},{\"name\":\"j3\"}],"
-        + "\"skins\":[{\"joints\":[0,1,2,3]}],"
+        + "\"skins\":[{" + skinJson + "}],"
         + "\"meshes\":[{\"name\":\"tri\",\"primitives\":[{"
         + "\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],"
         + "\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}],"
@@ -122,12 +152,20 @@ void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
         + "{\"buffer\":0,\"byteOffset\":" + std::to_string(jointsOffset) + ",\"byteLength\":" + std::to_string(jointsLength) + "},"
         + "{\"buffer\":0,\"byteOffset\":" + std::to_string(weightsOffset) + ",\"byteLength\":" + std::to_string(weightsLength) + "},"
         + "{\"buffer\":0,\"byteOffset\":" + std::to_string(indicesOffset) + ",\"byteLength\":6}"
+        + (spec.includeIbms
+               ? ",{\"buffer\":0,\"byteOffset\":" + std::to_string(ibmsOffset) +
+                     ",\"byteLength\":" + std::to_string(ibmsLength) + "}"
+               : "")
         + "],"
         + "\"accessors\":["
         + "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
         + "{\"bufferView\":1,\"componentType\":" + jointsType + ",\"count\":3,\"type\":\"VEC4\"},"
         + "{\"bufferView\":2,\"componentType\":" + weightsType + ",\"count\":3,\"type\":\"VEC4\"" + weightsNormalized + "},"
         + "{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}"
+        + (spec.includeIbms
+               ? ",{\"bufferView\":4,\"componentType\":5126,\"count\":" +
+                     std::to_string(spec.skinJoints.size()) + ",\"type\":\"MAT4\"}"
+               : "")
         + "]}";
     while (json.size() % 4 != 0) json.push_back(' ');
 
@@ -237,5 +275,53 @@ TEST_CASE("genuinely out-of-range joint index still refuses to load", "[model-lo
     REQUIRE_THROWS_WITH(
         CatEngine::ModelLoader::Load(glb.path.string()),
         Catch::Matchers::Contains("JOINTS_0") &&
-            Catch::Matchers::Contains("references node 200"));
+            Catch::Matchers::Contains("200"));
+}
+
+TEST_CASE("JOINTS_0 slot indices remap through skin.joints to node indices",
+          "[model-loader][joints][skin]") {
+    // THE BUG THIS PINS (found 2026-07-17 by the headless harness — every
+    // animated character rendered as a shredded mesh): glTF JOINTS_0 lanes
+    // are indices into skin.joints (joint SLOTS), but the loader stored
+    // them raw as if they were NODE indices. The shipped rigs have wildly
+    // non-identity mappings (ember_leader.glb: joints=[34,33,20,19,...]),
+    // so every vertex skinned against the wrong bones the moment a clip
+    // played. Bind-pose renders hid it (that mode skips the palette).
+    // The loader must remap slot -> node at load time so the node-indexed
+    // downstream pipeline (skeleton bones == nodes) stays consistent.
+    GlbSpec spec;
+    spec.skinJoints = {2, 3, 1, 0};
+    spec.includeIbms = true;
+    TempGlb glb("cat_test_joints_remap.glb", spec);
+
+    auto model = CatEngine::ModelLoader::Load(glb.path.string());
+
+    REQUIRE(model->skinJoints == std::vector<int>({2, 3, 1, 0}));
+    const auto& vertices = model->meshes[0].vertices;
+    REQUIRE(vertices.size() == 3);
+    // Raw slots {0,1,2,3} -> nodes {2,3,1,0}, etc.
+    CHECK(vertices[0].joints == glm::ivec4(2, 3, 1, 0));
+    CHECK(vertices[1].joints == glm::ivec4(0, 1, 3, 2));
+    CHECK(vertices[2].joints == glm::ivec4(3, 2, 0, 1));
+}
+
+TEST_CASE("skin inverseBindMatrices scatter onto the nodes skin.joints names",
+          "[model-loader][joints][skin]") {
+    // Companion half of the same 2026-07-17 outage: Node::inverseBindMatrix
+    // was NEVER populated (identity for every bone), so even correctly
+    // mapped joints would skin with palette = world(bone) * I — a double
+    // transform. Slot j's fixture matrix carries translation.x = -(j+1);
+    // after the scatter, node skin.joints[j] must hold it.
+    GlbSpec spec;
+    spec.skinJoints = {2, 3, 1, 0};
+    spec.includeIbms = true;
+    TempGlb glb("cat_test_skin_ibms.glb", spec);
+
+    auto model = CatEngine::ModelLoader::Load(glb.path.string());
+
+    REQUIRE(model->nodes.size() == 4);
+    CHECK(model->nodes[2].inverseBindMatrix[3][0] == Approx(-1.0f));  // slot 0
+    CHECK(model->nodes[3].inverseBindMatrix[3][0] == Approx(-2.0f));  // slot 1
+    CHECK(model->nodes[1].inverseBindMatrix[3][0] == Approx(-3.0f));  // slot 2
+    CHECK(model->nodes[0].inverseBindMatrix[3][0] == Approx(-4.0f));  // slot 3
 }

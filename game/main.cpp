@@ -721,6 +721,18 @@ static std::string inputScriptQueryValue(const std::string& query,
         }
         return std::to_string(static_cast<int>(health->currentHealth));
     }
+    if (query == "cameraX" || query == "cameraY" || query == "cameraZ") {
+        // Camera rig oracle: with the web-parity follow-yaw camera the rig
+        // must sit kCameraDistance behind / kCameraHeight above the cat
+        // along its facing — these queries let a script assert that
+        // geometry instead of eyeballing screenshots.
+        const auto* playerControl = game->getPlayerControlSystem();
+        if (!playerControl) return "<no-player-control>";
+        const auto cameraTransform = playerControl->getCameraTransform();
+        if (query == "cameraX") return std::to_string(cameraTransform.position.x);
+        if (query == "cameraY") return std::to_string(cameraTransform.position.y);
+        return std::to_string(cameraTransform.position.z);
+    }
     if (query == "playerX" || query == "playerY" || query == "playerZ") {
         // World position — lets movement scripts prove the cat actually
         // moved (hold:w + expect:playerZ<=...) and, combined with the

@@ -162,12 +162,17 @@ std::shared_ptr<Model> ModelLoader::LoadGLTF(const std::string& path) {
         throw std::runtime_error(
             std::string(stage) + " failed for '" + path + "': " + ex.what());
     };
+    // Order matters: ExtractSkin writes IBMs onto the nodes ExtractNodes
+    // created, and ExtractMeshes' JOINTS_0 remap reads the skinJoints table
+    // ExtractSkin filled — see the ExtractSkin declaration.
     try { ExtractMaterials(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractMaterials", ex); }
-    try { ExtractMeshes(data, *model); }
-    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
     try { ExtractNodes(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractNodes", ex); }
+    try { ExtractSkin(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractSkin", ex); }
+    try { ExtractMeshes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
     try { ExtractAnimations(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractAnimations", ex); }
 
@@ -282,12 +287,17 @@ std::shared_ptr<Model> ModelLoader::LoadGLB(const std::string& path) {
         throw std::runtime_error(
             std::string(stage) + " failed for '" + path + "': " + ex.what());
     };
+    // Order matters: ExtractSkin writes IBMs onto the nodes ExtractNodes
+    // created, and ExtractMeshes' JOINTS_0 remap reads the skinJoints table
+    // ExtractSkin filled — see the ExtractSkin declaration.
     try { ExtractMaterials(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractMaterials", ex); }
-    try { ExtractMeshes(data, *model); }
-    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
     try { ExtractNodes(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractNodes", ex); }
+    try { ExtractSkin(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractSkin", ex); }
+    try { ExtractMeshes(data, *model); }
+    catch (const std::exception& ex) { rethrowStage("ExtractMeshes", ex); }
     try { ExtractAnimations(data, *model); }
     catch (const std::exception& ex) { rethrowStage("ExtractAnimations", ex); }
 
@@ -1027,32 +1037,44 @@ void ModelLoader::ExtractMeshes(const GLTFData& data, Model& model) {
                     offset, count, stride, accessor["componentType"], mesh.name
                 );
 
-                // Bound joint indices against the actual node count. Skinned
-                // models with no `nodes` array at all (sanity-degenerate
-                // case) get jointBound = 0, which fails every index — that
-                // is intentional: a skinned asset with no nodes is malformed
-                // and we should refuse to load rather than feed the GPU
-                // garbage. Cap the displayed asset details so the operator
-                // log doesn't include the entire raw buffer.
-                const size_t jointBound = data.root.contains("nodes")
-                                              ? data.root["nodes"].size()
-                                              : 0u;
+                // JOINTS_0 lanes are indices into skin.joints (joint
+                // SLOTS), per the glTF spec — NOT node indices. Remap each
+                // lane through the skinJoints table ExtractSkin filled so
+                // the stored values ARE node indices, matching the
+                // node-indexed skeleton/palette the entities build. Storing
+                // the raw slot indices here (the pre-2026-07-17 behaviour)
+                // shredded every animated character: the shipped rigs'
+                // joints arrays are heavily permuted, so each vertex
+                // followed the wrong bones. Skinned meshes with no skin at
+                // all fall back to treating lanes as node indices — the
+                // only self-consistent reading such a (nonstandard) file
+                // permits.
+                const bool hasSkin = !model.skinJoints.empty();
+                const size_t jointBound = hasSkin
+                                              ? model.skinJoints.size()
+                                              : (data.root.contains("nodes")
+                                                     ? data.root["nodes"].size()
+                                                     : 0u);
 
                 for (size_t i = 0; i < count; ++i) {
-                    const glm::ivec4 jointIdx = joints[i];
+                    glm::ivec4 jointIdx = joints[i];
                     for (int lane = 0; lane < 4; ++lane) {
                         const int idx = jointIdx[lane];
                         if (idx < 0 || static_cast<size_t>(idx) >= jointBound) {
                             throw std::runtime_error(
                                 "mesh '" + mesh.name + "': JOINTS_0 vertex " +
                                 std::to_string(i) + " lane " +
-                                std::to_string(lane) + " references node " +
+                                std::to_string(lane) + " references " +
+                                (hasSkin ? "joint slot " : "node ") +
                                 std::to_string(idx) +
-                                " but model only declares " +
+                                " but the model only declares " +
                                 std::to_string(jointBound) +
-                                " nodes (asset has a corrupt skin or "
-                                "stale joint indices after a node-array "
-                                "trim)");
+                                (hasSkin ? " skin joints" : " nodes") +
+                                " (asset has a corrupt skin or stale joint "
+                                "indices after a node-array trim)");
+                        }
+                        if (hasSkin) {
+                            jointIdx[lane] = model.skinJoints[idx];
                         }
                     }
                     mesh.vertices[i].joints = jointIdx;
@@ -1273,6 +1295,82 @@ void ModelLoader::ExtractNodes(const GLTFData& data, Model& model) {
                 node.children.push_back(childIdx);
                 model.nodes[childIdx].parentIndex = static_cast<int>(i);
             }
+        }
+    }
+}
+
+void ModelLoader::ExtractSkin(const GLTFData& data, Model& model) {
+    // Skins were previously never parsed at all, which broke skinning in
+    // two compounding ways (found 2026-07-17 via the headless harness's
+    // gameplay screenshots — every animated character rendered shredded):
+    //   1. JOINTS_0 lanes are indices into skin.joints (joint SLOTS), but
+    //      with no skinJoints table the mesh extractor stored them raw as
+    //      node indices. The shipped rigs' joints arrays are heavily
+    //      permuted (ember_leader.glb: [34,33,20,19,...]), so every vertex
+    //      followed the wrong bones the moment a clip played.
+    //   2. Node::inverseBindMatrix stayed at its identity default for
+    //      every bone, so the palette was world(bone) * I — a double
+    //      transform even with correct indices.
+    // Bind-pose renders (--disable-gpu-skinning) hid both: that mode
+    // draws raw vertices and never consults the palette.
+    // tests/unit/test_model_loader_joints.cpp [skin] pins both halves.
+    if (!data.root.contains("skins")) {
+        return;
+    }
+    const auto& skinsJson = data.root["skins"];
+    if (skinsJson.empty()) {
+        return;
+    }
+    // Every asset this engine ships (Meshy + retopo pipeline) has exactly
+    // one skin; the entities also build exactly one skeleton per model.
+    // A multi-skin file would need per-primitive skin resolution via the
+    // node graph — refuse loudly instead of silently mis-skinning.
+    if (skinsJson.size() > 1) {
+        throw std::runtime_error("model declares " +
+                                 std::to_string(skinsJson.size()) +
+                                 " skins; only one skin per model is supported");
+    }
+    const auto& skinJson = skinsJson[0];
+
+    const auto& jointsJson = skinJson["joints"];
+    model.skinJoints.reserve(jointsJson.size());
+    for (const auto& jointNode : jointsJson) {
+        const int nodeIndex = jointNode.get<int>();
+        if (nodeIndex < 0 ||
+            static_cast<size_t>(nodeIndex) >= model.nodes.size()) {
+            throw std::runtime_error("skin joint references node " +
+                                     std::to_string(nodeIndex) +
+                                     " but model only declares " +
+                                     std::to_string(model.nodes.size()) +
+                                     " nodes");
+        }
+        model.skinJoints.push_back(nodeIndex);
+    }
+
+    if (skinJson.contains("inverseBindMatrices")) {
+        const auto& accessors = data.root["accessors"];
+        const auto& bufferViews = data.root["bufferViews"];
+        const auto& accessor = accessors[skinJson["inverseBindMatrices"].get<int>()];
+        const auto& bufferView = bufferViews[accessor["bufferView"].get<int>()];
+
+        const size_t count = accessor["count"];
+        if (count != model.skinJoints.size()) {
+            throw std::runtime_error(
+                "skin inverseBindMatrices count " + std::to_string(count) +
+                " != joint count " + std::to_string(model.skinJoints.size()));
+        }
+        const size_t offset =
+            accessor.value("byteOffset", 0) + bufferView.value("byteOffset", 0);
+        auto ibms = ExtractBufferData<glm::mat4>(
+            data.buffers[bufferView["buffer"]].data(), offset, count, 0,
+            sizeof(glm::mat4));
+
+        // Scatter slot-indexed IBMs onto the nodes the joints table names,
+        // so the node-indexed skeleton the entities build (bone i == node i)
+        // picks the right matrix without knowing about joint slots.
+        for (size_t slot = 0; slot < count; ++slot) {
+            model.nodes[static_cast<size_t>(model.skinJoints[slot])]
+                .inverseBindMatrix = ibms[slot];
         }
     }
 }

@@ -169,6 +169,11 @@ private:
     static void ExtractMeshes(const GLTFData& data, Model& model);
     static void ExtractMaterials(const GLTFData& data, Model& model);
     static void ExtractNodes(const GLTFData& data, Model& model);
+    // Parses skins[0]: fills Model::skinJoints (joint slot -> node index)
+    // and scatters the skin's inverseBindMatrices onto Node::inverseBindMatrix.
+    // Must run AFTER ExtractNodes (writes onto nodes) and BEFORE
+    // ExtractMeshes (whose JOINTS_0 remap consumes skinJoints).
+    static void ExtractSkin(const GLTFData& data, Model& model);
     static void ExtractAnimations(const GLTFData& data, Model& model);
 
     // Geometry processing
