@@ -2500,6 +2500,67 @@ void CatAnnihilation::render() {
                 }
             }
 
+            // ---- Projectile visuals (web LocalProjectileSystem) ----------
+            // The web renders every in-flight projectile as real geometry:
+            // spells are a 0.2-radius unlit sphere in the ITEM color
+            // (tsx:133-136, water = #00ffff), arrows a brown shaft with a
+            // silver tip (tsx:116-129). The native systems FLEW these
+            // projectiles correctly but drew NOTHING — their only visual
+            // was a particle emitter that the survival ScenePass path never
+            // renders, so combat reads as dogs dying to invisible force
+            // (caught by the 2026-07-17 combat-visual probes). Approximate
+            // with the procedural meshes on hand: the bush sphere scaled to
+            // r0.2 for bolts, the trunk cylinder scaled thin+long for
+            // arrows (single-mesh stand-in for the web's 3-part arrow;
+            // shaft brown dominates at gameplay distance). Lambert-lit vs
+            // the web's unlit material — documented approximation.
+            if constexpr (WebParity::kEnabled) {
+                if (magicSystem_ != nullptr && proceduralTreeBush_ != nullptr) {
+                    // Water #00ffff decoded to linear (srgb 0,1,1 -> linear
+                    // 0,1,1 — pure channels decode to themselves).
+                    const Engine::vec3 waterLinear(0.0F, 1.0F, 1.0F);
+                    constexpr float kBoltRadius = 0.2F;       // tsx:134 sphere r
+                    constexpr float kBushMeshRadius = 0.7F;   // ProceduralTreeMesh bush
+                    for (const auto& spell : magicSystem_->getActiveSpells()) {
+                        if (!spell.active) continue;
+                        CatEngine::Renderer::ScenePass::EntityDraw d;
+                        d.position    = spell.position;
+                        d.halfExtents = Engine::vec3(kBoltRadius);
+                        d.color       = waterLinear;
+                        d.model       = proceduralTreeBush_.get();
+                        d.modelMatrix =
+                            Engine::mat4::translate(spell.position) *
+                            Engine::mat4::scale(
+                                Engine::vec3(kBoltRadius / kBushMeshRadius));
+                        entityDraws.push_back(std::move(d));
+                    }
+                }
+                if (combatSystem_ != nullptr && proceduralTreeTrunk_ != nullptr) {
+                    // Arrow shaft #8B4513 linear decode ≈ (0.258, 0.060, 0.007).
+                    const Engine::vec3 shaftLinear(0.258F, 0.060F, 0.007F);
+                    for (const auto& arrow : combatSystem_->getProjectiles()) {
+                        if (!arrow.active) continue;
+                        // Orient the shaft along its velocity: yaw from the
+                        // XZ direction (arrows fly flat in survival). The
+                        // trunk mesh is a unit-ish vertical cylinder — lay
+                        // it down (rotateX 90°) then yaw to the flight line.
+                        const float yaw = std::atan2(arrow.velocity.x,
+                                                     -arrow.velocity.z);
+                        CatEngine::Renderer::ScenePass::EntityDraw d;
+                        d.position    = arrow.position;
+                        d.halfExtents = Engine::vec3(0.4F);
+                        d.color       = shaftLinear;
+                        d.model       = proceduralTreeTrunk_.get();
+                        d.modelMatrix =
+                            Engine::mat4::translate(arrow.position) *
+                            Engine::mat4::rotateY(yaw) *
+                            Engine::mat4::rotateX(Engine::Math::PI * 0.5F) *
+                            Engine::mat4::scale(Engine::vec3(0.07F, 0.15F, 0.07F));
+                        entityDraws.push_back(std::move(d));
+                    }
+                }
+            }
+
             auto* sceneCmdBuffer = renderer_->GetCommandBuffer();
             // DIAG: log per-frame whether the scene Execute path is reached.
             // Suspicion: ScenePass::Execute fires only on frame 1 then never
