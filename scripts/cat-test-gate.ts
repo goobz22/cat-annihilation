@@ -244,6 +244,16 @@ if (!quick && stages[stages.length - 1]!.ok) {
     'expect:playerAlive=false',
     'key:r', 'wait:5', 'expect:state=Playing', 'expect:wave=1',
     'expect:enemiesRemaining=7', 'expect:enemiesKilled=0',
+    // Camera-behind regression (2026-07-17 audit): after a LEFT turn the
+    // follow camera must trail BEHIND travel, not mirror to the front. The
+    // pre-fix offset was (+sinθ·d, h, cosθ·d) — the X term wrong-handed — so
+    // at the spawn heading (θ=0, sinθ=0) it was invisible and the straight
+    // walk above never caught it. This MUST turn first: turn-left+walk drives
+    // the cat to −X (playerX≤−8); the camera must trail on the +X side
+    // (cameraX ≈ playerX + 10.4 ≈ −1.7). Pre-fix cameraX was ≈ −22.6 (ahead
+    // of travel, in the cat's face) and this window would FAIL.
+    'hold:a,0.37', 'hold:w,2', 'expect:playerX<=-8',
+    'expect:cameraX>=-5', 'expect:cameraX<=3',
     'quit',
   ].join(';')
   stages.push(

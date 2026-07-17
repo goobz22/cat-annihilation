@@ -1347,7 +1347,23 @@ void PlayerControlSystem::updateCamera(float dt) {
     // instead swing the camera up-and-over toward the cat's zenith.
     Engine::vec3 rotatedOffset;
     if constexpr (WebParity::kEnabled) {
-        rotatedOffset = yawRot.rotate(cameraOffset_);
+        // Place the camera BEHIND the movement facing. The movement forward
+        // is (sinθ, 0, -cosθ) (processMovementInput, θ = cameraYaw_), so
+        // "behind" = -forward = (-sinθ, 0, cosθ), scaled by the horizontal
+        // distance (cameraOffset_.z) with the fixed height (cameraOffset_.y).
+        //
+        // The old `yawRot.rotate(cameraOffset_)` produced (+sinθ·d, h, cosθ·d)
+        // — the X term MIRRORED. At the spawn heading (θ=0, sinθ=0) it agreed,
+        // so the one headless check (walk straight −Z) passed; but after any
+        // A/D turn the camera flipped to the FRONT of travel and W drove the
+        // cat toward the lens (2026-07-17 audit, verified: turn left + walk →
+        // cat x=−12 but camera x=−22.6, ahead of travel). Computing the
+        // offset directly from the facing removes the wrong-handedness.
+        const float sinYaw = std::sin(cameraYaw_);
+        const float cosYaw = std::cos(cameraYaw_);
+        rotatedOffset = Engine::vec3(-sinYaw * cameraOffset_.z,
+                                     cameraOffset_.y,
+                                     cosYaw * cameraOffset_.z);
     } else {
         rotatedOffset = cameraRotation.rotate(cameraOffset_);
     }
