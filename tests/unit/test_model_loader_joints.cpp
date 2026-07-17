@@ -91,6 +91,11 @@ struct GlbSpec {
         //   - indices 12/13/14 = translation (7,8,9) live in the LAST COLUMN;
         //     a transposed load scatters them into the bottom ROW instead.
     };
+
+    // When >= 0, append this out-of-range index to the root node's children
+    // array (nodes are 0..3, so 5 is OOB). Exercises the ExtractNodes child-
+    // index bounds guard — without it, this is a controlled OOB heap write.
+    int oobChildIndex = -1;
 };
 
 void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
@@ -179,7 +184,9 @@ void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
         + "\"asset\":{\"version\":\"2.0\"},"
         + "\"scene\":0,"
         + "\"scenes\":[{\"nodes\":[0]}],"
-        + "\"nodes\":[{\"name\":\"root\",\"children\":[1,2,3]}," + node1Json + ",{\"name\":\"j2\"},{\"name\":\"j3\"}],"
+        + "\"nodes\":[{\"name\":\"root\",\"children\":[1,2,3"
+        + (spec.oobChildIndex >= 0 ? "," + std::to_string(spec.oobChildIndex) : "")
+        + "]}," + node1Json + ",{\"name\":\"j2\"},{\"name\":\"j3\"}],"
         + "\"skins\":[{" + skinJson + "}],"
         + "\"meshes\":[{\"name\":\"tri\",\"primitives\":[{"
         + "\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],"
@@ -413,4 +420,26 @@ TEST_CASE("node matrix loads column-major without transposing", "[model-loader][
     CHECK(transform[0][0] == Approx(2.0f));
     CHECK(transform[1][1] == Approx(3.0f));
     CHECK(transform[2][2] == Approx(4.0f));
+}
+
+TEST_CASE("ExtractNodes rejects an out-of-range child index instead of an OOB write",
+          "[model-loader][nodes][bounds]") {
+    // THE BUG THIS PINS (2026-07-17 correctness audit): ExtractNodes wrote
+    // `model.nodes[childIdx].parentIndex = i` with childIdx read straight
+    // from the glTF `children` array and NO bounds check — the lone
+    // unguarded index in the loader (JOINTS_0, skin joints, and triangle
+    // indices all throw on OOB). model.nodes is sized once to the node count
+    // and never grown, so a malformed/third-party glTF with a child index
+    // past the node count was a controlled out-of-bounds HEAP WRITE (silent
+    // corruption or SIGSEGV). The fix must convert that UB into the same
+    // descriptive throw the sibling guards use, so the entities' load
+    // try/catch degrades to a proxy cube.
+    GlbSpec spec;                 // 4 nodes (root + j1 + j2 + j3)
+    spec.oobChildIndex = 5;       // node 5 does not exist
+    TempGlb glb("cat_test_node_oob_child.glb", spec);
+
+    REQUIRE_THROWS_WITH(
+        CatEngine::ModelLoader::Load(glb.path.string()),
+        Catch::Matchers::Contains("child index") &&
+            Catch::Matchers::Contains("5"));
 }

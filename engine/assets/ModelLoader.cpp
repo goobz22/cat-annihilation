@@ -1312,6 +1312,27 @@ void ModelLoader::ExtractNodes(const GLTFData& data, Model& model) {
 
         if (nodeJson.contains("children")) {
             for (int childIdx : nodeJson["children"]) {
+                // Bounds-check the asset-controlled child index BEFORE the
+                // operator[] write below. model.nodes was sized once to the
+                // node count and never grown, so an out-of-range (or
+                // negative) child from a malformed/third-party glTF was a
+                // controlled out-of-bounds HEAP WRITE at
+                // &nodes[childIdx].parentIndex — silent corruption or a
+                // SIGSEGV, and it slipped through because this was the one
+                // index in the loader that didn't validate (JOINTS_0, skin
+                // joints, and triangle indices all throw on OOB). Throw the
+                // same way so the entities' load-failure try/catch turns it
+                // into a proxy-cube fallback instead of UB. (2026-07-17
+                // correctness audit.)
+                if (childIdx < 0 ||
+                    static_cast<size_t>(childIdx) >= model.nodes.size()) {
+                    throw std::runtime_error(
+                        "node " + std::to_string(i) + " references child index " +
+                        std::to_string(childIdx) + " but the model only declares " +
+                        std::to_string(model.nodes.size()) +
+                        " nodes (corrupt glTF node graph or stale child index "
+                        "after a node-array trim)");
+                }
                 node.children.push_back(childIdx);
                 model.nodes[childIdx].parentIndex = static_cast<int>(i);
             }
