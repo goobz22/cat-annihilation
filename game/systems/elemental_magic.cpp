@@ -324,6 +324,17 @@ void ElementalMagicSystem::castProjectileSpell(Entity caster,
         direction.z * PROJECTILE_SPEED
     };
 
+    // Web parity: the bolt spawns 2 units AHEAD of the caster along the
+    // cast direction (LocalProjectileSystem.tsx:196-198), not at the
+    // caster's own origin. Spawning at the origin started the bolt inside
+    // the player's body — behind the contact ring where melee dogs stand —
+    // so point-blank casts routinely missed everything (the caster itself
+    // is excluded from hit tests, and by the first collision tick the bolt
+    // had already passed the adjacent dog's 1.5-radius sphere edge).
+    if constexpr (WebParity::kEnabled) {
+        casterPos += direction * WebParity::kSpellSpawnAheadDistance;
+    }
+
     // Create active spell
     ActiveSpell activeSpell;
     activeSpell.caster = caster;
@@ -629,10 +640,13 @@ void ElementalMagicSystem::checkSpellCollisions() {
         return;
     }
 
-    // Sphere-vs-point test: every active projectile checks each entity that has
-    // a Transform + Health. Hits outside the projectile's tight bounding sphere
-    // (radius = 1.0) are skipped so the AOE path still owns area damage.
-    constexpr float PROJECTILE_HIT_RADIUS = 1.0F;
+    // Sphere-vs-point test: every active projectile checks each entity that
+    // has a Transform + Health. Under parity the radius is the web's 1.5
+    // (GlobalCollisionSystem.tsx:119); the pre-parity native 1.0 was tight
+    // enough that point-blank casts flew PAST adjacent dogs — a 2026-07-17
+    // headless probe spammed ~22 casts into a 7-dog scrum with zero hits.
+    constexpr float PROJECTILE_HIT_RADIUS =
+        WebParity::kEnabled ? WebParity::kProjectileHitRadius : 1.0F;
 
     for (auto& spell : activeSpells_) {
         if (!spell.active) {

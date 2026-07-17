@@ -190,6 +190,20 @@ inline constexpr float kBowProjectileSpeed = 25.0f;
 // tuning was 25 for every spell.
 inline constexpr float kSpellProjectileSpeed = 15.0f;
 
+// Projectile-vs-enemy hit radius (GlobalCollisionSystem.tsx:119 — the
+// "Increased collision radius" literal). The native pre-parity radius was
+// a tighter 1.0, which combined with the at-origin spawn below made
+// point-blank casts fly PAST adjacent dogs: a 2026-07-17 headless probe
+// spammed ~22 casts into a 7-dog scrum and killed nothing.
+inline constexpr float kProjectileHitRadius = 1.5f;
+
+// Spell projectiles spawn 2 units AHEAD of the cat along its facing
+// (LocalProjectileSystem.tsx:196-198: position.x + sin(rotation)*2 /
+// position.z + cos(rotation)*2). Spawning at the caster's own origin (the
+// pre-parity native behaviour) starts the bolt inside the player's body,
+// behind the contact ring where the dogs actually stand.
+inline constexpr float kSpellSpawnAheadDistance = 2.0f;
+
 // ---------------------------------------------------------------------
 // Weapon skills — reference: the LIVE award/damage sites, NOT gameConfig's
 // WEAPONS table (same live-path warning as above).

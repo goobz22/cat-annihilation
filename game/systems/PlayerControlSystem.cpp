@@ -716,7 +716,14 @@ void PlayerControlSystem::performSpellCast() {
     const Engine::vec3 aimPoint =
         transform->position + facing * kSpellAimDistance;
 
-    magicSystem_->castSpell(playerEntity_, std::string(kWaterSpellId), aimPoint);
+    const bool castAccepted =
+        magicSystem_->castSpell(playerEntity_, std::string(kWaterSpellId), aimPoint);
+    // Cast telemetry at INFO level: headless probes diagnose combat through
+    // the run log, and a silently-refused cast (cooldown/mana/level gate)
+    // is indistinguishable from a broken input path without this line.
+    // castSpell's own success log is DEBUG and never reaches probe logs.
+    Engine::Logger::info(std::string("[attack] water_bolt cast ") +
+                         (castAccepted ? "OK" : "refused (cooldown/mana/level)"));
 }
 
 void PlayerControlSystem::processBlockInput() {

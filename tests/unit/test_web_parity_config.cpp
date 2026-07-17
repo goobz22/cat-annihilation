@@ -209,6 +209,10 @@ TEST_CASE("weapon-skill rewards and curve match the web literals", "[web-parity]
     CHECK(WebParity::kWeaponXpPerHit == 10);
     CHECK(WebParity::kWeaponXpPerKill == 15);
     CHECK(WebParity::kSpellProjectileSpeed == 15.0f);  // LocalProjectileSystem.tsx:212
+    // The zero-kill regression pair (2026-07-17): a 1.0 hit radius + at-origin
+    // spawn made point-blank casts miss an entire dog scrum. Web values:
+    CHECK(WebParity::kProjectileHitRadius == 1.5f);      // GlobalCollisionSystem.tsx:119
+    CHECK(WebParity::kSpellSpawnAheadDistance == 2.0f);  // LocalProjectileSystem.tsx:196-198
     CHECK(WebParity::kShieldBashDamage == 35.0f);
     CHECK(WebParity::kShieldBashCooldownSeconds == 0.6f);
     CHECK(WebParity::kShieldBashPushback == 3.0f);
