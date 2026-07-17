@@ -92,30 +92,36 @@ function zlibStored(raw: Buffer): Buffer {
     return Buffer.concat(parts);
 }
 
-const [inputPath, outputPath] = process.argv.slice(2);
-if (!inputPath || !outputPath) {
-    console.error("usage: bun scripts/ppm_to_png.ts <in.ppm> <out.png>");
-    process.exit(2);
+export function convertPpmToPng(inputPath: string, outputPath: string): { width: number; height: number } {
+    const { width, height, pixels } = parsePpm(readFileSync(inputPath));
+
+    // PNG scanlines need a leading filter byte (0 = None) per row.
+    const raw = Buffer.alloc(height * (1 + width * 3));
+    for (let y = 0; y < height; y++) {
+        pixels.copy(raw, y * (1 + width * 3) + 1, y * width * 3, (y + 1) * width * 3);
+    }
+
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;  // bit depth
+    ihdr[9] = 2;  // color type: truecolor RGB
+    const png = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        pngChunk("IHDR", ihdr),
+        pngChunk("IDAT", zlibStored(raw)),
+        pngChunk("IEND", Buffer.alloc(0)),
+    ]);
+    writeFileSync(outputPath, png);
+    return { width, height };
 }
 
-const { width, height, pixels } = parsePpm(readFileSync(inputPath));
-
-// PNG scanlines need a leading filter byte (0 = None) per row.
-const raw = Buffer.alloc(height * (1 + width * 3));
-for (let y = 0; y < height; y++) {
-    pixels.copy(raw, y * (1 + width * 3) + 1, y * width * 3, (y + 1) * width * 3);
+if (import.meta.main) {
+    const [inputPath, outputPath] = process.argv.slice(2);
+    if (!inputPath || !outputPath) {
+        console.error("usage: bun scripts/ppm_to_png.ts <in.ppm> <out.png>");
+        process.exit(2);
+    }
+    const { width, height } = convertPpmToPng(inputPath, outputPath);
+    console.log(`${outputPath}: ${width}x${height}`);
 }
-
-const ihdr = Buffer.alloc(13);
-ihdr.writeUInt32BE(width, 0);
-ihdr.writeUInt32BE(height, 4);
-ihdr[8] = 8;  // bit depth
-ihdr[9] = 2;  // color type: truecolor RGB
-const png = Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", zlibStored(raw)),
-    pngChunk("IEND", Buffer.alloc(0)),
-]);
-writeFileSync(outputPath, png);
-console.log(`${outputPath}: ${width}x${height}`);

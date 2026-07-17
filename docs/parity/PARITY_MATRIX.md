@@ -44,15 +44,19 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 - 🟡 Idle Y-bob still applied atop real animation clips (bind-pose-era cue) — remove once animated characters are confirmed good.
 - 🟡 Story mode (P3, deferred until survival is 1:1).
 
-- 🟡 Menus: game-mode selection screen + pre-game cat-customization screen (web shows "Customize Your Cat" with fur/eye color pickers before survival; native has the customization SYSTEM loaded — 25 accessories/15 presets — but no pre-game UI), pause menu parity, game-over stats parity.
+- 🟡 Menus: mode-select ("Cat Warriors / Survival Mode / Story Mode coming soon") + "Customize Your Cat" fur-swatch page + START GAME are LIVE and verified headlessly (screenshots `build-ninja/headless/smoke2/`); remaining deltas: eye-color picker, pause menu parity, game-over stats parity.
 - 🟡 Spell/arrow projectile speeds (web 15/25) need per-call speed plumbing in CombatSystem/ElementalMagic; magic KILL bonus (+15 per element) skipped — the native kill record doesn't carry the element (hit XP per element does land).
 - 🟡 Ability icons / next-unlock display (CatStats.tsx) missing from native HUD (P3 — flags unlock correctly on both sides).
 - 🟡 Low-health vignette (HUD.cpp:319) is native-only — web has no screen-edge damage vignette; decide keep (better feedback) or gate under parity.
 - 🟡 Story mode (P3, deferred until survival is 1:1).
 
+- ✅ **Death dispatch fixed + proven end-to-end** — `HealthComponent::damage()` is notification-only (an ASSIGNED-but-empty `onDeath` std::function is truthy and was starving `HealthSystem::handleDeath`, leaving a 0-HP zombie in Playing); regression tests pin the contract. A scripted headless run now walks menu → customize → Playing → unattended death → **GAME OVER screen renders** (`expect:state=GameOver` PASS).
+- ✅ **Headless test harness** (the "virtualized" requirement — nothing may appear on the operator's screen): `--hidden` + `--input-script` (wait/click/key/hold/screenshot/log/expect/quit, in-engine injection into Engine::Input + ImGui) + `--state-log` JSONL timeline + `--dump-dir` checkpoints; front door `bun scripts/headless_run.ts` (auto PPM→PNG, timeline summary, PASS/FAIL verdict, missing-evidence = FAIL). Full doc: `docs/testing/HEADLESS_HARNESS.md`. Engine exit 4 = expect-assertions failed.
+
 ### Verification notes
 
 - The unattended web reference can only be screenshot when the user's Chrome window is visible — Chrome throttles rAF to 0 in hidden windows and the R3F scene never mounts (known hidden-tab hydration phantom). Side-by-side captures need either a visible window or a Playwright run.
+- Interactive native verification is now scriptable headless — see `docs/testing/HEADLESS_HARNESS.md` (menu click coords table included). State-log fps samples double as a hitch detector (shader-load ≈1.6 fps and wave-spawn ≈9.7 fps dips recorded 2026-07-16 — candidate polish items).
 
 
 Generated 2026-07-16 by a 12-agent comparison workflow (10 domain reviewers, surface enumerator, completeness critic).
