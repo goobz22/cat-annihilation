@@ -1616,6 +1616,61 @@ void CatAnnihilation::updateUI(float dt) {
                 activeHud.setCatLevel(static_cast<uint32_t>(std::max(levelingSystem_->getLevel(), 1)));
                 activeHud.setXpProgress(levelingSystem_->getXPProgress());
             }
+
+            // Weapon-skill card (web SkillsDisplay: per-weapon level + XP for
+            // the ACTIVE hotbar item). Water Spell reads the Water elemental
+            // skill; Shield reads sword (shield bash awards sword XP — the
+            // web has no separate shield skill); empty slots leave the card
+            // at its last-fed state, matching the web where the panel always
+            // shows the last active weapon's skill.
+            if (levelingSystem_ != nullptr && playerControlSystem_ != nullptr) {
+                const std::string activeItem =
+                    playerControlSystem_->getActiveHotbarItemName();
+                const auto& skills = levelingSystem_->getWeaponSkills();
+                const WeaponSkill* skill = nullptr;
+                if (activeItem == "Water Spell") {
+                    auto elemIt = skills.elementalMagic.find(ElementType::Water);
+                    if (elemIt != skills.elementalMagic.end()) {
+                        skill = &elemIt->second;
+                    }
+                } else if (activeItem == "Sword" || activeItem == "Shield") {
+                    skill = &skills.sword;
+                } else if (activeItem == "Bow") {
+                    skill = &skills.bow;
+                }
+                if (skill != nullptr) {
+                    activeHud.setActiveWeaponSkill(skill->level, skill->xp,
+                                                   skill->xpToNextLevel);
+                }
+            }
+
+            // Enemy overhead health bars (web LocalEnemySystem's floating
+            // red bars): rebuild the per-frame list from every living
+            // non-player entity that carries Transform + Health. Survival
+            // mode's only such entities are the wave dogs, so no explicit
+            // enemy tag is needed. Camera params mirror the scene render
+            // exactly (render(): makeVulkanPerspective(60deg, aspect, 0.1,
+            // 2000)) so the projected bars land on the dogs the same frame.
+            activeHud.clearEnemyBars();
+            if (playerControlSystem_ != nullptr && window_ != nullptr) {
+                const float aspect = window_->getHeight() > 0
+                    ? static_cast<float>(window_->getWidth()) /
+                          static_cast<float>(window_->getHeight())
+                    : 1.0f;
+                activeHud.setEnemyBarCamera(
+                    playerControlSystem_->getCameraTransform(),
+                    60.0f * Engine::Math::DEG_TO_RAD, aspect, 0.1f, 2000.0f);
+                auto enemyQuery = ecs_.query<Engine::Transform, HealthComponent>();
+                for (const auto& [entity, transform, health] : enemyQuery.view()) {
+                    if (entity == playerEntity_ || health->isDead) {
+                        continue;
+                    }
+                    const float ratio = health->maxHealth > 0.0f
+                        ? health->currentHealth / health->maxHealth
+                        : 0.0f;
+                    activeHud.addEnemyBar(transform->position, ratio);
+                }
+            }
         }
     }
 }
