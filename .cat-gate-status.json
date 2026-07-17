@@ -1,37 +1,58 @@
 {
-  "ts": "2026-07-17T18:08:49.000Z",
+  "ts": "2026-07-17T21:45:09.062Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
     {
+      "name": "lint-pause-parity-guards:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 66,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-pause-parity-guards",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 69,
+      "summary": "passed (0.1s)"
+    },
+    {
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 37,
+      "durationMs": 31,
       "summary": "passed (0.0s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 33,
+      "durationMs": 32,
       "summary": "passed (0.0s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 32203,
-      "summary": "passed (32.2s)"
+      "durationMs": 59510,
+      "summary": "passed (59.5s)"
     },
     {
       "name": "menu-flow",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 30793,
-      "summary": "passed (30.8s)"
+      "durationMs": 38044,
+      "summary": "passed (38.0s)"
+    },
+    {
+      "name": "nine-lives-rearm",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 35637,
+      "summary": "passed (35.6s)"
     }
   ],
-  "gitSha": "44c4d28",
+  "gitSha": "609925f",
   "invocation": "--json"
 }
