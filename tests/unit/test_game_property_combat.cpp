@@ -50,6 +50,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/math/Vector.hpp"
 #include "game/components/combat_components.hpp"
 
@@ -80,7 +81,7 @@ TEST_CASE("Combat hitbox sphere-overlap is translation-invariant",
     // The hit answer depends only on |b - a|, not on the absolute
     // coordinates. Translate both vectors by an arbitrary delta and the
     // result must be identical. We sample 1000 random configurations.
-    std::mt19937 rng(0xC0FFEE);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_combat:0xC0FFEE")));
     std::uniform_real_distribution<float> coord(-1000.0f, 1000.0f);
     std::uniform_real_distribution<float> rangeDist(0.01f, 50.0f);
 
@@ -175,7 +176,7 @@ TEST_CASE("Combat projectile hit kernel inherits sphere-overlap contract",
     // (CombatSystem.cpp:965-976). We re-exercise the same property
     // sweep so a future divergence between the melee and projectile
     // kernels alarms here.
-    std::mt19937 rng(0xBEEF);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_combat:0xBEEF")));
     std::uniform_real_distribution<float> coord(-200.0f, 200.0f);
     std::uniform_real_distribution<float> rangeDist(0.01f, 30.0f);
     for (int i = 0; i < 500; ++i) {
