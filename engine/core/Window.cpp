@@ -55,6 +55,14 @@ Window::Window(const Config& config)
         glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
     }
 
+    // Hidden ("virtual environment") mode: the window never becomes
+    // visible at all. Vulkan happily presents to an invisible window's
+    // swapchain, so gates/frame-dumps behave identically — the only
+    // difference is the user's desktop stays untouched.
+    if (config.hidden) {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    }
+
     // Determine monitor for fullscreen
     GLFWmonitor* monitor = config.fullscreen ? glfwGetPrimaryMonitor() : nullptr;
 
@@ -69,6 +77,28 @@ Window::Window(const Config& config)
 
     if (!m_window) {
         throw std::runtime_error("Failed to create GLFW window");
+    }
+
+    // Windowed visible mode: center on the PRIMARY monitor explicitly.
+    // GLFW's default placement delegates to the OS, and on this box that
+    // put every launch on the secondary display — the owner stared at an
+    // empty primary monitor while the game rendered happily off-screen
+    // ("it's not running at all", 2026-07-16). Centering math clamps to
+    // the work area so a window taller than the monitor still keeps its
+    // title bar reachable.
+    if (!config.fullscreen && !config.hidden) {
+        if (GLFWmonitor* primary = glfwGetPrimaryMonitor()) {
+            int workX = 0;
+            int workY = 0;
+            int workW = 0;
+            int workH = 0;
+            glfwGetMonitorWorkarea(primary, &workX, &workY, &workW, &workH);
+            const int posX =
+                workX + std::max(0, (workW - static_cast<int>(m_width)) / 2);
+            const int posY =
+                workY + std::max(0, (workH - static_cast<int>(m_height)) / 2);
+            glfwSetWindowPos(m_window, posX, posY);
+        }
     }
 
     // Install the shared user-pointer context. This Window is the slot's
