@@ -122,6 +122,25 @@ public:
         m_quitCallback = std::move(callback);
     }
 
+    /**
+     * @brief Set callback for the "Reset Progress" button.
+     *
+     * Web parity: GameModeSelection.tsx's Reset Progress control clears the
+     * persisted game state (clearAllProgress → localStorage wipe) then
+     * reloads (tsx:35-43). The native equivalent — wiping any leveling /
+     * save state — lives in the GAME LAYER (which owns LevelingSystem and
+     * the save path), not in the menu, so MainMenu exposes this seam instead
+     * of reaching across ownership. If no callback is wired the button still
+     * renders and runs its two-click confirm UX, but the confirm is INERT
+     * (there is no persisted native leveling save to clear today) — a
+     * deliberate "mechanism present, wiring deferred" state, documented so a
+     * future game-layer owner can attach the real reset without touching the
+     * menu draw code.
+     */
+    void setResetProgressCallback(ButtonCallback callback) {
+        m_resetProgressCallback = std::move(callback);
+    }
+
     // ========================================================================
     // State
     // ========================================================================
@@ -280,6 +299,7 @@ private:
     ButtonCallback m_continueCallback;
     ButtonCallback m_settingsCallback;
     ButtonCallback m_quitCallback;
+    ButtonCallback m_resetProgressCallback;
 
     // State
     bool m_hasSaveGame = false;
@@ -298,8 +318,12 @@ private:
     int m_selectedEyeIndex = CatGame::WebParity::kDefaultEyeSwatchIndex;
     bool m_furColorConfirmed = false;
 
-    // Animation (starfield drift/twinkle phase for renderBackground)
-    float m_backgroundAnimTimer = 0.0F;
+    // Reset-Progress two-click confirm latch (web parity:
+    // GameModeSelection.tsx:36-42 arms a "click again to confirm" state that
+    // auto-clears after 3 s). First click arms it; a second click while armed
+    // fires m_resetProgressCallback; the timer disarms it otherwise.
+    bool m_resetConfirmPending = false;
+    float m_resetConfirmTimer = 0.0F;
 
     // Screen dimensions (cached during render)
     uint32_t m_screenWidth = 1920;
