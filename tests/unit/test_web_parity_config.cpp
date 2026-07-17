@@ -434,3 +434,75 @@ TEST_CASE("eye palette is its own table and decodes sanely", "[web-parity]") {
     CHECK(dg > dr);
     CHECK(dg > db);
 }
+
+TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-parity][hud]") {
+    // The RENDERED HUD parity pins (the gap a constants-only sweep missed):
+    // src/components/ui/{CatStats,InventoryHotbar,WeaponSkills,WaveDisplay}.tsx
+    // + src/styles/components/{ui,inventory}.css + LocalEnemySystem.tsx's
+    // floating dog health bar. ImGui draws these in swapchain space, so the
+    // ColorSwatch bytes are the RAW web hex bytes — NOT srgb->linear decoded
+    // like the shader-fed fur/eye/sky tints. A drift here re-fails the build.
+
+    // Status pill (CatStats.tsx / ui.css).
+    CHECK(WebParity::kHudPillHeight == 64.0f);       // ui.css:13
+    CHECK(WebParity::kHudPillBottomMargin == 96.0f); // ui.css:3 (6rem)
+    CHECK(WebParity::kHudXpBarHeight == 6.0f);       // ui.css:49
+    auto sameRGB = [](const WebParity::ColorSwatch& swatch, int r, int g, int b) {
+        return swatch.red == r && swatch.green == g && swatch.blue == b;
+    };
+    CHECK(sameRGB(WebParity::kHudCatLevelColor, 0xFF, 0x6B, 0x35)); // ui.css:32 #ff6b35
+    CHECK(sameRGB(WebParity::kHudXpFillStart,   0xFB, 0xBF, 0x24)); // ui.css:58 #fbbf24
+    CHECK(sameRGB(WebParity::kHudXpFillEnd,     0xF5, 0x9E, 0x0B)); // ui.css:58 #f59e0b
+    CHECK(sameRGB(WebParity::kHudHealthColor,   0xEF, 0x44, 0x44)); // ui.css:83 #ef4444
+    CHECK(sameRGB(WebParity::kHudNextAbilityColor, 0x9C, 0xA3, 0xAF)); // ui.css:138 #9ca3af
+
+    // The pill's absolute XP text is reconstructed from the cat level + the
+    // 0..1 progress the HUD already receives, using the SAME catXpForLevel
+    // curve pinned above. A fresh run (level 1, progress 0) must read "0/104":
+    // nextTotal = catXpForLevel(2) = 104, curTotal = catXpForLevel(1) = 0.
+    CHECK(WebParity::catXpForLevel(1) == 0.0f);
+    CHECK(WebParity::catXpForLevel(2) == 104.0f);
+
+    // Hotbar (InventoryHotbar.tsx / inventory.css) — 9 slots reuse the
+    // existing hotbar-count constant; the layout/colour pins here.
+    CHECK(WebParity::kHotbarSlotCount == 9);          // gameStore initialInventory length
+    CHECK(WebParity::kHudHotbarSlotSize == 64.0f);    // inventory.css:13
+    CHECK(WebParity::kHudHotbarSlotGap == 8.0f);      // inventory.css:8
+    CHECK(WebParity::kHudHotbarBottomMargin == 16.0f);// inventory.css:4
+    CHECK(sameRGB(WebParity::kHudHotbarActiveBorder,   0xFB, 0xBF, 0x24)); // inventory.css:27 #fbbf24
+    CHECK(sameRGB(WebParity::kHudHotbarInactiveBorder, 0x4B, 0x55, 0x63)); // inventory.css:39 #4b5563
+    CHECK(sameRGB(WebParity::kHudHotbarSlotBg,         0x11, 0x18, 0x27)); // inventory.css:23 #111827
+    CHECK(sameRGB(WebParity::kHudHotbarActiveSlotBg,   0x1F, 0x29, 0x37)); // inventory.css:28 #1f2937
+    // Item tints seed the drawn icons + the active ring (gameStore.ts:289-292).
+    CHECK(sameRGB(WebParity::kHudItemWater,  0x00, 0xFF, 0xFF)); // #00ffff
+    CHECK(sameRGB(WebParity::kHudItemSword,  0xC0, 0xC0, 0xC0)); // #c0c0c0
+    CHECK(sameRGB(WebParity::kHudItemBow,    0x8B, 0x45, 0x13)); // #8b4513
+    CHECK(sameRGB(WebParity::kHudItemShield, 0xC0, 0xC0, 0xC0)); // #c0c0c0
+
+    // Weapon-skill card (WeaponSkills.tsx / ui.css). The water spell's skill
+    // is "Water Magic" in BLUE #3b82f6, distinct from the #00ffff item tint.
+    CHECK(WebParity::kHudWeaponPanelMinWidth == 240.0f);        // ui.css:181
+    CHECK(sameRGB(WebParity::kHudWeaponWaterColor, 0x3B, 0x82, 0xF6)); // ui.css:193 #3b82f6
+    CHECK(sameRGB(WebParity::kHudWeaponSwordColor, 0xF5, 0x9E, 0x0B)); // ui.css:217 #f59e0b
+    CHECK(sameRGB(WebParity::kHudWeaponBowColor,   0x06, 0xD6, 0xA0)); // ui.css:223 #06d6a0
+    // Level 1 water magic needs 132 XP to reach level 2 (the card's "132 XP
+    // to level 2"): weaponXpForLevel(2) - weaponXpForLevel(1) = 132 - 0.
+    CHECK(WebParity::weaponXpForLevel(2) - WebParity::weaponXpForLevel(1) == 132.0f);
+
+    // Wave banner (WaveDisplay.tsx) — white "ROUND N" + grey subtitle,
+    // top:16px, permanent.
+    CHECK(WebParity::kHudWaveBannerTopMargin == 16.0f);          // ui.css:328
+    CHECK(sameRGB(WebParity::kHudWaveTitleColor,    0xFF, 0xFF, 0xFF)); // ui.css:346 #fff
+    CHECK(sameRGB(WebParity::kHudWaveSubtitleColor, 0xD1, 0xD5, 0xDB)); // ui.css:353 #d1d5db
+
+    // Enemy overhead bar (LocalEnemySystem.tsx:483-494) — 1.5u above the dog,
+    // 1.0 x 0.08u #333 track, health-tiered fill, tiers at 0.6 / 0.3.
+    CHECK(WebParity::kHudEnemyBarWorldHeight == 1.5f);   // tsx:483
+    CHECK(WebParity::kHudEnemyBarWorldWidth == 1.0f);    // tsx:485
+    CHECK(WebParity::kHudEnemyBarHighThreshold == 0.6f); // tsx:491
+    CHECK(WebParity::kHudEnemyBarMidThreshold == 0.3f);  // tsx:492
+    CHECK(sameRGB(WebParity::kHudEnemyBarBg,   0x33, 0x33, 0x33)); // tsx:486 #333333
+    CHECK(sameRGB(WebParity::kHudEnemyBarHigh, 0xFF, 0x44, 0x44)); // tsx:491 #ff4444
+    CHECK(sameRGB(WebParity::kHudEnemyBarMid,  0xFF, 0x88, 0x44)); // tsx:492 #ff8844
+    CHECK(sameRGB(WebParity::kHudEnemyBarLow,  0xCC, 0x22, 0x22)); // tsx:492 #cc2222
+}
