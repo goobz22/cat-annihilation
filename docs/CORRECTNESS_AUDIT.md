@@ -50,3 +50,24 @@ green at each commit.
 - input-script verb **`spendrevive`** — injects "Nine Lives earned, revive spent" (reaching level 15 headlessly is impractical).
 - `expect:` query **`cameraX/Y/Z`** (from Round 1) proved decisive here — the camera mirror was invisible to screenshots but a one-line assertion at a turned heading caught it.
 - new class-detector lint **`lint-pause-parity-guards.ts`** — the first source-structural gate for the web-parity guard class.
+
+### Investigated, NOT a bug (so it isn't re-dug — R16 proof-of-work)
+
+**Player model facing after a turn (verifier's camera-fix follow-up).** Hypothesis:
+the player mesh's `Quaternion(Y, yaw)` (PlayerControlSystem `processMovementInput`)
+uses a different handedness than the movement facing `(sinθ,0,−cosθ)`, so the cat
+would "moonwalk" (face the mirror of travel) after an A/D turn. **Verdict: not a
+visible bug.** Evidence: (1) an engine-math probe (`Quaternion::rotate` +
+`lookRotation`, the real headers) shows `Quaternion(Y,yaw)` only coincides with
+the engine's `lookRotation(facing)` at yaw=0 — a genuine ABSTRACT inconsistency;
+(2) BUT `lookRotation`/`lookAt` (which every enemy uses to face the player, and
+they visibly do) is the tool for matching an EXTERNAL direction, whereas the
+player's mesh yaw, the follow-camera offset (`cameraYaw_` hard-snaps to the mesh
+yaw), and the travel facing ALL derive from the one `cameraYaw_` — they are
+yaw-locked by construction, so a mesh-vs-travel mirror is structurally
+unobservable through the follow camera; (3) rendered frames at spawn and after a
+90° left turn + walk both show the cat's BACK to the camera (`.facing_shots/`,
+regenerable). The inconsistency is harmless for the self-referential player rig;
+it would only matter if the player mesh had to face an external target, which it
+never does. No code change. If future work adds an external-facing player
+orientation (e.g. lock-on), reuse `lookRotation`, not `Quaternion(Y,yaw)`.
