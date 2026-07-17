@@ -16,7 +16,11 @@ export default defineConfig({
     // of silently hopping back toward a ThothOS port.
     port: 5173,
     strictPort: true,
-    open: true,
+    // NEVER auto-open a browser window: this dev server is routinely started
+    // by headless test tooling on a machine the operator is actively using,
+    // and a surprise tab on their desktop violates the no-visible-testing
+    // rule (operator directive 2026-07-16). Open localhost:5173 manually.
+    open: false,
   },
   build: {
     outDir: 'dist',

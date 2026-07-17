@@ -1,5 +1,38 @@
 # Cat Annihilation — threejs → native parity matrix
 
+## ⛔ 2026-07-17 CORRECTION: presentation parity was NEVER verified until now
+
+The sweeps below verified gameplay CONSTANTS at the source level and declared
+convergence — but nobody had ever put the RUNNING web build next to the native
+build. The operator rejected the result on sight ("the game is not ready in
+comparison to the web version") and was right. First true side-by-side
+captures (Playwright headless vs native `--hidden` frames, in
+`build-ninja/webref/`) revealed the presentation differs drastically:
+
+| Area | Web (truth) | Native (before fix) |
+|---|---|---|
+| Main menu | Dark card on navy gradient, side-by-side mode cards w/ descriptions + feature bullets, dev-status banner, Reset Progress | Flat stacked buttons, star specks |
+| Customize | Two-column card, live cat preview panel, orange title, teal START | Single column, no preview, yellow title |
+| Ground | Deep rich green | Bright yellow-green |
+| Trees | Small dark lollipops | Large bright crowns |
+| Horizon | Sky→green haze gradient band | Flat sky over fog |
+| Enemy HP | Floating red overhead bars | None |
+| HUD | Bottom pill (Lv+XP+HP+next), 9-slot icon hotbar, top-right weapon-XP panel | Corner HP bar + text-only weapon line + SCORE (web has no score) |
+| Wave banner | Big white "ROUND N / SURVIVE THE HORDE" | Small yellow "WAVE N / Dogs remaining" |
+| Death | Modal card w/ red glow, Survival Time + Enemies Remaining, TRY AGAIN, "Press Space or click" | Fullscreen text, wave+kills, "Press R or Enter" |
+
+Fix workflow `presentation-parity` dispatched 2026-07-17 (world-look /
+hud-ingame / menus-screens agents). **Standing lesson (T9): "parity" claims
+require the RENDERED result compared, not the source constants** — the capture
+pipeline is `scripts/webref_capture.ts` (Playwright, needs `node`, against
+`bunx vite preview --port 4173`; dev-server capture is broken — see below).
+
+**Web-side finding:** `bun run dev` (vite 7 dev) fails to emit the optimized
+`@react-three/drei` dep on this machine (504 "Outdated Optimize Dep" forever;
+the .js.map lands but the .js never does) → the R3F scene NEVER mounts in a
+fresh dev session. The production build + `vite preview` works. Capture
+against preview, not dev.
+
 ## ⭐ 2026-07-17 FULL VERIFY-FIX SWEEP (13-agent workflow) — the CURRENT per-row truth
 
 Every remaining P1/🟡 row was re-verified against BOTH codebases at HEAD by 9 parallel
