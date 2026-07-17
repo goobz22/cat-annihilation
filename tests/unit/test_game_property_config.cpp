@@ -39,6 +39,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -462,7 +463,7 @@ TEST_CASE("GameConfig::validate cross-product — every field x {below, in, abov
     // option x every category of input value either accepts unchanged or
     // clamps into [min, max] — NEVER silently accepts an out-of-range
     // value.
-    std::mt19937 rng(0x42C0FE);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_config:0x42C0FE")));
 
     struct FloatField {
         std::string name;

@@ -53,6 +53,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/memory/StackAllocator.hpp"
 
 #include <algorithm>
@@ -92,7 +93,7 @@ TEST_CASE("StackAllocator property: every alignment in {1..128} aligns the retur
 
 TEST_CASE("StackAllocator property: alignment holds across interleaved sizes and alignments", "[memory][stack][property][alignment]") {
     StackAllocator alloc(1024 * 1024);
-    std::mt19937 rng(0xFEEDFACEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_property_stack:0xFEEDFACE")));
     std::uniform_int_distribution<size_t> sizeDist(1, 256);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kPowerOfTwoAlignments.size() - 1);
 

@@ -30,6 +30,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/renderer/MeshOptimizer.hpp"
 
 #include <algorithm>
@@ -247,7 +248,8 @@ TEST_CASE("MeshOptimizer - Tipsy lowers ACMR vs unoptimized input",
     // Worst-case baseline: shuffle triangle order to destroy any
     // implicit locality in the subdivision traversal pattern.
     std::vector<uint32_t> shuffled = mesh.indices;
-    ShuffleTriangleOrder(shuffled, /*seed=*/0xC47B07E5u);
+    ShuffleTriangleOrder(shuffled,
+                         static_cast<uint32_t>(CatTest::DeterministicSeed("mesh_optimizer:shuffle")));
     const float acmrBefore = ComputeACMR(shuffled, vertexCount);
 
     std::vector<uint32_t> forsythIdx = shuffled;

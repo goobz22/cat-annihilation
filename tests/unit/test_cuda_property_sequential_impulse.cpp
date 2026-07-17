@@ -23,6 +23,7 @@
 // single-shot Solve() driver hides from a flat-API-only test.
 // ---------------------------------------------------------------------------
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/cuda/physics/SequentialImpulse.hpp"
 
 #include <cmath>
@@ -254,7 +255,7 @@ TEST_CASE("SI property: friction pyramid clamp holds every iteration",
 // ---------------------------------------------------------------------------
 TEST_CASE("SI property: random tangential velocities respect friction pyramid",
           "[si][property]") {
-    std::mt19937_64 rng(0xfeed0420ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_sequential_impulse:0xfeed0420"));
     std::uniform_real_distribution<float> tDist(-5.0f, 5.0f);
     std::uniform_real_distribution<float> approachDist(-3.0f, -0.5f);
     std::uniform_real_distribution<float> muDist(0.05f, 0.9f);
@@ -379,7 +380,7 @@ TEST_CASE("SI property: contacts with invalid body indices are skipped",
 // ---------------------------------------------------------------------------
 TEST_CASE("SI property: tangent basis is orthonormal for random unit normals",
           "[si][property]") {
-    std::mt19937_64 rng(0xbeefULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_sequential_impulse:0xbeef"));
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
     int count = 0;
@@ -419,7 +420,7 @@ TEST_CASE("SI property: EffectiveMass for two equal dynamic bodies is 0.5",
 // ---------------------------------------------------------------------------
 TEST_CASE("SI property: separating contacts produce zero lambdaN",
           "[si][property]") {
-    std::mt19937_64 rng(0x1234ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_sequential_impulse:0x1234"));
     std::uniform_real_distribution<float> vDist(0.1f, 5.0f);
 
     for (int trial = 0; trial < 100; ++trial) {
@@ -449,7 +450,7 @@ TEST_CASE("SI property: separating contacts produce zero lambdaN",
 // ---------------------------------------------------------------------------
 TEST_CASE("SI property: single-contact convergence is non-increasing across random configs",
           "[si][property]") {
-    std::mt19937_64 rng(0xcafeULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_sequential_impulse:0xcafe"));
     std::uniform_real_distribution<float> vDist(-5.0f, -0.5f);
     std::uniform_real_distribution<float> pDist(0.0f, 0.05f);
 
@@ -524,7 +525,7 @@ TEST_CASE("SI property: cold-start zeroes leftover lambdas before solving",
 // ---------------------------------------------------------------------------
 TEST_CASE("SI property: restitution threshold gates bouncing across random speeds",
           "[si][property]") {
-    std::mt19937_64 rng(0xab1bULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_sequential_impulse:0xab1b"));
     std::uniform_real_distribution<float> approachDist(0.05f, 8.0f);
     std::uniform_real_distribution<float> thresholdDist(0.2f, 2.0f);
     std::uniform_real_distribution<float> restDist(0.0f, 0.95f);

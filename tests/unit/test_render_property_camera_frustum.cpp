@@ -59,6 +59,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/math/Frustum.hpp"
 #include "engine/math/Matrix.hpp"
 #include "engine/math/Vector.hpp"
@@ -78,7 +79,6 @@ namespace {
 // Seed routed through CatTest::DeterministicSeed (reproducible default,
 // CAT_TEST_SEED-overridable). Per-section salts (kPropertySeed ^ N) below keep
 // each generator independent; the override shifts the whole family together.
-#include "test_seed.hpp"
 const uint32_t kPropertySeed =
     static_cast<uint32_t>(CatTest::DeterministicSeed("render property camera_frustum"));
 

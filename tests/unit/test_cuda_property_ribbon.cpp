@@ -26,6 +26,7 @@
 // monotonicity contracts.
 // ---------------------------------------------------------------------------
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/cuda/particles/RibbonTrail.hpp"
 
 #include <cmath>
@@ -372,7 +373,7 @@ TEST_CASE("Ribbon property: BuildBillboardSegment returns 4 on valid, 0 on inval
 // ---------------------------------------------------------------------------
 TEST_CASE("Ribbon property: corner-pair midpoints land on the prev/current samples",
           "[ribbon][property]") {
-    std::mt19937_64 rng(0xab1ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ribbon:0xab1"));
     std::uniform_real_distribution<float> dist(-10.0f, 10.0f);
     std::uniform_real_distribution<float> halfWidthDist(0.01f, 0.5f);
 
@@ -408,7 +409,7 @@ TEST_CASE("Ribbon property: corner-pair midpoints land on the prev/current sampl
 // ---------------------------------------------------------------------------
 TEST_CASE("Ribbon property: ComputeSegmentBasis tangent and side are unit length",
           "[ribbon][property]") {
-    std::mt19937_64 rng(0xab2ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ribbon:0xab2"));
     std::uniform_real_distribution<float> dist(-5.0f, 5.0f);
 
     int validCount = 0;
@@ -443,7 +444,7 @@ TEST_CASE("Ribbon property: ComputeSegmentBasis tangent and side are unit length
 // ---------------------------------------------------------------------------
 TEST_CASE("Ribbon property: TaperHalfWidth clamps lifetime ratio to [0, 1]",
           "[ribbon][property]") {
-    std::mt19937_64 rng(0xab3ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ribbon:0xab3"));
     std::uniform_real_distribution<float> hwDist(0.0f, 1.0f);
     std::uniform_real_distribution<float> ratioDist(-10.0f, 10.0f);
     std::uniform_real_distribution<float> tailDist(0.0f, 2.0f);

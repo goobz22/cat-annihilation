@@ -37,6 +37,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/rhi/ShaderHotReload.hpp"
 #include "engine/rhi/ShaderReloadRegistry.hpp"
 
@@ -56,7 +57,6 @@ namespace {
 
 // Seed routed through CatTest::DeterministicSeed (reproducible default,
 // CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
-#include "test_seed.hpp"
 const uint32_t kPropertySeed =
     static_cast<uint32_t>(CatTest::DeterministicSeed("render property shader_hot_reload"));
 

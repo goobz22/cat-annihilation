@@ -41,6 +41,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/animation/TwoBoneIK.hpp"
 
 #include <cmath>
@@ -268,7 +269,7 @@ TEST_CASE("TwoBoneIK property: target at maxReach*(1+eps) clamps along dirAT",
 
 TEST_CASE("TwoBoneIK property: 1000 random solves preserve limb lengths to 1e-5 relative",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xC47A1B1Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xC47A1B1E")));
 
     const int NUM_SAMPLES = 1000;
     int reached_count = 0;
@@ -456,7 +457,7 @@ TEST_CASE("TwoBoneIK property: collinear-pole fallback deterministic across dire
 
 TEST_CASE("TwoBoneIK property: random non-degenerate poles select correct bend side",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xB1B2B3B4u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xB1B2B3B4")));
     int valid = 0;
     const int NUM_SAMPLES = 600;
 
@@ -519,7 +520,7 @@ TEST_CASE("TwoBoneIK property: random non-degenerate poles select correct bend s
 
 TEST_CASE("TwoBoneIK property: rotation deltas reconstruct positions across random solves",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xD17ED17Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xD17ED17E")));
     int valid = 0;
     const int NUM_SAMPLES = 500;
 
@@ -597,7 +598,7 @@ TEST_CASE("TwoBoneIK property: rotation deltas reconstruct positions across rand
 
 TEST_CASE("TwoBoneIK property: RotationFromTo unit-output + round-trip across 1000 pairs",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xF17EF17Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xF17EF17E")));
 
     for (int i = 0; i < 1000; ++i) {
         const vec3 from = rng.unitSphere();
@@ -635,7 +636,7 @@ TEST_CASE("TwoBoneIK property: RotationFromTo unit-output + round-trip across 10
 
 TEST_CASE("TwoBoneIK property: zero-upper / zero-lower limb always returns rest pose",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xCAFEBABEu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xCAFEBABE")));
 
     for (int i = 0; i < 200; ++i) {
         // Random rest with zero UPPER limb (a == b).
@@ -689,7 +690,7 @@ TEST_CASE("TwoBoneIK property: zero-upper / zero-lower limb always returns rest 
 
 TEST_CASE("TwoBoneIK property: target-at-root returns rest pose across random rest poses",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xBAADF00Du);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xBAADF00D")));
 
     for (int i = 0; i < 200; ++i) {
         Chain chain{};
@@ -753,7 +754,7 @@ TEST_CASE("TwoBoneIK property: equal-length bones produce 60-degree bend at midp
 
 TEST_CASE("TwoBoneIK property: tiny-limb chains preserve geometry without NaN",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xABCDABCDu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xABCDABCD")));
 
     // Surfaced bug (NOT hidden by this test, WARN here): at tiny bone
     // lengths (0.01-0.05) the law-of-cosines preservation contract
@@ -807,7 +808,7 @@ TEST_CASE("TwoBoneIK property: tiny-limb chains preserve geometry without NaN",
 
 TEST_CASE("TwoBoneIK property: large-limb chains preserve geometry without NaN",
           "[anim][ik][property][two_bone_ik]") {
-    XorShift32 rng(0xDEFCBA98u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_two_bone_ik:0xDEFCBA98")));
 
     // Surfaced bug (NOT hidden): at L=50-100 the law-of-cosines numerator
     // (L1² + D² - L2²) ~ 1e4 and denominator (2 L1 D) ~ 1e4 land in a

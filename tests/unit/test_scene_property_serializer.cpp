@@ -38,6 +38,7 @@
 
 #define CATCH_CONFIG_FAST_COMPILE
 #include "catch2/catch.hpp"
+#include "test_seed.hpp"
 
 #include "ecs/ECS.hpp"
 #include "ecs/Entity.hpp"
@@ -293,7 +294,10 @@ TEST_CASE("SceneSerializer: 100-node hierarchy round-trips with structural equal
     Scene original("Hierarchy");
     int counter = 0;
     attachRandomTreeBelow(original, original.getRootNode(), 100,
-                          /*maxDepth=*/8, /*maxBranch=*/4, /*seed=*/0xABC123u, counter);
+                          /*maxDepth=*/8, /*maxBranch=*/4,
+                          /*seed=*/static_cast<uint32_t>(
+                              CatTest::DeterministicSeed("scene serializer:0xABC123")),
+                          counter);
 
     SceneSerializer serializer = makeSerializer();
     std::string json = serializer.saveToString(original);
@@ -319,7 +323,15 @@ TEST_CASE("SceneSerializer: depth-6 / breadth-4 random trees round-trip across s
           "[scene][serializer][round_trip][stress]") {
     // Eight different seeds; each produces a different tree shape. The
     // round-trip must preserve structure for every shape.
-    for (uint32_t seed : {0x1u, 0x2u, 0x10u, 0x100u, 0xDEADu, 0xBEEFu, 0xCAFEu, 0xFEEDu}) {
+    for (uint32_t seed : {
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0x1")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0x2")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0x10")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0x100")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0xDEAD")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0xBEEF")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0xCAFE")),
+             static_cast<uint32_t>(CatTest::DeterministicSeed("scene serializer:list:0xFEED"))}) {
         Scene original("S_" + std::to_string(seed));
         int counter = 0;
         attachRandomTreeBelow(original, original.getRootNode(), 60,
@@ -598,7 +610,10 @@ TEST_CASE("SceneSerializer: save -> load -> save produces identical output",
     Scene original("Idempotent");
     int counter = 0;
     attachRandomTreeBelow(original, original.getRootNode(), 30,
-                          /*maxDepth=*/4, /*maxBranch=*/3, /*seed=*/0xDDDDu, counter);
+                          /*maxDepth=*/4, /*maxBranch=*/3,
+                          /*seed=*/static_cast<uint32_t>(
+                              CatTest::DeterministicSeed("scene serializer:0xDDDD")),
+                          counter);
 
     // Give each node a unique transform.
     int idx = 0;
@@ -631,7 +646,10 @@ TEST_CASE("SceneSerializer: depth-6 / breadth-4 tree with components round-trips
     Scene original("BigScene");
     int counter = 0;
     attachRandomTreeBelow(original, original.getRootNode(), 200,
-                          /*maxDepth=*/6, /*maxBranch=*/4, /*seed=*/0xBADBABEu, counter);
+                          /*maxDepth=*/6, /*maxBranch=*/4,
+                          /*seed=*/static_cast<uint32_t>(
+                              CatTest::DeterministicSeed("scene serializer:0xBADBABE")),
+                          counter);
 
     // Attach an entity + components to half the nodes.
     int sprinkled = 0;

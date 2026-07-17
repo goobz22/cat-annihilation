@@ -42,6 +42,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/math/Vector.hpp"
 #include "engine/math/Math.hpp"
 
@@ -53,9 +54,13 @@ using namespace Engine;
 
 namespace {
 
-// Deterministic RNG seed — see header. Every property-test file pins the
-// same seed so the suite is reproducible across machines.
-constexpr unsigned kRngSeed = 42u;
+// Deterministic RNG seed — routed through CatTest::DeterministicSeed so the
+// stream is reproducible across machines by default yet replayable/sweepable
+// via the CAT_TEST_SEED environment variable. Same generator type and
+// distribution usage as before; only the seed VALUE now comes from the shared
+// helper instead of a bare literal.
+const unsigned kRngSeed =
+    static_cast<unsigned>(CatTest::DeterministicSeed("math property vector"));
 constexpr int kStressSamples = 1000;
 
 // Generate a finite vec3 with components in [-range, range]. We deliberately

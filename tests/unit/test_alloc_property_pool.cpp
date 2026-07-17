@@ -55,6 +55,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/memory/PoolAllocator.hpp"
 
 #include <algorithm>
@@ -283,7 +284,7 @@ TEST_CASE("PoolAllocator property: random alloc/free churn never produces double
     constexpr size_t kCount = 128;
     PoolAllocator pool(64, kCount);
 
-    std::mt19937 rng(0xBADCAFEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_property_pool:0xBADCAFE")));
     std::uniform_int_distribution<int> coin(0, 1);
 
     std::vector<void*> held;

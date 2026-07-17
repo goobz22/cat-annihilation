@@ -20,6 +20,7 @@
 //      frames produces NO BODY tunneling through any static obstacle.
 // ---------------------------------------------------------------------------
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/cuda/physics/CCD.hpp"
 #include "engine/cuda/physics/CCDPrepass.hpp"
 #include "engine/cuda/physics/RigidBody.hpp"
@@ -206,7 +207,7 @@ TEST_CASE("CCD property: zero-relative-motion non-overlapping spheres miss, no N
 // ---------------------------------------------------------------------------
 TEST_CASE("CCD property: ConservativeAdvance matches SweptSphereSphere within tolerance",
           "[ccd][property]") {
-    std::mt19937_64 rng(0xc0ffeeULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xc0ffee"));
     // Tight position range relative to displacement magnitude — we need
     // a non-trivial fraction of trials to produce an analytic hit so the
     // cross-check has signal. Empirically: +/-1.5 m positions, +/-3 m
@@ -273,7 +274,7 @@ TEST_CASE("CCD property: ConservativeAdvance matches SweptSphereSphere within to
 // ---------------------------------------------------------------------------
 TEST_CASE("CCD property: SweepAABB contains both endpoints",
           "[ccd][property]") {
-    std::mt19937_64 rng(0xa1a2ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xa1a2"));
     std::uniform_real_distribution<float> dist(-5.0f, 5.0f);
 
     for (int trial = 0; trial < 500; ++trial) {
@@ -324,7 +325,7 @@ TEST_CASE("CCD property: SweepAABB with margin grows on all 6 faces",
 // ---------------------------------------------------------------------------
 TEST_CASE("CCD property: SweptSphereAABB TOI is in [0, 1] for every reported hit",
           "[ccd][property]") {
-    std::mt19937_64 rng(0xa10ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xa10"));
     std::uniform_real_distribution<float> dist(-5.0f, 5.0f);
     std::uniform_real_distribution<float> rDist(0.1f, 0.4f);
 
@@ -350,7 +351,7 @@ TEST_CASE("CCD property: SweptSphereAABB TOI is in [0, 1] for every reported hit
 // ---------------------------------------------------------------------------
 TEST_CASE("CCD property: SweptSphereSphere TOI is in [0, 1] for every reported hit",
           "[ccd][property]") {
-    std::mt19937_64 rng(0xa11ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xa11"));
     // Tighter position range — at +/-3 m the hit rate is < 1% because
     // the spheres rarely fall in each other's path. +/-1 m centres the
     // pairs near each other enough to drive a couple-percent hit rate
@@ -450,7 +451,7 @@ TEST_CASE("CCD property: 100 random-velocity bodies do not tunnel through obstac
     constexpr int kFrameCount = 100;
     constexpr float kDt = 1.0f / 60.0f;
 
-    std::mt19937_64 rng(0xa12ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xa12"));
     std::uniform_real_distribution<float> posDist(-50.0f, 50.0f);
     // Velocity range chosen so |v|*dt can EXCEED the obstacle thickness
     // (forces the prepass to engage; without prepass the bodies would
@@ -661,7 +662,7 @@ TEST_CASE("CCD property: ApplyCCDPrepass on empty world is harmless",
 TEST_CASE("CCD property: SweptSphereAABB returns unit-length axis-aligned normal",
           "[ccd][property]") {
     const AABB box(vec3(-1.0f), vec3(1.0f));
-    std::mt19937_64 rng(0xa13ULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_property_ccd:0xa13"));
     std::uniform_real_distribution<float> dist(-3.0f, 3.0f);
     int hitCount = 0;
     for (int trial = 0; trial < 500; ++trial) {

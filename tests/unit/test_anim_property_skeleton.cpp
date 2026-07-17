@@ -30,6 +30,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/animation/Skeleton.hpp"
 #include "engine/math/Math.hpp"
 
@@ -114,7 +115,7 @@ bool finite_mat4(const mat4& m) {
 TEST_CASE("Skeleton property: addBone order produces strictly increasing parent indices",
           "[anim][skeleton][property]") {
     Skeleton skeleton;
-    XorShift32 rng(0x126EBA1Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_skeleton:0x126EBA1E")));
 
     // Add a root + 63 random-parent children. Each child picks a parent
     // from the existing bone indices [0, current_count), which guarantees
@@ -152,7 +153,7 @@ TEST_CASE("Skeleton property: addBone order produces strictly increasing parent 
 TEST_CASE("Skeleton property: sorted skeleton single-pass walk matches resolver",
           "[anim][skeleton][property]") {
     Skeleton skeleton;
-    XorShift32 rng(0xF457B0AEu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_skeleton:0xF457B0AE")));
 
     // 32-bone tree with random parent picks (parent < self).
     skeleton.addBone("root", -1);
@@ -367,7 +368,7 @@ TEST_CASE("Skeleton property: scrambled child-before-parent matches sorted layou
 
 TEST_CASE("Skeleton property: 100 random trees resolve without NaN",
           "[anim][skeleton][property]") {
-    XorShift32 rng(0x7E317E31u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_skeleton:0x7E317E31")));
 
     for (int trial = 0; trial < 100; ++trial) {
         const int boneCount = 1 + static_cast<int>(rng.next_u32() % 32u);
@@ -534,7 +535,7 @@ TEST_CASE("Skeleton property: mat4 and Transform overloads agree on world placem
     skeleton.addBone("c", 0);
     skeleton.addBone("d", 3);
 
-    XorShift32 rng(0x12121212u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_skeleton:0x12121212")));
 
     for (int trial = 0; trial < 50; ++trial) {
         std::vector<Transform> locals(5);

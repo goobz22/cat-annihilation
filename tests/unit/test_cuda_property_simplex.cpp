@@ -31,6 +31,7 @@
 // / period contracts that only fall out of large-N stress sweeps.
 // ---------------------------------------------------------------------------
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/cuda/particles/SimplexNoise.hpp"
 
 #include <cmath>
@@ -47,7 +48,6 @@ namespace {
 // CatTest::DeterministicSeed (see test_seed.hpp), which logs the effective seed
 // and honors the CAT_TEST_SEED override for replay/sweeping. All RNG-driven
 // tests in this file derive from this single base to make triage easier.
-#include "test_seed.hpp"
 const std::uint64_t kPropertySeed =
     CatTest::DeterministicSeed("cuda property simplex");
 

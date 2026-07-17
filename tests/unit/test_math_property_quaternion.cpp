@@ -36,6 +36,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/math/Quaternion.hpp"
 #include "engine/math/Vector.hpp"
 #include "engine/math/Matrix.hpp"
@@ -48,7 +49,11 @@ using namespace Engine;
 
 namespace {
 
-constexpr unsigned kRngSeed = 42u;
+// Seed routed through CatTest::DeterministicSeed: reproducible by default,
+// replayable/sweepable via CAT_TEST_SEED. Generator type + distributions
+// unchanged.
+const unsigned kRngSeed =
+    static_cast<unsigned>(CatTest::DeterministicSeed("math property quaternion"));
 constexpr int kStressSamples = 1000;
 
 // Generate a random unit quaternion uniformly distributed on the 3-sphere

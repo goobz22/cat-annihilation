@@ -29,6 +29,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/animation/RootMotion.hpp"
 
 #include <cmath>
@@ -209,7 +210,7 @@ TEST_CASE("RootMotion property: ExtractWindow is additive across cyclesCrossed",
 
 TEST_CASE("RootMotion property: ExtractWindow with 0 cycles == ExtractSubCycle bit-exact",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x0C7A1B1Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x0C7A1B1E")));
 
     for (int i = 0; i < 200; ++i) {
         const Transform rootT0 = xformPosYaw(vec3(rng.uniform(-2.0f, 2.0f),
@@ -250,7 +251,7 @@ TEST_CASE("RootMotion property: ExtractWindow with 0 cycles == ExtractSubCycle b
 
 TEST_CASE("RootMotion property: ExtractSubCycle is deterministic across 1000 calls",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0xDE7E1234u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0xDE7E1234")));
 
     // Generate 1000 random {t0, t1} pairs and a fixed config. Each pair
     // is re-extracted 4 times and the results must be bit-exact equal.
@@ -304,7 +305,7 @@ TEST_CASE("RootMotion property: ExtractSubCycle is deterministic across 1000 cal
 
 TEST_CASE("RootMotion property: StripFromPose removes yaw twist and preserves swing",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x57A1B1EBu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x57A1B1EB")));
 
     // What this test pins (the DIRECT contract — see source comments in
     // RootMotion.hpp lines 297-318 for the math):
@@ -368,7 +369,7 @@ TEST_CASE("RootMotion property: StripFromPose removes yaw twist and preserves sw
 
 TEST_CASE("RootMotion property: StripFromPose is idempotent",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x1DEA2DEAu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x1DEA2DEA")));
 
     for (int i = 0; i < 200; ++i) {
         Transform pose;
@@ -405,7 +406,7 @@ TEST_CASE("RootMotion property: StripFromPose is idempotent",
 
 TEST_CASE("RootMotion property: pure-translation samples produce identity rotation",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x1110EEEEu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x1110EEEE")));
 
     for (int i = 0; i < 200; ++i) {
         const float yaw = rng.uniform(-3.14f, 3.14f);
@@ -443,7 +444,7 @@ TEST_CASE("RootMotion property: pure-translation samples produce identity rotati
 
 TEST_CASE("RootMotion property: pure-yaw samples produce zero translation",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x2220EEEEu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x2220EEEE")));
 
     for (int i = 0; i < 200; ++i) {
         const vec3 samePos(rng.uniform(-1.0f, 1.0f),
@@ -487,7 +488,7 @@ TEST_CASE("RootMotion property: pure-yaw samples produce zero translation",
 
 TEST_CASE("RootMotion property: ExtractTwist returns unit quaternions",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x73a131a1u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x73a131a1")));
 
     for (int i = 0; i < 1000; ++i) {
         // Random unit-axis rotation. Axis from a random direction (NOT
@@ -523,7 +524,7 @@ TEST_CASE("RootMotion property: ExtractTwist returns unit quaternions",
 
 TEST_CASE("RootMotion property: ProjectTranslation deterministic across all masks",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0xABCDEF12u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0xABCDEF12")));
 
     const uint32_t masks[] = {
         AxisFlags::None,
@@ -634,7 +635,7 @@ TEST_CASE("RootMotion property: negative cyclesCrossed falls back to ExtractSubC
 
 TEST_CASE("RootMotion property: axis-mask bits are independent across translation",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0x99887766u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0x99887766")));
 
     for (int i = 0; i < 200; ++i) {
         const vec3 input(rng.uniform(-3.0f, 3.0f),
@@ -671,7 +672,7 @@ TEST_CASE("RootMotion property: axis-mask bits are independent across translatio
 
 TEST_CASE("RootMotion property: StripFromPose with AxisFlags::None is identity",
           "[anim][root_motion][property]") {
-    XorShift32 rng(0xCCCCBBBBu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_root_motion:0xCCCCBBBB")));
 
     for (int i = 0; i < 100; ++i) {
         Transform pose;

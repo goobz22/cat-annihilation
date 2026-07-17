@@ -317,7 +317,8 @@ TEST_CASE("SceneNode: findChild only walks direct children",
 
 TEST_CASE("SceneNode: findChildRecursive matches DFS visit set",
           "[scene][node][find_recursive]") {
-    auto root = buildRandomTree(0xC0DECAFEu, 50, 4);
+    auto root = buildRandomTree(
+        static_cast<uint32_t>(CatTest::DeterministicSeed("scene node:tree:0xC0DECAFE")), 50, 4);
     std::set<std::string> dfsNames;
     root->visitDepthFirst([&](SceneNode* node) {
         dfsNames.insert(node->getName());
@@ -338,7 +339,8 @@ TEST_CASE("SceneNode: findChildRecursive matches DFS visit set",
 
 TEST_CASE("SceneNode: depth-first traversal visits every node exactly once",
           "[scene][node][traversal][dfs]") {
-    auto root = buildRandomTree(0x12345u, 100, 4);
+    auto root = buildRandomTree(
+        static_cast<uint32_t>(CatTest::DeterministicSeed("scene node:tree:0x12345")), 100, 4);
     size_t expected = countSubtree(root.get());
     std::set<const SceneNode*> visited;
     root->visitDepthFirst([&](const SceneNode* node) {
@@ -350,7 +352,8 @@ TEST_CASE("SceneNode: depth-first traversal visits every node exactly once",
 
 TEST_CASE("SceneNode: breadth-first traversal visits every node exactly once",
           "[scene][node][traversal][bfs]") {
-    auto root = buildRandomTree(0x6789u, 80, 3);
+    auto root = buildRandomTree(
+        static_cast<uint32_t>(CatTest::DeterministicSeed("scene node:tree:0x6789")), 80, 3);
     size_t expected = countSubtree(root.get());
     std::set<const SceneNode*> visited;
     root->visitBreadthFirst([&](const SceneNode* node) {
@@ -604,7 +607,8 @@ TEST_CASE("SceneNode property: invariants hold across 200 random mutations",
     // Start with 100 nodes, then randomly add/remove/reparent for 200 steps.
     // After every step, sum-of-subtrees and parent-pointer consistency
     // must hold.
-    auto root = buildRandomTree(0xABCDEFu, 100, 5);
+    auto root = buildRandomTree(
+        static_cast<uint32_t>(CatTest::DeterministicSeed("scene node:tree:0xABCDEF")), 100, 5);
     std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_scene_property_node:0x13579")));
 
     auto collectAllNonRoot = [&]() {

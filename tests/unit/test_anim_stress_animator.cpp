@@ -28,6 +28,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/animation/Animator.hpp"
 
 #include <cmath>
@@ -198,7 +199,7 @@ TEST_CASE("Animator stress: 1000-frame play loop on 10-clip tree never produces 
     auto skeleton = makeStressSkeleton();
     Animator animator(skeleton);
 
-    XorShift32 rng(0xA11CE000u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_stress_animator:0xA11CE000")));
 
     // 10 distinct clips with random durations, translations and yaws.
     // The deliberate inclusion of a very short clip (0.07s) and a long
@@ -297,7 +298,7 @@ TEST_CASE("Animator stress: setBool / setFloat round-trip 200 fuzz iterations",
     auto skeleton = makeStressSkeleton();
     Animator animator(skeleton);
 
-    XorShift32 rng(0xFA22DDEDu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_stress_animator:0xFA22DDED")));
 
     for (int i = 0; i < 200; ++i) {
         const std::string boolName = "b_" + std::to_string(i % 16);
@@ -350,7 +351,7 @@ TEST_CASE("Animator stress: 200 rapid play() calls during transitions stay finit
     animator.addState(AnimationState("b", clipB, 1.0f, true));
     animator.addState(AnimationState("c", clipC, 1.0f, true));
 
-    XorShift32 rng(0xBAD1B0B5u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_stress_animator:0xBAD1B0B5")));
 
     animator.play("a");
     for (int i = 0; i < 200; ++i) {

@@ -112,22 +112,33 @@ TEST_CASE("LinearAllocator: thread-safe path no longer deadlocks", "[memory][lin
     constexpr int kThreads = 8;
     constexpr int kPerThread = 1000;
     std::atomic<int> successCount(0);
+    // Record alignment violations into an atomic instead of asserting inside the
+    // worker. Catch2 v2's REQUIRE/CHECK machinery is NOT thread-safe: it mutates
+    // a shared, non-atomic assertion counter, so calling it from 8 threads at
+    // once both races (lost/garbled counts -> the suite's assertion TOTAL drifts
+    // run-to-run) and risks a data race on failure reporting. We keep the exact
+    // same 16-byte-alignment invariant, but tally breaches thread-safely here and
+    // assert once on the main thread after the join.
+    std::atomic<int> misaligned(0);
 
     std::vector<std::thread> threads;
     threads.reserve(kThreads);
     for (int t = 0; t < kThreads; ++t) {
-        threads.emplace_back([&alloc, &successCount]() {
+        threads.emplace_back([&alloc, &successCount, &misaligned]() {
             for (int i = 0; i < kPerThread; ++i) {
                 void* p = alloc.allocate(64, 16);
                 if (p) {
                     successCount.fetch_add(1);
-                    REQUIRE(reinterpret_cast<uintptr_t>(p) % 16 == 0);
+                    if (reinterpret_cast<uintptr_t>(p) % 16 != 0) {
+                        misaligned.fetch_add(1);
+                    }
                 }
             }
         });
     }
     for (auto& th : threads) th.join();
 
+    REQUIRE(misaligned.load() == 0);
     REQUIRE(successCount.load() == kThreads * kPerThread);
     REQUIRE(alloc.getAllocationCount() == static_cast<size_t>(kThreads * kPerThread));
 }

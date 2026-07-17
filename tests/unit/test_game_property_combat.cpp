@@ -105,7 +105,7 @@ TEST_CASE("Combat hitbox sphere-overlap is translation-invariant",
 
 TEST_CASE("Combat hitbox sphere-overlap is symmetric in argument order",
           "[combat][property][hitbox][symmetry]") {
-    std::mt19937 rng(42);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("game combat:42")));
     std::uniform_real_distribution<float> coord(-100.0f, 100.0f);
     std::uniform_real_distribution<float> rangeDist(0.1f, 20.0f);
 
@@ -149,7 +149,7 @@ TEST_CASE("Combat hitbox closed interval — exact distance==range counts as hit
 
 TEST_CASE("Combat hitbox is monotone in range",
           "[combat][property][hitbox][monotone]") {
-    std::mt19937 rng(99);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("game combat:99")));
     std::uniform_real_distribution<float> coord(-50.0f, 50.0f);
 
     for (int i = 0; i < 200; ++i) {

@@ -33,6 +33,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/math/Vector.hpp"
 #include "engine/math/AABB.hpp"
 
@@ -158,7 +159,7 @@ TEST_CASE("Terrain bilinear sample inside a cell stays within [min, max] of corn
     // Random heights per cell. Bilinear interpolation of 4 finite corners
     // is a convex combination — every interior sample must fall inside
     // the closed interval [min corner, max corner].
-    std::mt19937 rng(0xDEADBEEF);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_terrain:0xDEADBEEF")));
     std::uniform_real_distribution<float> heightDist(0.0f, 100.0f);
     std::vector<float> heightmap(params.resolution * params.resolution);
     for (auto& h : heightmap) {
@@ -206,7 +207,7 @@ TEST_CASE("Terrain sample is exactly the constant on a constant-height map",
     const float kConstant = 17.5f;
     std::vector<float> heightmap(params.resolution * params.resolution, kConstant);
 
-    std::mt19937 rng(0xABCDEF);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_terrain:0xABCDEF")));
     std::uniform_real_distribution<float> coordDist(-params.size * 0.5f,
                                                      params.size * 0.5f);
     for (int i = 0; i < 1000; ++i) {
@@ -360,7 +361,7 @@ TEST_CASE("Terrain bilinear sample is deterministic — same input, same output"
     params.resolution = 16;
     params.size = 16.0f;
 
-    std::mt19937 rng(0xC0DEC0DE);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_terrain:0xC0DEC0DE")));
     std::uniform_real_distribution<float> heightDist(-50.0f, 50.0f);
     std::vector<float> heightmap(256);
     for (auto& h : heightmap) {
@@ -431,7 +432,7 @@ TEST_CASE("Terrain bilinear sample handles asymmetric cell sizes (size != resolu
 
     // Constant height — sampler should be invariant.
     std::vector<float> heightmap(25, 42.0f);
-    std::mt19937 rng(0x4242);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_game_property_terrain:0x4242")));
     std::uniform_real_distribution<float> coordDist(-params.size * 0.5f,
                                                      params.size * 0.5f);
     for (int i = 0; i < 500; ++i) {

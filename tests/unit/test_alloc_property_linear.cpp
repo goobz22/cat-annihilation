@@ -48,6 +48,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/memory/LinearAllocator.hpp"
 
 #include <algorithm>
@@ -99,7 +100,7 @@ TEST_CASE("LinearAllocator property: alignment holds across interleaved sizes an
     // same arena. The single-shot test above doesn't catch a bug where the
     // bump cursor drifts off-alignment after a series of unaligned writes.
     LinearAllocator alloc(1024 * 1024);
-    std::mt19937 rng(0xC0FFEEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_property_linear:0xC0FFEE")));
     std::uniform_int_distribution<size_t> sizeDist(1, 256);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kPowerOfTwoAlignments.size() - 1);
 
@@ -148,7 +149,7 @@ TEST_CASE("LinearAllocator property: N successive allocates produce non-overlapp
 TEST_CASE("LinearAllocator property: linearity holds for varied size and alignment streams", "[memory][linear][property][linearity]") {
     LinearAllocator alloc(2 * 1024 * 1024);
 
-    std::mt19937 rng(0xDEADBEEFu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_property_linear:0xDEADBEEF")));
     std::uniform_int_distribution<size_t> sizeDist(1, 512);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kPowerOfTwoAlignments.size() - 1);
 

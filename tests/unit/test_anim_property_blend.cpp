@@ -32,6 +32,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/animation/AnimationBlend.hpp"
 #include "engine/math/Math.hpp"
 
@@ -233,7 +234,7 @@ TEST_CASE("AnimationBlend property: multiBlend single weight=1 selects that inpu
 
 TEST_CASE("AnimationBlend property: 1000 random slerp results are unit length",
           "[anim][blend][property]") {
-    XorShift32 rng(0x511E1700u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0x511E1700")));
 
     for (int i = 0; i < 1000; ++i) {
         const Quaternion q1 = rng.randomQuat();
@@ -259,7 +260,7 @@ TEST_CASE("AnimationBlend property: 1000 random slerp results are unit length",
 
 TEST_CASE("AnimationBlend property: 1000 random nlerp results are unit length",
           "[anim][blend][property]") {
-    XorShift32 rng(0x511E2700u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0x511E2700")));
 
     for (int i = 0; i < 1000; ++i) {
         const Quaternion q1 = rng.randomQuat();
@@ -294,7 +295,7 @@ TEST_CASE("AnimationBlend property: 1000 random nlerp results are unit length",
 
 TEST_CASE("AnimationBlend property: slerp picks the shortest hemisphere",
           "[anim][blend][property]") {
-    XorShift32 rng(0xD07ED07Eu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0xD07ED07E")));
 
     int valid = 0;
     for (int i = 0; i < 1000; ++i) {
@@ -345,7 +346,7 @@ TEST_CASE("AnimationBlend property: slerp picks the shortest hemisphere",
 
 TEST_CASE("AnimationBlend property: linearBlend boundary factor=0 returns poseA",
           "[anim][blend][property]") {
-    XorShift32 rng(0xB1110000u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0xB1110000")));
 
     for (int i = 0; i < 100; ++i) {
         std::vector<Transform> poseA(3), poseB(3);
@@ -384,7 +385,7 @@ TEST_CASE("AnimationBlend property: linearBlend boundary factor=0 returns poseA"
 
 TEST_CASE("AnimationBlend property: linearBlend boundary factor=1 returns poseB",
           "[anim][blend][property]") {
-    XorShift32 rng(0xB2220000u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0xB2220000")));
 
     for (int i = 0; i < 100; ++i) {
         std::vector<Transform> poseA(3), poseB(3);
@@ -441,7 +442,7 @@ TEST_CASE("AnimationBlend property: linearBlend clamps blendFactor to [0, 1]",
 
 TEST_CASE("AnimationBlend property: 1000 random linearBlend rotations are unit length",
           "[anim][blend][property]") {
-    XorShift32 rng(0x113355DDu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0x113355DD")));
 
     auto poseA = std::vector<Transform>(1);
     auto poseB = std::vector<Transform>(1);
@@ -509,7 +510,7 @@ TEST_CASE("AnimationBlend property: BoneMask weights are clamped to [0, 1]",
 
 TEST_CASE("AnimationBlend property: computeAdditive then apply with weight=1 == original",
           "[anim][blend][property]") {
-    XorShift32 rng(0xADD17ADDu);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0xADD17ADD")));
 
     for (int i = 0; i < 100; ++i) {
         std::vector<Transform> reference(2);
@@ -606,7 +607,7 @@ TEST_CASE("AnimationBlend property: multiBlend is deterministic",
 
 TEST_CASE("AnimationBlend property: linearBlendMasked respects per-bone weights",
           "[anim][blend][property]") {
-    XorShift32 rng(0xBAFE0001u);
+    XorShift32 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_anim_property_blend:0xBAFE0001")));
 
     const size_t numBones = 6;
     std::vector<Transform> poseA(numBones), poseB(numBones);

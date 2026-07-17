@@ -41,6 +41,7 @@
 // ============================================================================
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/memory/LinearAllocator.hpp"
 #include "engine/memory/PoolAllocator.hpp"
 #include "engine/memory/StackAllocator.hpp"
@@ -76,7 +77,7 @@ TEST_CASE("Cross-allocator churn: PoolAllocator survives 10 000 alloc/free cycle
     constexpr size_t kBlockSize = 64;
     PoolAllocator pool(kBlockSize, kCount);
 
-    std::mt19937 rng(0x5a17C4u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0x5a17C4")));
     std::uniform_int_distribution<int> coin(0, 1);
 
     std::vector<void*> held;
@@ -131,10 +132,21 @@ TEST_CASE("Cross-allocator churn: LinearAllocator alternating fill+reset over 10
     constexpr size_t kArenaSize = 64 * 1024;
     LinearAllocator alloc(kArenaSize);
 
-    std::mt19937 rng(0xD150154u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xD150154")));
     std::uniform_int_distribution<size_t> sizeDist(1, 1024);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kAlignments.size() - 1);
 
+    // The number of allocations that fit before the arena fills is NOT constant
+    // across process runs: LinearAllocator aligns the ABSOLUTE bump address, and
+    // the arena's base address is only max_align_t (16-byte) aligned, so for the
+    // 32/64/128-byte alignments below the wasted padding — and therefore the fit
+    // count — depends on the run's heap/ASLR layout. Asserting once per
+    // allocation would make this test's assertion COUNT vary run-to-run and the
+    // whole suite's total drift. We instead accumulate any invariant breach into
+    // flags and assert them a fixed number of times after all epochs, so every
+    // allocation is still checked but the assertion tally is deterministic.
+    bool anyMisaligned = false;
+    bool anyOverlap = false;
     size_t observedPeak = 0;
     for (int epoch = 0; epoch < 100; ++epoch) {
         std::vector<ByteRange> ranges;
@@ -145,11 +157,15 @@ TEST_CASE("Cross-allocator churn: LinearAllocator alternating fill+reset over 10
             const size_t size = sizeDist(rng);
             void* p = alloc.allocate(size, alignment);
             if (!p) break;
-            REQUIRE(reinterpret_cast<uintptr_t>(p) % alignment == 0);
+            if (reinterpret_cast<uintptr_t>(p) % alignment != 0) {
+                anyMisaligned = true;
+            }
             ByteRange r{reinterpret_cast<uintptr_t>(p),
                         reinterpret_cast<uintptr_t>(p) + size};
             for (const auto& prior : ranges) {
-                REQUIRE_FALSE(overlaps(prior, r));
+                if (overlaps(prior, r)) {
+                    anyOverlap = true;
+                }
             }
             ranges.push_back(r);
         }
@@ -162,6 +178,11 @@ TEST_CASE("Cross-allocator churn: LinearAllocator alternating fill+reset over 10
         alloc.reset();
         REQUIRE(alloc.getUsedSize() == 0);
     }
+
+    // Deterministic, count-stable reporting of the per-allocation invariants
+    // gathered across every epoch (see the flag rationale above).
+    REQUIRE_FALSE(anyMisaligned);
+    REQUIRE_FALSE(anyOverlap);
 
     // After 100 epochs the peak should equal the max observed used size in any
     // single epoch — definitely <= arena size.
@@ -177,9 +198,22 @@ TEST_CASE("Cross-allocator churn: StackAllocator marker-heavy churn over 5000 it
     constexpr size_t kArenaSize = 32 * 1024;
     StackAllocator alloc(kArenaSize);
 
-    std::mt19937 rng(0x9415CAF3u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0x9415CAF3")));
     std::uniform_int_distribution<size_t> sizeDist(1, 256);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kAlignments.size() - 1);
+
+    // How often the arena saturates mid-iteration (the `if (!a)` skip below)
+    // depends on the alignment padding, which is a function of the run's base
+    // address — so a per-iteration assertion would make the count non-
+    // deterministic. Each invariant is accumulated into a named flag and
+    // asserted a fixed number of times after the loop, keeping the tally stable
+    // while still checking every iteration that actually ran.
+    bool badAlign = false;
+    bool badInnerMarker = false;
+    bool badBaseRollback = false;
+    bool badRedoAddress = false;
+    bool badInnerMarkerRestore = false;
+    bool badPeriodicRollback = false;
 
     constexpr int kIterations = 5000;
     for (int i = 0; i < kIterations; ++i) {
@@ -194,10 +228,14 @@ TEST_CASE("Cross-allocator churn: StackAllocator marker-heavy churn over 5000 it
             alloc.reset();
             continue;
         }
-        REQUIRE(reinterpret_cast<uintptr_t>(a) % alignment1 == 0);
+        if (reinterpret_cast<uintptr_t>(a) % alignment1 != 0) {
+            badAlign = true;
+        }
 
         const auto innerMarker = alloc.getMarker();
-        REQUIRE(innerMarker > baseMarker);
+        if (!(innerMarker > baseMarker)) {
+            badInnerMarker = true;
+        }
 
         // Allocate two more, roll back to innerMarker.
         void* b = alloc.allocate(sizeDist(rng), kAlignments[alignIdxDist(rng)]);
@@ -210,24 +248,39 @@ TEST_CASE("Cross-allocator churn: StackAllocator marker-heavy churn over 5000 it
         // with the same size/alignment must produce the SAME address.
         // This is the bump-allocator determinism invariant.
         alloc.rollbackToMarker(baseMarker);
-        REQUIRE(alloc.getCurrentOffset() == baseMarker);
+        if (alloc.getCurrentOffset() != baseMarker) {
+            badBaseRollback = true;
+        }
 
         void* aRedo = alloc.allocate(size1, alignment1);
-        REQUIRE(aRedo == a);
+        if (aRedo != a) {
+            badRedoAddress = true;
+        }
 
         // We also exercise the inner-marker rollback path: the cursor must
         // land exactly at innerMarker (already verified above when we set
         // it, and the bump cursor is now back at the same position because
         // we redid the allocation).
-        REQUIRE(alloc.getMarker() == innerMarker);
+        if (alloc.getMarker() != innerMarker) {
+            badInnerMarkerRestore = true;
+        }
 
         // Periodically drain everything via baseMarker rollback so the
         // 5000-iteration loop doesn't saturate the arena permanently.
         if (i % 13 == 0) {
             alloc.rollbackToMarker(baseMarker);
-            REQUIRE(alloc.getCurrentOffset() == baseMarker);
+            if (alloc.getCurrentOffset() != baseMarker) {
+                badPeriodicRollback = true;
+            }
         }
     }
+
+    REQUIRE_FALSE(badAlign);
+    REQUIRE_FALSE(badInnerMarker);
+    REQUIRE_FALSE(badBaseRollback);
+    REQUIRE_FALSE(badRedoAddress);
+    REQUIRE_FALSE(badInnerMarkerRestore);
+    REQUIRE_FALSE(badPeriodicRollback);
 }
 
 TEST_CASE("Cross-allocator churn: no leak — pool bookkeeping returns to zero after full drain", "[memory][stress][pool][leak]") {
@@ -242,7 +295,7 @@ TEST_CASE("Cross-allocator churn: no leak — pool bookkeeping returns to zero a
     }
 
     // Drain in scrambled order to exercise an arbitrary freelist path.
-    std::mt19937 rng(0xDEADu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xDEAD")));
     std::shuffle(held.begin(), held.end(), rng);
     for (void* p : held) pool.deallocate(p);
 
@@ -263,10 +316,17 @@ TEST_CASE("Cross-allocator churn: linear allocator never hands out a pointer out
     const uintptr_t base = reinterpret_cast<uintptr_t>(basePtr);
     const uintptr_t end = base + kArenaSize;
 
-    std::mt19937 rng(0xBEEFu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xBEEF")));
     std::uniform_int_distribution<size_t> sizeDist(1, 256);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kAlignments.size() - 1);
 
+    // The success/reset branch ratio over the fixed 10 000 iterations is base-
+    // address dependent (alignment padding varies with the run's heap layout),
+    // so we accumulate any boundary/alignment breach and assert once afterwards
+    // to keep the assertion count stable run-to-run.
+    bool belowBase = false;
+    bool aboveEnd = false;
+    bool misaligned = false;
     for (int i = 0; i < 10000; ++i) {
         const size_t alignment = kAlignments[alignIdxDist(rng)];
         const size_t size = sizeDist(rng);
@@ -276,10 +336,13 @@ TEST_CASE("Cross-allocator churn: linear allocator never hands out a pointer out
             continue;
         }
         const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
-        REQUIRE(addr >= base);
-        REQUIRE(addr + size <= end);
-        REQUIRE(addr % alignment == 0);
+        if (addr < base) belowBase = true;
+        if (addr + size > end) aboveEnd = true;
+        if (addr % alignment != 0) misaligned = true;
     }
+    REQUIRE_FALSE(belowBase);
+    REQUIRE_FALSE(aboveEnd);
+    REQUIRE_FALSE(misaligned);
 }
 
 TEST_CASE("Cross-allocator churn: stack allocator never hands out a pointer outside its arena", "[memory][stress][stack][safety]") {
@@ -291,10 +354,16 @@ TEST_CASE("Cross-allocator churn: stack allocator never hands out a pointer outs
     const uintptr_t base = reinterpret_cast<uintptr_t>(basePtr);
     const uintptr_t end = base + kArenaSize;
 
-    std::mt19937 rng(0xC0FFEEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xC0FFEE")));
     std::uniform_int_distribution<size_t> sizeDist(1, 256);
     std::uniform_int_distribution<size_t> alignIdxDist(0, kAlignments.size() - 1);
 
+    // As in the linear-arena safety test above, how often allocate() succeeds
+    // over the fixed iteration budget depends on base-address-driven alignment
+    // padding, so breaches are accumulated and asserted once for a stable count.
+    bool belowBase = false;
+    bool aboveEnd = false;
+    bool misaligned = false;
     for (int i = 0; i < 10000; ++i) {
         const auto marker = alloc.getMarker();
         const size_t alignment = kAlignments[alignIdxDist(rng)];
@@ -305,15 +374,18 @@ TEST_CASE("Cross-allocator churn: stack allocator never hands out a pointer outs
             continue;
         }
         const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
-        REQUIRE(addr >= base);
-        REQUIRE(addr + size <= end);
-        REQUIRE(addr % alignment == 0);
+        if (addr < base) belowBase = true;
+        if (addr + size > end) aboveEnd = true;
+        if (addr % alignment != 0) misaligned = true;
 
         // Periodically rollback so the arena doesn't permanently fill.
         if (i % 7 == 0) {
             alloc.rollbackToMarker(marker);
         }
     }
+    REQUIRE_FALSE(belowBase);
+    REQUIRE_FALSE(aboveEnd);
+    REQUIRE_FALSE(misaligned);
 }
 
 TEST_CASE("Cross-allocator churn: pool blocks form a non-overlapping coverage of the arena", "[memory][stress][pool][coverage]") {
@@ -334,7 +406,7 @@ TEST_CASE("Cross-allocator churn: pool blocks form a non-overlapping coverage of
 
     // Scrambled drain.
     std::vector<void*> all(first.begin(), first.end());
-    std::mt19937 rng(0xCAFE1Du);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xCAFE1D")));
     std::shuffle(all.begin(), all.end(), rng);
     for (void* p : all) pool.deallocate(p);
 
@@ -374,7 +446,7 @@ TEST_CASE("Cross-allocator churn: pool churn under deterministic seed is reprodu
     // sequences would diverge.
     auto runOnce = []() {
         PoolAllocator pool(64, 64);
-        std::mt19937 rng(0xFACEu);
+        std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0xFACE")));
         std::uniform_int_distribution<int> coin(0, 1);
         std::vector<void*> held;
         std::vector<void*> trace;
@@ -419,7 +491,7 @@ TEST_CASE("Cross-allocator churn: stack rollback never moves cursor past arena e
     constexpr size_t kArenaSize = 8192;
     StackAllocator alloc(kArenaSize);
 
-    std::mt19937 rng(0x12345u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_alloc_stress_churn:0x12345")));
     std::uniform_int_distribution<size_t> sizeDist(1, 512);
 
     std::vector<StackAllocator::Marker> stackOfMarkers;

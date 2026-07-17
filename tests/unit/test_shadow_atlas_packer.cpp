@@ -41,6 +41,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/renderer/lighting/ShadowAtlasPacker.hpp"
 
 #include <algorithm>
@@ -299,7 +300,7 @@ TEST_CASE("GuillotinePacker stays dense after many alloc/free cycles",
     // This test asserts the atlas is still usable (and still dense)
     // after a realistic add/remove churn.
     GuillotinePacker packer(4096, 4096);
-    std::mt19937 rng(0xC0FFEEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_shadow_atlas_packer:0xC0FFEE")));
     std::uniform_int_distribution<int> sizeDist(0, 3);
     const uint32_t sizes[] = {256, 512, 1024, 2048};
 

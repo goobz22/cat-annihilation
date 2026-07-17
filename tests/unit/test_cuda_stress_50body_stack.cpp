@@ -22,6 +22,7 @@
 // iterations"). That test runs one frame; this one runs many.
 // ---------------------------------------------------------------------------
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/cuda/physics/SequentialImpulse.hpp"
 
 #include <cmath>
@@ -434,7 +435,7 @@ TEST_CASE("Stress: 50-body stack absorbs perturbation via friction",
     BuildStack(N, bodies, contacts);
 
     // Random horizontal kicks.
-    std::mt19937_64 rng(0xb1abULL);
+    std::mt19937_64 rng(CatTest::DeterministicSeed("test_cuda_stress_50body_stack:0xb1ab"));
     std::uniform_real_distribution<float> kickDist(-0.2f, 0.2f);
     for (int i = 1; i <= N; ++i) {
         bodies[static_cast<std::size_t>(i)].linearVelocity =

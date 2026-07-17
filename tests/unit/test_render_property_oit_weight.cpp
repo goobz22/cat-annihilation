@@ -58,6 +58,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/renderer/OITWeight.hpp"
 
 #include <algorithm>
@@ -78,7 +79,6 @@ namespace {
 // stumble into "different runs see different bugs".
 // Seed routed through CatTest::DeterministicSeed (reproducible default,
 // CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
-#include "test_seed.hpp"
 const uint32_t kPropertySeed =
     static_cast<uint32_t>(CatTest::DeterministicSeed("render property oit_weight"));
 

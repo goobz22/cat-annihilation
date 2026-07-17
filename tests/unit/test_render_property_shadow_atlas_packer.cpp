@@ -49,6 +49,7 @@
  */
 
 #include "catch.hpp"
+#include "test_seed.hpp"
 #include "engine/renderer/lighting/ShadowAtlasPacker.hpp"
 
 #include <algorithm>
@@ -64,7 +65,6 @@ namespace {
 
 // Seed routed through CatTest::DeterministicSeed (reproducible default,
 // CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
-#include "test_seed.hpp"
 const uint32_t kPropertySeed =
     static_cast<uint32_t>(CatTest::DeterministicSeed("render property shadow_atlas_packer"));
 constexpr uint32_t kAtlasSize = 8192; // 8K — large enough for shadow workloads
