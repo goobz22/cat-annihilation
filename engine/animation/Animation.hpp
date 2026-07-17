@@ -88,7 +88,16 @@ public:
 
     // Sample animation at a specific time
     // Returns an array of bone transforms (size must match skeleton bone count)
-    void sample(float time, std::vector<Transform>& outTransforms) const;
+    //
+    // `loop` controls end-of-clip behavior: true wraps the cursor (fmod) so a
+    // looping clip restarts seamlessly; false CLAMPS to [0, duration] so a
+    // one-shot clip HOLDS its final keyframe once it reaches the end. Defaults
+    // to true for blend-tree callers (locomotion is always looping); the
+    // Animator forwards its per-state `loop` flag so a finished attack / death /
+    // seated pose holds its last frame instead of snapping back to frame 0
+    // (fmod(duration,duration)==0 would otherwise pick keyframe[0]).
+    void sample(float time, std::vector<Transform>& outTransforms,
+                bool loop = true) const;
 
     // Sample a single channel
     Transform sampleChannel(const AnimationChannel& channel, float time) const;

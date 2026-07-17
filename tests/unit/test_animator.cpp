@@ -228,7 +228,7 @@ TEST_CASE("Animator: a non-looping clip HOLDS its last frame at the end, not fra
                                           vec3(10.0f, 0.0f, 0.0f));
     Animator animator;
     animator.setSkeleton(skeleton);
-    animator.addState(AnimationState("attack", clip, 0.0f, /*loop=*/false));
+    animator.addState(AnimationState("attack", clip, /*speed=*/1.0f, /*loop=*/false));
 
     animator.play("attack");
     // Step well past the 0.4s duration (also clears any transition blend).
@@ -247,7 +247,7 @@ TEST_CASE("Animator: a non-looping clip HOLDS its last frame at the end, not fra
     // a fix that simply disables looping everywhere.
     Animator looping;
     looping.setSkeleton(makeSingleBoneSkeleton(vec3(0.0f, 0.0f, 0.0f)));
-    looping.addState(AnimationState("walk", clip, 0.0f, /*loop=*/true));
+    looping.addState(AnimationState("walk", clip, /*speed=*/1.0f, /*loop=*/true));
     looping.play("walk");
     for (int i = 0; i < 10; ++i) {
         looping.update(0.1f);  // 1.0s total; fmod(1.0,0.4)=0.2 -> x≈5

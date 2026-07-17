@@ -383,7 +383,7 @@ void Animator::updateTransition(float deltaTime) {
         targetPose.assign(m_skeleton->getBoneCount(), Transform::identity());
     }
 
-    targetState->animation->sample(m_currentTime, targetPose);
+    targetState->animation->sample(m_currentTime, targetPose, targetState->loop);
 
     // Blend between poses
     AnimationBlend::linearBlend(previousPose, targetPose, blendFactor, m_currentPose);
@@ -456,8 +456,11 @@ void Animator::sampleCurrentAnimation() {
         m_currentPose = bindPose;
     }
 
-    // Sample the animation
-    currentState->animation->sample(m_currentTime, m_currentPose);
+    // Sample the animation. Forward the state's loop flag so a finished
+    // one-shot clip holds its last frame (updateAnimation clamps m_currentTime
+    // to duration for non-looping states; without this the sample would still
+    // wrap that to frame 0).
+    currentState->animation->sample(m_currentTime, m_currentPose, currentState->loop);
 }
 
 void Animator::initializePose() {
