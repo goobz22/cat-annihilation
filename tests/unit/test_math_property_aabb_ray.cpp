@@ -68,7 +68,9 @@
 #include "engine/math/Vector.hpp"
 #include "engine/math/Math.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <random>
 
 using namespace Engine;
@@ -608,7 +610,19 @@ TEST_CASE("Ray vs plane: hit point lies on the plane (n.p + d == 0)",
             hits++;
             vec3 hitPoint = r.at(t);
             float signedDist = normal.dot(hitPoint) + d;
-            REQUIRE(signedDist == Approx(0.0f).margin(1e-3f));
+            // Margin must scale with |t|: t = -(n·o + d)/(n·dir), and a
+            // near-parallel (grazing) ray drives the denominator toward 0,
+            // so both t and the float error in origin + dir·t grow without
+            // bound — the absolute 1e-3 margin was numerically unjustified
+            // and failed legitimately at CAT_TEST_SEED=12345 (signedDist
+            // -1.82e-3 on a grazing hit with large t). 64·eps·|t| tracks
+            // the true rounding envelope of the fused chain (dot + mul-add
+            // accumulation) with headroom; the 1e-3 floor keeps the bound
+            // tight for the common well-conditioned hits.
+            const float margin =
+                std::max(1e-3f, 64.0f * std::numeric_limits<float>::epsilon() *
+                                    std::abs(t));
+            REQUIRE(signedDist == Approx(0.0f).margin(margin));
         }
     }
     REQUIRE(hits > 0);

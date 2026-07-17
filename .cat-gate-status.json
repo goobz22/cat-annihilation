@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-17T17:46:29.842Z",
+  "ts": "2026-07-17T18:08:49.000Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
@@ -7,31 +7,31 @@
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 45,
+      "durationMs": 37,
       "summary": "passed (0.0s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 37,
+      "durationMs": 33,
       "summary": "passed (0.0s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 32236,
+      "durationMs": 32203,
       "summary": "passed (32.2s)"
     },
     {
       "name": "menu-flow",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 30557,
-      "summary": "passed (30.6s)"
+      "durationMs": 30793,
+      "summary": "passed (30.8s)"
     }
   ],
-  "gitSha": "1ec0550",
+  "gitSha": "44c4d28",
   "invocation": "--json"
 }
