@@ -501,4 +501,122 @@ inline constexpr float kShadowOrthoFar        = 250.0f; // light-space far plane
 // of this header uses. Forest::findTreesInRadius reads this flag directly.
 inline constexpr bool kForestPlayerCollision = false;
 
+// ---------------------------------------------------------------------
+// In-game HUD — reference: the survival HUD React components in
+// src/components/ui/ (CatStats, InventoryHotbar, WeaponSkills, WaveDisplay)
+// and their CSS in src/styles/components/{ui,inventory}.css, plus the
+// per-enemy floating health bar authored in
+// src/components/game/LocalEnemySystem.tsx.
+//
+// WHY THIS BLOCK EXISTS: a constants-only parity sweep proved the gameplay
+// NUMBERS matched but never compared the RENDERED HUD, and they diverged
+// hard (owner: "the game is not ready in comparison to the web version").
+// The web HUD is a dark rounded status pill + a 9-slot hotbar strip at
+// bottom-center, a per-weapon skill card top-right, a big "ROUND N" banner
+// top-center, and floating red health bars over every dog — with NO score
+// readout. The native ImGui HUD (game/ui/HUD.cpp) reproduces that layout;
+// every colour and size below is the exact web literal it draws, cited to
+// the web file:line, so the HUD can never silently drift from the reference
+// without this header and its pinning test changing too.
+//
+// Colours are stored as ColorSwatch sRGB byte triples (the same 0-255 web
+// hex bytes the CSS uses); HUD.cpp feeds them to IM_COL32 directly. ImGui
+// draws in the swapchain's own colour space (the HUD is composited AFTER
+// the scene's linear->sRGB encode), so — unlike the fur/eye/sky tints that
+// feed the LINEAR-space shader path — these are NOT srgb->linear decoded.
+// Alpha (where a web rgba() uses one) is a separate 0-255 constant.
+
+// Status pill — CatStats.tsx + ui.css `.cat-stats-container`. One dark
+// rounded bar, bottom-centre, holding: cat "Lv.N" (orange), the XP bar +
+// "cur/next" text, a heart + "HP/max" (red), and the "Next Lv.N: <ability>"
+// hint. Reconstructing the pill's absolute XP text ("0/104" on a fresh run)
+// only needs the cat level + the 0..1 progress the HUD already receives:
+// nextTotal = catXpForLevel(level+1), curTotal = catXpForLevel(level), and
+// absoluteXp = curTotal + progress*(nextTotal-curTotal) — so no extra
+// plumbing is required for the pill.
+inline constexpr float kHudPillHeight        = 64.0f;  // ui.css:13 height
+inline constexpr float kHudPillCornerRadius  = 12.0f;  // ui.css:11 border-radius
+inline constexpr float kHudPillBottomMargin  = 96.0f;  // ui.css:3 bottom:6rem
+inline constexpr float kHudXpBarHeight       = 6.0f;   // ui.css:49 .cat-xp-bar height
+inline constexpr int   kHudPillBgAlpha       = 217;    // ui.css:9 rgba(0,0,0,0.85)
+inline constexpr ColorSwatch kHudPillBg          {"pill bg",         0x00, 0x00, 0x00}; // ui.css:9
+inline constexpr ColorSwatch kHudCatLevelColor   {"cat-level orange",0xFF, 0x6B, 0x35}; // ui.css:32 #ff6b35
+inline constexpr ColorSwatch kHudXpTrackColor    {"xp track",        0x37, 0x41, 0x51}; // ui.css:50 #374151
+inline constexpr ColorSwatch kHudXpFillStart     {"xp fill start",   0xFB, 0xBF, 0x24}; // ui.css:58 #fbbf24
+inline constexpr ColorSwatch kHudXpFillEnd       {"xp fill end",     0xF5, 0x9E, 0x0B}; // ui.css:58 #f59e0b
+inline constexpr ColorSwatch kHudXpTextColor     {"xp text",         0xD1, 0xD5, 0xDB}; // ui.css:65 #d1d5db
+inline constexpr ColorSwatch kHudHealthColor     {"health red",      0xEF, 0x44, 0x44}; // ui.css:83 #ef4444
+inline constexpr ColorSwatch kHudNextAbilityColor{"next-ability grey",0x9C,0xA3, 0xAF}; // ui.css:138 #9ca3af
+
+// Hotbar — InventoryHotbar.tsx + inventory.css `.hotbar-slot`. 9 dark
+// squares, bottom-centre below the pill; the active slot gets a coloured
+// ring + a scale-up, and the active item's name prints to its right. Slots
+// 1-4 seed water-spell / sword / bow / shield, 5-9 empty (gameStore.ts
+// initialInventory, :288-292) — a fixed layout the HUD hardcodes so it needs
+// only the active-slot index it already receives. Item icons are hand-drawn
+// ImGui primitives (the font atlas has no emoji glyphs); each approximation
+// is documented at its draw site in HUD.cpp.
+inline constexpr float kHudHotbarSlotSize     = 64.0f;  // inventory.css:13 width/height
+inline constexpr float kHudHotbarSlotGap      = 8.0f;   // inventory.css:8 gap
+inline constexpr float kHudHotbarBottomMargin = 16.0f;  // inventory.css:4 bottom:16px
+inline constexpr float kHudHotbarSlotRadius   = 8.0f;   // inventory.css:14 border-radius
+inline constexpr ColorSwatch kHudHotbarSlotBg        {"slot bg",        0x11, 0x18, 0x27}; // inventory.css:23 #111827
+inline constexpr ColorSwatch kHudHotbarActiveSlotBg  {"active slot bg", 0x1F, 0x29, 0x37}; // inventory.css:28 #1f2937
+inline constexpr ColorSwatch kHudHotbarActiveBorder  {"active border",  0xFB, 0xBF, 0x24}; // inventory.css:27 #fbbf24
+inline constexpr ColorSwatch kHudHotbarInactiveBorder{"inactive border",0x4B, 0x55, 0x63}; // inventory.css:39 #4b5563
+inline constexpr ColorSwatch kHudSlotNumberColor     {"empty slot num", 0x4B, 0x55, 0x63}; // inventory.css:57 #4b5563
+
+// Hotbar item colours — gameStore.ts initialInventory (:289-292). Used both
+// to tint the drawn icon and (per the web active-slot theming) the active
+// ring: water spell #00ffff, sword/shield silver #c0c0c0, bow #8b4513.
+inline constexpr ColorSwatch kHudItemWater {"water spell", 0x00, 0xFF, 0xFF}; // gameStore.ts:289 #00ffff
+inline constexpr ColorSwatch kHudItemSword {"sword",       0xC0, 0xC0, 0xC0}; // gameStore.ts:290 #c0c0c0
+inline constexpr ColorSwatch kHudItemBow   {"bow",         0x8B, 0x45, 0x13}; // gameStore.ts:291 #8b4513
+inline constexpr ColorSwatch kHudItemShield{"shield",      0xC0, 0xC0, 0xC0}; // gameStore.ts:292 #c0c0c0
+
+// Weapon-skill card — WeaponSkills.tsx + ui.css `.weapon-skills-container`.
+// Top-right dark card showing the ACTIVE weapon's skill: "<Weapon> Level N"
+// title (in the weapon's theme colour), a progress bar, "cur / need XP", and
+// "X XP to level N+1". The title colours are the CSS per-weapon `--skill-color`
+// values (ui.css:192-226); a spell maps to its element's Magic skill, so the
+// water spell reads "Water Magic" in blue #3b82f6 (NOT the #00ffff item tint).
+inline constexpr float kHudWeaponPanelMinWidth = 240.0f; // ui.css:181 min-width
+inline constexpr float kHudWeaponPanelRadius   = 12.0f;  // ui.css:176 border-radius
+inline constexpr ColorSwatch kHudWeaponWaterColor{"water magic blue", 0x3B, 0x82, 0xF6}; // ui.css:193 #3b82f6
+inline constexpr ColorSwatch kHudWeaponAirColor  {"air magic purple", 0x8B, 0x5C, 0xF6}; // ui.css:211 #8b5cf6
+inline constexpr ColorSwatch kHudWeaponEarthColor{"earth magic green",0x10, 0xB9, 0x81}; // ui.css:205 #10b981
+inline constexpr ColorSwatch kHudWeaponFireColor {"fire magic red",   0xEF, 0x44, 0x44}; // ui.css:199 #ef4444
+inline constexpr ColorSwatch kHudWeaponSwordColor{"sword amber",      0xF5, 0x9E, 0x0B}; // ui.css:217 #f59e0b
+inline constexpr ColorSwatch kHudWeaponBowColor  {"bow teal",         0x06, 0xD6, 0xA0}; // ui.css:223 #06d6a0
+
+// Wave banner — WaveDisplay.tsx `.wave-display-counter` (a PERMANENT
+// top-centre element, not a transient popup: it is fixed at top:16px with
+// no fade, and web_05_late confirms "ROUND 1" is still shown behind the
+// death overlay late in a run). Big white "ROUND N" over a "SURVIVE THE
+// HORDE" subtitle. The native pre-parity HUD instead showed a yellow
+// "WAVE N" plus a permanent "Dogs remaining: X/Y" line — the dogs counter
+// has no web counterpart during play, so under parity it is REMOVED (kept
+// on the !kEnabled native-flavor branch).
+inline constexpr float kHudWaveBannerTopMargin = 16.0f; // ui.css:328 top:16px
+inline constexpr ColorSwatch kHudWaveTitleColor   {"round title white", 0xFF, 0xFF, 0xFF}; // ui.css:346 #fff
+inline constexpr ColorSwatch kHudWaveSubtitleColor{"survive subtitle",  0xD1, 0xD5, 0xDB}; // ui.css:353 #d1d5db
+
+// Enemy overhead health bar — LocalEnemySystem.tsx:483-494. A billboarded
+// bar 1.5 world-units above each living dog: a #333333 background box
+// (1.0 x 0.08 world units) with a left-anchored fill (width = healthPercent,
+// height 0.06) coloured by health tier — >0.6 #ff4444, >0.3 #ff8844, else
+// #cc2222. Shown for EVERY living enemy, not only when damaged. The native
+// HUD projects each dog's world position with the live camera view-proj and
+// draws the bar with ImGui's foreground draw list.
+inline constexpr float kHudEnemyBarWorldHeight   = 1.5f;  // tsx:483 group position y
+inline constexpr float kHudEnemyBarWorldWidth    = 1.0f;  // tsx:485 boxGeometry width
+inline constexpr float kHudEnemyBarWorldBgHeight = 0.08f; // tsx:485 boxGeometry height
+inline constexpr float kHudEnemyBarWorldFgHeight = 0.06f; // tsx:489 fill height
+inline constexpr float kHudEnemyBarHighThreshold = 0.6f;  // tsx:491
+inline constexpr float kHudEnemyBarMidThreshold  = 0.3f;  // tsx:492
+inline constexpr ColorSwatch kHudEnemyBarBg  {"enemy bar bg",  0x33, 0x33, 0x33}; // tsx:486 #333333
+inline constexpr ColorSwatch kHudEnemyBarHigh{"enemy bar high",0xFF, 0x44, 0x44}; // tsx:491 #ff4444
+inline constexpr ColorSwatch kHudEnemyBarMid {"enemy bar mid", 0xFF, 0x88, 0x44}; // tsx:492 #ff8844
+inline constexpr ColorSwatch kHudEnemyBarLow {"enemy bar low", 0xCC, 0x22, 0x22}; // tsx:492 #cc2222
+
 } // namespace CatGame::WebParity
