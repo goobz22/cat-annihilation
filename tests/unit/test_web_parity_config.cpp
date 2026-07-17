@@ -37,6 +37,15 @@ TEST_CASE("enemies per wave matches floor((3 + wave*2) * 1.5)", "[web-parity]") 
     for (int wave = 1; wave < 50; ++wave) {
         CHECK(WebParity::enemiesForWave(wave + 1) > WebParity::enemiesForWave(wave));
     }
+
+    // Overflow saturation (2026-07-17 audit): endless waves + an unbounded
+    // --starting-wave mean a fuzzed huge wave once overflowed `3 + wave*2`
+    // (signed-int UB). The int64+clamp form must saturate to INT_MAX, never
+    // wrap negative. A billion-plus wave is far past the 32-bit overflow
+    // point (~1.07e9) yet returns a sane clamped positive count.
+    CHECK(WebParity::enemiesForWave(2'000'000'000) == INT_MAX);
+    CHECK(WebParity::enemiesForWave(INT_MAX) == INT_MAX);
+    CHECK(WebParity::enemiesForWave(INT_MAX) > 0);  // never wraps negative
 }
 
 TEST_CASE("enemy health matches 100 + (wave-1)*20", "[web-parity]") {

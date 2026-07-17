@@ -22,7 +22,9 @@
 // `kEnabled == false` branches so flipping one flag restores the
 // native-flavor balance for experimentation without archaeology.
 
+#include <climits>
 #include <cmath>
+#include <cstdint>
 
 namespace CatGame::WebParity {
 
@@ -39,8 +41,22 @@ inline constexpr bool kEnabled = true;
 
 // LocalEnemySystem.tsx:529-531 — floor((3 + wave*2) * 1.5).
 // Wave 1..5 => 7, 10, 13, 16, 19. Strictly increasing; no sine overlay.
+//
+// Computed in int64 then clamped to INT_MAX: the endless-wave mode has no
+// upper bound and setInitialWave accepts any --starting-wave, so `3 +
+// wave*2` overflowed a 32-bit int around wave ~1.07e9 (signed overflow is
+// UB). No real run reaches that, but a fuzzed/typo'd CLI value shouldn't be
+// UB — saturate instead (2026-07-17 correctness audit). Still constexpr.
 inline constexpr int enemiesForWave(int wave) {
-    return static_cast<int>((3 + wave * 2) * 3 / 2);
+    const std::int64_t count =
+        (static_cast<std::int64_t>(3) + static_cast<std::int64_t>(wave) * 2) * 3 / 2;
+    if (count > static_cast<std::int64_t>(INT_MAX)) {
+        return INT_MAX;
+    }
+    if (count < 0) {
+        return 0;
+    }
+    return static_cast<int>(count);
 }
 
 // LocalEnemySystem.tsx:552-554 — every enemy: 100 + (wave-1)*20 HP.

@@ -844,6 +844,28 @@ static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
     return Engine::Input::Key::Enter;
 }
 
+// Parse a numeric field of an --input-script command without throwing. The
+// raw std::stof calls this replaces aborted the whole PROCESS on a
+// malformed token (e.g. "wait:abc" or a truncated "click:0.5," with an
+// empty second coord) — an uncaught std::invalid_argument. A test harness
+// fed a typo'd script should skip the bad command and keep running, not
+// die with an unhandled-exception crash (2026-07-17 correctness audit).
+// Returns false (and leaves `out` untouched) when the field is not a clean
+// whole-token number.
+static bool parseInputScriptFloat(const std::string& field, float& out) {
+    if (field.empty()) {
+        return false;
+    }
+    const char* begin = field.c_str();
+    char* parseEnd = nullptr;
+    const float value = std::strtof(begin, &parseEnd);
+    if (parseEnd != begin + field.size()) {
+        return false;  // trailing garbage or nothing consumed
+    }
+    out = value;
+    return true;
+}
+
 static InputScript parseInputScript(const std::string& text) {
     InputScript script;
     size_t cursor = 0;
@@ -860,13 +882,22 @@ static InputScript parseInputScript(const std::string& text) {
             command.type = InputScript::Command::Type::Quit;
         } else if (token.rfind("wait:", 0) == 0) {
             command.type = InputScript::Command::Type::Wait;
-            command.a = std::stof(token.substr(5));
+            if (!parseInputScriptFloat(token.substr(5), command.a)) {
+                Engine::Logger::error("[input-script] bad wait duration in '" +
+                                      token + "' — skipped");
+                continue;
+            }
         } else if (token.rfind("click:", 0) == 0) {
             command.type = InputScript::Command::Type::Click;
             const std::string coords = token.substr(6);
             const size_t comma = coords.find(',');
-            command.a = std::stof(coords.substr(0, comma));
-            command.b = std::stof(coords.substr(comma + 1));
+            if (comma == std::string::npos ||
+                !parseInputScriptFloat(coords.substr(0, comma), command.a) ||
+                !parseInputScriptFloat(coords.substr(comma + 1), command.b)) {
+                Engine::Logger::error("[input-script] bad click coords in '" +
+                                      token + "' — skipped");
+                continue;
+            }
         } else if (token.rfind("key:", 0) == 0) {
             command.type = InputScript::Command::Type::Key;
             command.key = inputScriptKeyFromName(token.substr(4));
@@ -875,8 +906,13 @@ static InputScript parseInputScript(const std::string& text) {
             const std::string args = token.substr(5);
             const size_t comma = args.find(',');
             command.key = inputScriptKeyFromName(args.substr(0, comma));
-            command.a = comma == std::string::npos ? 1.0F
-                                                   : std::stof(args.substr(comma + 1));
+            command.a = 1.0F;
+            if (comma != std::string::npos &&
+                !parseInputScriptFloat(args.substr(comma + 1), command.a)) {
+                Engine::Logger::error("[input-script] bad hold duration in '" +
+                                      token + "' — skipped");
+                continue;
+            }
         } else if (token.rfind("screenshot:", 0) == 0) {
             command.type = InputScript::Command::Type::Screenshot;
             command.text = token.substr(11);
