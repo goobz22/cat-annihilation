@@ -54,7 +54,11 @@ using namespace CatEngine::RHI::ShaderReloadRegistryDetail;
 
 namespace {
 
-constexpr uint32_t kPropertySeed = 0x5043'5043u;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property shader_hot_reload"));
 
 std::string RandomAlphaNumPath(std::mt19937& rng, size_t minLen, size_t maxLen) {
     static const std::string kAlphabet =
