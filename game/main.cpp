@@ -84,6 +84,7 @@ struct CommandLineArgs {
     // arcade mode (startNewGame(false)) instead of sitting on MainMenu. Lets
     // automated runs exercise the Playing-state code path on the first frame.
     bool autoplay = false;
+    bool hiddenWindow = false;  // --hidden: never show or focus the window
 
     // --max-frames <N>: if > 0, break the main loop cleanly after rendering
     // this many frames. Used by nightly smoke runs so the binary exits with
@@ -351,6 +352,12 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.configPath = argv[++i];
             }
+        } else if (arg == "--hidden") {
+            // "Virtual environment" launch: the window is never shown and
+            // never takes focus — automated runs (gates, agent playtests)
+            // stop popping onto the desktop of a machine someone is using.
+            // Frame dumps and the swapchain behave identically.
+            args.hiddenWindow = true;
         } else if (arg == "--autoplay" || arg == "-a") {
             args.autoplay = true;
         } else if (arg == "--max-frames") {
@@ -681,7 +688,8 @@ int main(int argc, char* argv[]) {
     // task. User directive: "cat annihiliation is tkaing control of
     // my mouse when you launch it run it in background for your
     // tests so it doesnt do it".
-    windowConfig.noFocusSteal = cmdArgs.autoplay;
+    windowConfig.noFocusSteal = cmdArgs.autoplay || cmdArgs.hiddenWindow;
+    windowConfig.hidden = cmdArgs.hiddenWindow;
 
     Engine::Window window(windowConfig);
     Engine::Logger::info("Window created: " +
