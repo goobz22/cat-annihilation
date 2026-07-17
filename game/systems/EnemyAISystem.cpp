@@ -217,25 +217,40 @@ void EnemyAISystem::updateAttackingState(CatEngine::Entity entity, EnemyComponen
                     //       picks the right (attacker, target) pair for whatever
                     //       game-layer subscriber wants to gate on it.
                     targetHealth->lastDamageType = DamageType::Physical;
-                    targetHealth->damage(enemy.attackDamage);
+                    const bool hitLanded = targetHealth->damage(enemy.attackDamage);
 
-                    // Overwrite the i-frame HealthComponent::damage() just wrote
-                    // (it stores invincibilityDuration — 0.5 s by default — into
-                    // invincibilityTimer). Under parity this becomes 0 s
+                    // Only RE-STAMP the melee i-frame when the hit actually landed.
+                    // damage() returns false when it refused the blow because the
+                    // player is ALREADY invincible from a DELIBERATE source — most
+                    // importantly the 1.0 s grace HealthSystem grants right after a
+                    // Nine-Lives revive (HealthSystem.cpp:372). The pre-fix gate
+                    // (!isInvincible(), now dropped under parity) used to shield
+                    // that grace by skipping this whole block; guarding the stamp on
+                    // `hitLanded` keeps the grace intact WITHOUT re-introducing the
+                    // shared swarm cap — a refused blow leaves the existing timer
+                    // untouched instead of zeroing (parity) / shortening (native) it.
+                    //
+                    // When the hit DID land, overwrite the i-frame damage() just
+                    // wrote (it stores invincibilityDuration — 0.5 s by default —
+                    // into invincibilityTimer). Under parity that becomes 0 s
                     // (kEnemyMeleeIFrameSeconds), so the NEXT dog in the same swarm
                     // is not blocked by damage()'s OWN internal i-frame check and
                     // lands its own 15 this frame — reproducing the web's uncapped
-                    // melee. With parity off it stays the tighter 0.2 s native
-                    // window (dogs are meant to chain-attack faster than the
-                    // player's own i-frame budget). The native value is a local
-                    // constant on purpose: it is native-flavor balance, NOT a web
-                    // literal, so it does not belong in WebParityConfig.hpp.
-                    if constexpr (WebParity::kEnabled) {
-                        targetHealth->invincibilityTimer =
-                            WebParity::kEnemyMeleeIFrameSeconds;
-                    } else {
-                        constexpr float kNativeMeleeIFrameSeconds = 0.2f;
-                        targetHealth->invincibilityTimer = kNativeMeleeIFrameSeconds;
+                    // melee. (Leaving damage()'s default 0.5 s in place would cap a
+                    // swarm even HARDER than the old 0.2 s window, so the override is
+                    // load-bearing, not cosmetic.) With parity off it stays the
+                    // tighter 0.2 s native window (dogs are meant to chain-attack
+                    // faster than the player's own i-frame budget). The native value
+                    // is a local constant on purpose: it is native-flavor balance,
+                    // NOT a web literal, so it does not belong in WebParityConfig.hpp.
+                    if (hitLanded) {
+                        if constexpr (WebParity::kEnabled) {
+                            targetHealth->invincibilityTimer =
+                                WebParity::kEnemyMeleeIFrameSeconds;
+                        } else {
+                            constexpr float kNativeMeleeIFrameSeconds = 0.2f;
+                            targetHealth->invincibilityTimer = kNativeMeleeIFrameSeconds;
+                        }
                     }
                 }
 
