@@ -71,3 +71,20 @@ regenerable). The inconsistency is harmless for the self-referential player rig;
 it would only matter if the player mesh had to face an external target, which it
 never does. No code change. If future work adds an external-facing player
 orientation (e.g. lock-on), reuse `lookRotation`, not `Quaternion(Y,yaw)`.
+
+## 2026-07-17 — Round 3 (5 un-audited subsystems: save-load, enemy-ai, physics-collision, projectiles-spells, animation-skinning)
+
+Workflow `cat-audit-round3` (5 Opus finders → per-candidate adversarial
+refutation, default REFUTED). 9 candidates surfaced; **5 CONFIRMED**, 4 refuted
+(unbounded-alloc save read [checksum-gated], two spell-effect claims [by-element
+hardcoding is intentional], AOE lead-aim whiff [autoplay-only]). physics-collision
+came back clean. Each confirmed bug is fixed at the root with a fail-first
+regression.
+
+| # | Sev | Bug | Fix | Commit |
+|---|-----|-----|-----|--------|
+| 1 | HIGH | Non-looping animation clips (attack/jump/sit/death/hit) snap to frame 0 at clip end instead of HOLDING the last frame: `Animation::sample` unconditionally calls `normalizeTime(time, /*loop=*/true)`, so `fmod(duration,duration)==0` → frame 0; the Animator clamps `m_currentTime=duration` + stops, but `sample()` wraps it to 0 and `update()` then freezes there. A dead or seated cat visibly pops back to standing. | _pending_ | _pending_ |
+| 2 | MED | Enemy attack-cooldown re-zeroed on every Chasing→Attacking transition (`transitionToState`), so with the parity hysteresis band (enter ≤1.2, leave >1.44) + zero enemy melee i-frames, kiting re-fires 15 dmg well inside the web's 1.0s floor. Web gates on `currentTime-lastAttackTime>=1000ms`, written only on an actual fire. | _pending_ | _pending_ |
+| 3 | MED | `decompressData` RLE loop reads 2 bytes/iter but tests `inPos < compressedSize` once → odd `compressedSize` reads 1 byte past the buffer, BEFORE the CRC32 gate, from attacker-controlled save data. | _pending_ | _pending_ |
+| 4 | MED | `BinaryReader::read` treats EOF as success (`if(!good() && !eof())` never throws on a short read); `read<T>()` returns an indeterminate value. Reachable via the unguarded `getSaveHeader/readHeader` path → garbage save-slot UI + UB. | _pending_ | _pending_ |
+| 5 | LOW | Native enemies have no separation/flocking, so dogs stack on the identical player-seek point; the web applies a boid separation force (radius 1.5, force 3.0) so its dogs spread into a ring. Visual-only divergence (PARITY_MATRIX OPEN P2); `BalanceConfig SEPARATION_RADIUS` exists but is unused. | _pending_ | _pending_ |
