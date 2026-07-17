@@ -67,9 +67,20 @@ namespace {
 // (assets/models/generated_v2/, built by scripts/retopo_rig.py): the Meshy
 // sculpts' silhouette and baked texture on clean ~20k-tri topology with
 // the hand-designed rig and authored idle/walk/run/attack gaits. The raw
-// Meshy rigged/ exports (120-450k tris, scan-style topology that tears
-// under deformation and blows the ~300k loader budget on dog_big) remain
-// on disk as the A/B fallback — flip this false to compare.
+// Meshy rigged/ exports (120-450k tris, scan-style topology with sparse
+// heat-weight coverage that once looked torn under deformation) remain on
+// disk as the A/B fallback — flip this false to compare.
+//
+// Fallback robustness (accurate as of the 2026-07-17 skin-parse fix): the
+// native loader has NO hard polycount ceiling — the ~300k limit people
+// cite is the MESHY AUTO-RIGGER's, not ours — so the 447k raw dog_big
+// LOADS fine here, just heavier (~28MB vs the generated 4.5MB). The
+// original "tears under deformation" artifact was actually the engine's
+// skins-never-parsed bug (JOINTS_0 slot indices stored as node indices +
+// unassigned inverse-bind matrices), fixed in ModelLoader::ExtractSkin —
+// so the raw rig would now render far better than when it was retopo'd
+// around. And any load failure at all degrades to a proxy cube
+// (attachMeshAndAnimator catches the throw), so there is no crash path.
 constexpr bool kUseGeneratedCharacters = true;
 
 const char* modelPathForType(EnemyType type) {

@@ -222,7 +222,7 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 > below re-verified against code AT HEAD; closed items marked ✅ with the
 > proof, genuine open items kept 🟡.
 
-- 🟡 dog_big MESHY FALLBACK remains 447k tris (over budget) — only matters if kUseGeneratedCharacters is flipped off; the shipped generated dog_big is 20k. STILL OPEN (fallback asset, unused).
+- 🔵 dog_big MESHY FALLBACK 447k tris — CLOSED as accepted (not a bug): the native loader has NO hard polycount ceiling (the ~300k limit is the Meshy auto-rigger's, not ours), so the 28MB raw dog_big LOADS fine on the unused kUseGeneratedCharacters=false path — heavier, not broken. Its old "tears under deformation" look was the skins-never-parsed engine bug (now fixed), and any load failure degrades to a proxy cube (no crash). Shipped path uses the 4.5MB/20k generated asset.
 - ✅ Magic KILL bonus (+15 per element) — CLOSED: `lastPlayerWeaponHit_` carries `"magic:<element>"` and onEnemyKilled credits the matching elemental skill +kWeaponXpPerKill (CatAnnihilation.cpp:3952-3971), mirroring the web's lastDamageSource {weapon, element} → awardXP('magic', 15, element). The "kill record doesn't carry the element" claim was stale.
 - ✅ Idle Y-bob — CLOSED: deleted (tombstone MeshSubmissionSystem.cpp:50; real idle clips play via GPU skinning). Line was a duplicate of the ✅ above.
 - ✅ ExtractNodes `matrix` transpose — CLOSED: ModelLoader.cpp:1281 reads `mat[column*4+row]` (column-major, correct) + a hermetic-GLB regression test with a deliberately asymmetric matrix pins it (commit 988a279). The "unverified, may be transposed" note is stale.
