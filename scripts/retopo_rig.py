@@ -544,7 +544,16 @@ def reset_pose(arm_obj):
         pose_bone.scale = (1.0, 1.0, 1.0)
 
 
-DEFORM_RATIO_LIMIT = 1.5
+# Escape threshold, calibrated on dog_regular (2026-07-16). The failure class
+# this gate hunts — verts left behind by zero/wrong-side weights — lands at
+# ratios >= 2.5. But linear-blend skinning GUARANTEES ratios up to ~1.6 at the
+# attack clip's strike apex even with perfect weights: the authored neck whip
+# composes ~84 degrees across neck_01+neck_02+head, and a blended throat vert
+# lands inside the rotation arc by the chord depth lever*(1-cos(spread/2)) —
+# measured 1.575 on a visually-intact neck (see the *_deform_worst.png render
+# that is emitted whenever this gate fails). 1.8 sits between the two
+# populations: physics passes, escapes still fail.
+DEFORM_RATIO_LIMIT = 1.8
 DEFORM_SAMPLES_PER_CLIP = 8
 CORE_CLIPS = ('idle', 'walk', 'run', 'attack')
 
