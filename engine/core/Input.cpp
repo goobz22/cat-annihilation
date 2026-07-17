@@ -85,6 +85,45 @@ void Input::update() {
     m_mousePrevY = m_mouseY;
     glfwGetCursorPos(m_window, &m_mouseX, &m_mouseY);
 
+    // ---- Synthetic-input overrides (headless test harness) --------------
+    // Everything above POLLS live GLFW state, so injected input must be
+    // applied AFTER the poll or it would be overwritten the same frame.
+    // Injection exists for the --input-script harness: automated runs on
+    // a machine someone is actively using must never synthesize REAL
+    // desktop input (cursor hijacking) or require a visible window — the
+    // script drives a hidden window's menu/gameplay through this exact
+    // path instead. Key/button taps are two-phase (one frame down, then
+    // up) so the isKeyPressed/isMouseButtonPressed edge detectors fire
+    // exactly once per tap, mirroring a real press.
+    if (m_injectedCursorValid) {
+        m_mouseX = m_injectedCursorX;
+        m_mouseY = m_injectedCursorY;
+    }
+    for (auto it = m_injectedKeyTaps.begin(); it != m_injectedKeyTaps.end();) {
+        const u32 keyCode = static_cast<u32>(it->first);
+        if (keyCode < KEY_COUNT) {
+            m_keysCurrentFrame[keyCode] = (it->second > 0);
+        }
+        --it->second;
+        if (it->second < 0) {
+            it = m_injectedKeyTaps.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = m_injectedMouseTaps.begin(); it != m_injectedMouseTaps.end();) {
+        const u32 buttonCode = static_cast<u32>(it->first);
+        if (buttonCode < MOUSE_BUTTON_COUNT) {
+            m_mouseCurrentFrame[buttonCode] = (it->second > 0);
+        }
+        --it->second;
+        if (it->second < 0) {
+            it = m_injectedMouseTaps.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Reset scroll delta (updated via callback)
     m_scrollX = 0.0;
     m_scrollY = 0.0;

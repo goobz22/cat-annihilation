@@ -5,6 +5,8 @@
 #include <GLFW/glfw3.h>
 #include <array>
 #include <bitset>
+#include <vector>
+#include <utility>
 
 namespace Engine {
 
@@ -286,6 +288,25 @@ public:
      */
     void setCursorDisabled(bool disabled);
 
+    // ---- Synthetic input (headless test harness) --------------------------
+    // Drives Input WITHOUT any real desktop events — required because
+    // update() polls GLFW every frame, so external tools cannot fake input
+    // into a hidden window, and synthesizing REAL cursor/keyboard events on
+    // the operator's desktop is forbidden (it hijacks the machine they are
+    // using). A tap presses for `holdFrames` frames then releases, so the
+    // edge-triggered isKeyPressed/isMouseButtonPressed fire exactly once.
+    void injectCursorPos(f64 x, f64 y) {
+        m_injectedCursorValid = true;
+        m_injectedCursorX = x;
+        m_injectedCursorY = y;
+    }
+    void injectKeyTap(Key key, int holdFrames = 2) {
+        m_injectedKeyTaps.emplace_back(key, holdFrames);
+    }
+    void injectMouseTap(MouseButton button, int holdFrames = 2) {
+        m_injectedMouseTaps.emplace_back(button, holdFrames);
+    }
+
     // Gamepad input
     /**
      * @brief Check if gamepad is connected
@@ -372,6 +393,15 @@ private:
     };
 
     std::array<GamepadState, MAX_GAMEPADS> m_gamepads;
+
+    // Synthetic-input state (see injectCursorPos/injectKeyTap docblock).
+    // Taps carry a remaining-frames counter: >0 = held, 0 = released this
+    // frame (creating the release edge), then the entry is dropped.
+    bool m_injectedCursorValid = false;
+    f64 m_injectedCursorX = 0.0;
+    f64 m_injectedCursorY = 0.0;
+    std::vector<std::pair<Key, int>> m_injectedKeyTaps;
+    std::vector<std::pair<MouseButton, int>> m_injectedMouseTaps;
 };
 
 } // namespace Engine

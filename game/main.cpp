@@ -49,12 +49,14 @@
 #include "systems/WaveSystem.hpp"
 #include "systems/leveling_system.hpp"
 #include "components/HealthComponent.hpp"
+#include "imgui.h"
 
 #include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 #include <cstdlib>
 
 #ifdef _WIN32
@@ -85,6 +87,12 @@ struct CommandLineArgs {
     // automated runs exercise the Playing-state code path on the first frame.
     bool autoplay = false;
     bool hiddenWindow = false;  // --hidden: never show or focus the window
+
+    // --input-script "<cmd;cmd;...>": headless interaction driver. Grammar
+    // and rationale live on the InputScript struct below — combined with
+    // --hidden + --frame-dump it verifies menu flows (click Survival →
+    // Customize page → START GAME) with zero desktop presence.
+    std::string inputScriptText;
 
     // --max-frames <N>: if > 0, break the main loop cleanly after rendering
     // this many frames. Used by nightly smoke runs so the binary exits with
@@ -360,6 +368,10 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             args.hiddenWindow = true;
         } else if (arg == "--autoplay" || arg == "-a") {
             args.autoplay = true;
+        } else if (arg == "--input-script") {
+            if (i + 1 < argc) {
+                args.inputScriptText = argv[++i];
+            }
         } else if (arg == "--max-frames") {
             if (i + 1 < argc) {
                 args.maxFrames = static_cast<uint32_t>(std::atoi(argv[++i]));
@@ -550,6 +562,8 @@ void printHelp() {
     std::cout << "  --config <path>            Path to config file (default: config.json)\n";
     std::cout << "  --autoplay, -a             Skip main menu, start in arcade mode\n";
     std::cout << "  --hidden                   Never show or focus the window (automated runs)\n";
+    std::cout << "  --input-script \"<cmds>\"    Headless interaction driver; semicolon commands:\n";
+    std::cout << "                             wait:<s> | click:<x>,<y> (normalized 0-1) | key:<name> | quit\n";
     std::cout << "  --max-frames <N>           Exit cleanly after rendering N frames (0 = no cap)\n";
     std::cout << "  --exit-after-seconds <S>   Exit cleanly after S seconds (0 = no cap)\n";
     std::cout << "  --log-file <path>          Mirror Logger output to <path> (in addition to console)\n";
@@ -1257,6 +1271,15 @@ int main(int argc, char* argv[]) {
     uint64_t totalRenderedFrames = 0;
 
     bool running = true;
+
+    // Headless interaction driver (--input-script). Parsed once here so a
+    // malformed script fails loudly at startup, not mid-run.
+    InputScript inputScript = parseInputScript(cmdArgs.inputScriptText);
+    if (inputScript.active()) {
+        Engine::Logger::info("[input-script] " +
+                             std::to_string(inputScript.commands.size()) +
+                             " commands queued");
+    }
 
     // F3 toggles the ImGui profiler overlay. Off by default because the
     // panel covers the top-left of the HUD; a reviewer opting in with F3
