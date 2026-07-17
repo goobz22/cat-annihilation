@@ -1,28 +1,35 @@
-# Cat Annihilation — Custom C++20 / Vulkan / CUDA Engine
+# Cat Annihilation — Custom C++20 / Vulkan / CUDA Engine + Game
 
-A from-scratch graphics and systems engine written to understand how a modern
-real-time renderer actually works. Every major subsystem — the render
-hardware abstraction, the render graph, the deferred+forward shader pipeline,
-the CUDA physics solver, the CUDA particle simulator, the ECS, the
-allocators, the job scheduler — is hand-written in modern C++20. No Unity, no
-Unreal, no bgfx, no Godot.
+A from-scratch graphics and systems engine — and the game that ships on it.
+Every major engine subsystem — the render hardware abstraction, the render
+graph, the deferred+forward shader pipeline, the CUDA physics solver, the
+CUDA particle simulator, the ECS, the allocators, the job scheduler — is
+hand-written in modern C++20. No Unity, no Unreal, no bgfx, no Godot.
 
-The engine is the product. The game (a wave-survival cat-vs-dogs mode) is a
-test harness: if a frame renders correctly with clustered lighting, cascaded
-shadows, CUDA-driven particle effects, GPU rigid-body physics, and proper
-pipeline-barrier sync, everything underneath has been wired up right.
+**Both halves are the product.** The engine is the systems showcase; the game
+— *Cat Warriors*, an endless wave-survival mode where one cat holds off
+escalating rounds of dogs — is a real, playable title with a hard
+correctness bar: it must play and look **1:1 with the web reference build**
+(the React Three Fiber version under `src/`). That contract is enforced in
+code: every gameplay constant is cited to the live web source in
+[`game/config/WebParityConfig.hpp`](game/config/WebParityConfig.hpp), pinned
+by tests, and the rendered result is compared against Playwright captures of
+the actual running web build. The full ledger of what matches, what was
+fixed, and what diverges deliberately lives in
+[`docs/parity/PARITY_MATRIX.md`](docs/parity/PARITY_MATRIX.md).
 
 ## Table of Contents
 
 1. [Why this exists](#why-this-exists)
 2. [Engine at a glance](#engine-at-a-glance)
 3. [Architecture tour](#architecture-tour)
-4. [The game (test harness)](#the-game-test-harness)
-5. [Web port (React Three Fiber)](#web-port-react-three-fiber)
-6. [Building](#building)
-7. [Testing & validation](#testing--validation)
-8. [Repository layout](#repository-layout)
-9. [Contributing](#contributing)
+4. [The game — Cat Warriors](#the-game--cat-warriors)
+5. [Web parity: the correctness contract](#web-parity-the-correctness-contract)
+6. [Web reference (React Three Fiber)](#web-reference-react-three-fiber)
+7. [Building](#building)
+8. [Testing & validation](#testing--validation)
+9. [Repository layout](#repository-layout)
+10. [Contributing](#contributing)
 
 ---
 
@@ -37,12 +44,14 @@ render graph decides which resource transitions are necessary.
 The only honest way to understand those things is to write them. So this
 repo is the result of writing them: an RHI abstraction in front of Vulkan, a
 render graph with real barrier tracking, CUDA kernels for the broadphase and
-particle sim, hand-written PBR in GLSL, a SIMD math library. The "game" is
-deliberately simple — a wave mode with one player cat and some enemy dogs —
-because it exists to exercise the engine, not to be a standalone product.
+particle sim, hand-written PBR in GLSL, a SIMD math library.
 
-Everything in this README leads with the engine on purpose. If you're here
-because you saw the resume bullet, the engine is what that bullet refers to.
+The game grew past its origins as an engine exerciser. It started as the
+thing that gave the renderer something to draw; it is now the deliverable
+the engine exists to run — a complete survival title with a menu flow, cat
+customization, an endless round loop, a weapon/magic/progression economy,
+real-time shadows, and rigged AI-generated character models, all held to the
+web build's behavior pixel-for-pixel and number-for-number.
 
 ---
 
@@ -60,7 +69,8 @@ because you saw the resume bullet, the engine is what that bullet refers to.
 | **Memory** | Pool (fixed-size O(1) alloc/free), stack (LIFO), linear (frame/scratch, reset-per-frame). All written from scratch, used by the engine's hot paths to avoid dynamic allocation inside the render loop. |
 | **Jobs** | Work-stealing scheduler. Per-worker lock-free queues, thread-local worker index, `SubmitJob` + `ParallelFor` with auto batch-size tuning (4 batches per worker). |
 | **Math** | SIMD (SSE4.1) `vec2/vec3/vec4`, `mat3/mat4`, quaternions, transform, AABB, ray, view frustum, Perlin/simplex noise. |
-| **Animation** | Skeletal animation with bone hierarchies and animation blending. |
+| **Animation** | Skeletal animation with bone hierarchies and blending, driven end-to-end from glTF: skins parsed with joint-slot→node remapping + inverse bind matrices, clips sampled per-bone, and **GPU palette skinning** (dynamic-UBO bone-palette ring, per-draw palettes) so full waves of 100k+-vertex characters animate at 60 fps. A CPU-vertex fallback and bind-pose mode exist for A/B triage (`--enable-cpu-skinning` / `--disable-gpu-skinning`). |
+| **Survival shadows** | Real-time directional shadow mapping in the live game path: depth-only pass (2048² D32, player-following 80-unit ortho box, texel-snapped), 25-tap PCF into the direct Lambert term, with a dedicated skinned-caster pipeline so animated characters cast correctly-posed shadows. |
 | **Audio** | OpenAL backend. 3D audio sources, listener, mixer. |
 | **Assets** | GLTF model loading via cgltf 1.15, stb_image textures, stb_truetype fonts. Async asset manager. |
 | **Scene** | Scene graph with transform hierarchy, binary serialization with explicit per-component tag dispatch, save/load round-trip. |
@@ -85,10 +95,10 @@ implementation; shadow atlas is functional but doesn't yet pack
 variable-size regions optimally; the forward pass sorts transparent objects
 back-to-front via distance but doesn't yet do per-pixel OIT.
 
-**Intentionally minimal — the game is a harness, not a product**:
-the quest system, dialog trees, clan territories, NPC schedules, and full
-RPG progression are scaffolded but not intended to be a shippable RPG.
-They're there to give the engine things to draw, simulate, and respond to.
+**Dormant story-mode scaffolding**: the quest system, dialog trees, clan
+territories, and NPC schedules exist in code but are parked behind the
+Story Mode "coming soon" card — survival is the shipped mode. They are
+real implementations (tested), just not reachable from the current menu.
 
 ---
 
@@ -140,26 +150,68 @@ engine/
 
 ---
 
-## The game (test harness)
+## The game — Cat Warriors
 
-A simple wave-survival mode. A player-controlled cat defends against
-increasingly numerous enemy dogs. Each wave ramps up enemy count and
-difficulty. There is melee combat, projectile combat, a combo system, a
-leveling system, and four elemental magic schools — all of which exist
-primarily to give the engine things to render, simulate, and synchronize.
+An endless wave-survival title. One player cat versus escalating rounds of
+dogs; the run ends only when the cat falls.
 
-If you're looking for a polished game design, this isn't that. If you're
-looking for a sandbox to see the engine in action, it works.
+- **Menu flow**: mode-select (Survival live, Story "coming soon") →
+  "Customize Your Cat" (10 fur swatches, 8 eye colors, live-tinted preview)
+  → into the fight. Card-based dark UI matching the web build.
+- **The round loop**: rounds are endless — `floor((3 + round×2) × 1.5)`
+  dogs per round (7, 10, 13, …), each at `100 + (round−1)×20` HP, spawning
+  in a ring around the cat with the web's stagger and transition pacing.
+  "ROUND N / SURVIVE THE HORDE."
+- **Combat**: a 9-slot hotbar (water spell / sword / bow / shield), each
+  with its own attack behavior — traveling water bolts, melee swings, arrow
+  shots, shield bash with knockback. Every dog shows a floating health bar.
+- **Progression**: two XP economies exactly matching the web curves — cat
+  levels (+20 max HP per level, ratio-preserving heal, ability unlocks at
+  5/10/15/20/25 including the Nine Lives revive) and per-weapon/element
+  skill levels driving damage growth.
+- **Presentation**: real-time shadows, per-tree wind sway, the web's exact
+  lighting (#87CEEB sky/fog, 0.5 ambient, white sun at [10,10,5]), status
+  pill + weapon-skill card HUD, pause modal with sensitivity sliders, and
+  the "YOU DIED" modal with survival time and TRY AGAIN.
+- **Characters**: rigged, animated models produced by an AI-asset pipeline
+  (Meshy generations → Blender retopo/re-rig with 100 % weight coverage →
+  authored idle/walk/run/attack gaits). This is the one deliberate visual
+  divergence from the web build, which draws primitive box dogs — the
+  gameplay numbers stay identical.
 
 ---
 
-## Web port (React Three Fiber)
+## Web parity: the correctness contract
 
-A parallel WebGL version lives under [`src/`](src/) and is built with React
-Three Fiber + Three.js + Zustand. It's a separate implementation of the same
-game concept, sharing nothing with the native engine except art direction.
-It exists so someone can click a link and see the game in a browser without
-needing a CUDA-capable GPU.
+The web build under `src/` is the behavioral reference; the native game is
+required to match it 1:1. That is engineering policy, not aspiration:
+
+- **One constants registry** —
+  [`game/config/WebParityConfig.hpp`](game/config/WebParityConfig.hpp): every
+  gameplay number the two builds share, each cited to the exact live web
+  source line (not dead config files — several web constants turned out to
+  be inert, and the citations say so). `tests/unit/test_web_parity_config.cpp`
+  pins every value, so drift is a failing build.
+- **Live code branches on `WebParity::kEnabled`** — the richer pre-parity
+  native flavor (boss waves, per-variant dog stats, 20-spell magic depth,
+  free mouse camera) is preserved behind the `false` branch.
+- **Rendered-result verification** — source-level parity proved insufficient
+  (the constants matched while the two games looked nothing alike), so the
+  loop now captures the *running* web build headlessly with Playwright
+  (`scripts/webref_capture.ts` against `bunx vite preview`) and compares
+  frames + pixel measurements against native captures.
+- **The ledger** — [`docs/parity/PARITY_MATRIX.md`](docs/parity/PARITY_MATRIX.md)
+  records every row: verified-at-parity, fixed (with the root cause), or
+  deliberately divergent (with the rationale).
+
+---
+
+## Web reference (React Three Fiber)
+
+The reference build lives under [`src/`](src/): React Three Fiber +
+Three.js + Zustand. It's a separate implementation sharing nothing with the
+native engine except the game design, and it's what a browser visitor plays
+without needing a CUDA-capable GPU.
 
 State management rules (important to avoid terrain-clipping bugs) live in
 [`ARCHITECTURE.md`](ARCHITECTURE.md). Short version: never put dynamic game
@@ -168,8 +220,12 @@ entities in Zustand; keep real-time updates in local React state.
 Quick start:
 ```bash
 bun install
-bun run dev
+bun run build && bunx vite preview   # production build + local serve
 ```
+
+Note for automated capture on Windows: use the production preview, not the
+dev server — vite 7's dev-mode dependency optimizer intermittently fails to
+emit the `@react-three/drei` bundle here, and the 3D scene never mounts.
 
 ---
 
@@ -235,16 +291,43 @@ make -f Makefile.check code       # compilation check via stubs
 ### Unit + integration tests (Catch2)
 
 ```bash
-cd tests/build
-cmake ..
-make
-./unit_tests
-./integration_tests
+ninja -C build-ninja unit_tests && ./build-ninja/tests/unit_tests.exe
 ```
 
-Test coverage spans leveling, combat, combos, status effects, elemental
-magic, customization, dialog, NPC, day/night cycle, story mode, and
-serialization.
+7.7M+ assertions across 1,200+ cases, deterministic across runs (seed
+infrastructure in `tests/test_seed.hpp`, replayable via `CAT_TEST_SEED`).
+Coverage spans leveling, combat, combos, status effects, elemental magic,
+customization, web-parity constant pins, hermetic-GLB loader regressions
+(joint remapping, inverse bind matrices, node matrices), day/night,
+story-mode scaffolding, and serialization.
+
+### The gate (canonical green signal)
+
+```bash
+bun scripts/cat-test-gate.ts --json
+```
+
+Four stages, all required: compile-check → full ninja build → a 30-second
+hidden autoplay run with fps/color thresholds → a scripted headless
+menu-flow journey (menu → customize → gameplay → movement assertion →
+death → game over). Exit 0 = green; verdicts also land in
+`.cat-gate-status.json`.
+
+### Headless interactive testing (nothing ever appears on screen)
+
+All interactive verification runs in a hidden window with in-engine input
+injection — no visible windows, no desktop cursor synthesis:
+
+```bash
+bun scripts/headless_run.ts --script "wait:3;screenshot:menu;expect:state=MainMenu;quit"
+```
+
+The engine's `--input-script` grammar drives menus and gameplay
+(`wait / click / key / hold / screenshot / log / expect / quit`), `expect:`
+assertions give machine verdicts (process exit 4 on failure), and
+`--state-log` emits a per-second JSONL timeline (state, wave, HP, XP,
+position, fps). Full docs:
+[`docs/testing/HEADLESS_HARNESS.md`](docs/testing/HEADLESS_HARNESS.md).
 
 ---
 
@@ -254,15 +337,23 @@ Top-level:
 
 ```
 cat-annihilation/
-├── engine/              Native engine — the product
-├── game/                Native game layer — the test harness
-├── shaders/             GLSL shader tree (geometry, lighting, shadows, ...)
-├── assets/              Models, textures, audio, fonts, JSON config
-├── tests/               Catch2 unit + integration tests
-├── scripts/             Validation + build helpers
+├── engine/              Native engine (RHI, render graph, CUDA, ECS, ...)
+├── game/                Native game — Cat Warriors (systems, UI, entities,
+│                        config/WebParityConfig.hpp)
+├── shaders/             GLSL shader tree (scene, shadows, sky, particles, ...)
+├── assets/              Models (incl. generated_v2 rigged characters),
+│                        textures, audio, fonts, JSON config
+├── tests/               Catch2 unit + integration tests (+ test_seed.hpp)
+├── scripts/             The gate (cat-test-gate.ts), headless runner
+│                        (headless_run.ts), web capture (webref_capture.ts),
+│                        asset pipeline (retopo_rig.py, verify_rig.ts,
+│                        inspect_models.ts), validators
+├── docs/
+│   ├── parity/          PARITY_MATRIX.md — the 1:1 web-parity ledger
+│   └── testing/         HEADLESS_HARNESS.md — the headless test harness
 ├── third_party/         Vendored dependencies (stb, cgltf)
 ├── build_stubs/         No-SDK stubs for CI validation without CUDA/Vulkan
-├── src/                 Web port — separate React Three Fiber game
+├── src/                 Web reference build (React Three Fiber)
 └── CMakeLists.txt       Root build config
 ```
 
