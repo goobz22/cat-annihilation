@@ -368,10 +368,14 @@ def build_skin_graph(profile):
         "shoulder_R":    v(leg_nodes["R"]["f_top"]),
         "thigh_L":       v(leg_nodes["L"]["b_top"]),
         "thigh_R":       v(leg_nodes["R"]["b_top"]),
-        "paw_front_L":   Vector((verts[leg_nodes["L"]["f_pw"]].x, verts[leg_nodes["L"]["f_pw"]].y, 0.0)),
-        "paw_front_R":   Vector((verts[leg_nodes["R"]["f_pw"]].x, verts[leg_nodes["R"]["f_pw"]].y, 0.0)),
-        "paw_back_L":    Vector((verts[leg_nodes["L"]["b_pw"]].x, verts[leg_nodes["L"]["b_pw"]].y, 0.0)),
-        "paw_back_R":    Vector((verts[leg_nodes["R"]["b_pw"]].x, verts[leg_nodes["R"]["b_pw"]].y, 0.0)),
+        # Paw bones sit AT the paw skin node (not forced to Z=0): the node is the
+        # centre of the paw tube, so the toe bone stays inside the paw mesh and
+        # the leg chain's last bone deforms the paw cleanly rather than poking
+        # out below it. Grounding to Z=0 happens later as a rigid shift.
+        "paw_front_L":   v(leg_nodes["L"]["f_pw"]),
+        "paw_front_R":   v(leg_nodes["R"]["f_pw"]),
+        "paw_back_L":    v(leg_nodes["L"]["b_pw"]),
+        "paw_back_R":    v(leg_nodes["R"]["b_pw"]),
     }
 
     return verts, edges, radii, root, anatomy
@@ -468,6 +472,28 @@ def normalize_scale(mesh_obj, anatomy, target_diagonal):
 
     print(f"[build_quadruped] normalized scale x{s:.3f} -> target diagonal {target_diagonal:.3f}")
     return s
+
+
+def ground_to_floor(mesh_obj, anatomy):
+    """Rigidly shift the mesh and the rig landmarks down so the lowest vertex
+    sits on the Z=0 ground plane. The Skin+Subsurf paw caps retract slightly
+    upward, which otherwise leaves the model floating a few centimetres; grounding
+    here makes the character stand ON the floor at rest, which is how the engine
+    places entities (origin on terrain). Done BEFORE the armature is built, so the
+    bones inherit the grounded landmarks and no object-transform offset leaks into
+    the export. It is a pure translation, so it cannot affect deformation."""
+    corners = [mesh_obj.matrix_world @ Vector(c) for c in mesh_obj.bound_box]
+    floor = min(c.z for c in corners)
+    if abs(floor) < 1e-4:
+        return 0.0
+    for v in mesh_obj.data.vertices:
+        v.co.z -= floor
+    mesh_obj.data.update()
+    for key in list(anatomy.keys()):
+        p = Vector(anatomy[key])
+        anatomy[key] = Vector((p.x, p.y, p.z - floor))
+    print(f"[build_quadruped] grounded model: shifted {floor:+.4f} so feet rest on Z=0")
+    return floor
 
 
 def bbox_dict(mesh_obj):
@@ -1102,8 +1128,10 @@ def main():
     # 1) Grow the body from the skin graph and land it in the tri budget.
     mesh_obj, anatomy = create_body_mesh(profile, opts["subsurf"], opts["max_tris"])
 
-    # 2) Normalise size (mesh + landmarks together) to the engine-unit target.
+    # 2) Normalise size (mesh + landmarks together) to the engine-unit target,
+    #    then ground the model so its feet rest on the Z=0 plane.
     normalize_scale(mesh_obj, anatomy, target_diag)
+    ground_to_floor(mesh_obj, anatomy)
     bbox = bbox_dict(mesh_obj)
     print(f"[build_quadruped] bbox L={bbox['body_length']:.3f} "
           f"W={bbox['body_width']:.3f} H={bbox['body_height']:.3f}")
