@@ -43,10 +43,13 @@ using namespace CatEngine::CUDA::noise;
 
 namespace {
 
-// Deterministic seed so a flaky CI run is reproducible by re-running with
-// the same seed (Catch2 reports the seed on failure). All RNG-driven tests
-// in this file use this single seed to make cross-test triage easier.
-constexpr std::uint64_t kPropertySeed = 0x5a17e51a7feedfaULL;
+// Deterministic seed so a flaky CI run is reproducible: routed through
+// CatTest::DeterministicSeed (see test_seed.hpp), which logs the effective seed
+// and honors the CAT_TEST_SEED override for replay/sweeping. All RNG-driven
+// tests in this file derive from this single base to make triage easier.
+#include "test_seed.hpp"
+const std::uint64_t kPropertySeed =
+    CatTest::DeterministicSeed("cuda property simplex");
 
 // Sample budget. 100k samples is large enough to surface a 1-in-10k drift
 // (e.g. a bad permutation-table entry that nudges a small subset of the
