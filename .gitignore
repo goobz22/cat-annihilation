@@ -71,3 +71,7 @@ imgui.ini
 /.next/
 .env*
 *.tsbuildinfo
+
+# Probe/debris outputs from launch diagnostics
+*.err
+scripts/__pycache__/

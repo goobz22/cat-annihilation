@@ -71,8 +71,15 @@ Window::Window(const Config& config)
         throw std::runtime_error("Failed to create GLFW window");
     }
 
-    // Store this pointer for callbacks
-    glfwSetWindowUserPointer(m_window, this);
+    // Install the shared user-pointer context. This Window is the slot's
+    // owner and FIRST registrant; Input and TouchInput register into their
+    // own fields of the same context later in startup. Nobody may call
+    // glfwSetWindowUserPointer on this handle again — the last-writer-wins
+    // clobbering of the raw slot is exactly what produced the 2026-07-16
+    // focus-callback crash (see the GlfwWindowContext docblock).
+    m_userContext = std::make_unique<GlfwWindowContext>();
+    m_userContext->window = this;
+    glfwSetWindowUserPointer(m_window, m_userContext.get());
 
     // Setup callbacks
     setupCallbacks();
@@ -102,6 +109,7 @@ Window::~Window() {
 
 Window::Window(Window&& other) noexcept
     : m_window(other.m_window)
+    , m_userContext(std::move(other.m_userContext))
     , m_width(other.m_width)
     , m_height(other.m_height)
     , m_minimized(other.m_minimized)
@@ -118,8 +126,12 @@ Window::Window(Window&& other) noexcept
 
     other.m_window = nullptr;
 
-    if (m_window) {
-        glfwSetWindowUserPointer(m_window, this);
+    // The GLFW user pointer targets the heap-stable context (moved above),
+    // so it needs NO re-seating — only the context's back-pointer to the
+    // owning Window changes. Input/TouchInput registrations inside the
+    // context survive the move untouched.
+    if (m_userContext) {
+        m_userContext->window = this;
     }
 }
 
@@ -133,6 +145,7 @@ Window& Window::operator=(Window&& other) noexcept {
 
         // Move data
         m_window = other.m_window;
+        m_userContext = std::move(other.m_userContext);
         m_width = other.m_width;
         m_height = other.m_height;
         m_minimized = other.m_minimized;
@@ -144,8 +157,11 @@ Window& Window::operator=(Window&& other) noexcept {
 
         other.m_window = nullptr;
 
-        if (m_window) {
-            glfwSetWindowUserPointer(m_window, this);
+        // Same reasoning as the move constructor: the GLFW slot already
+        // points at the (heap-stable, just-moved) context; retarget only
+        // the context's owning-Window back-pointer.
+        if (m_userContext) {
+            m_userContext->window = this;
         }
     }
     return *this;
@@ -239,8 +255,18 @@ void Window::setupCallbacks() {
     glfwSetWindowFocusCallback(m_window, windowFocusCallback);
 }
 
+// All four dispatchers below resolve their Window through the shared
+// GlfwWindowContext instead of casting the raw user pointer. Before this,
+// the raw slot was overwritten by Input (main.cpp startup) and then
+// TouchInput (game init), so these callbacks were reinterpreting a
+// TouchInput object as a Window: the m_focused/m_minimized stores silently
+// corrupted TouchInput's bytes, and the std::function invokes read a
+// garbage impl pointer — the interactive-launch focus crash of 2026-07-16
+// (0xc0000005 at the m_focusCallback vtable load, flaky because it hinged
+// on heap contents at the misread offset).
 void Window::framebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = getUserContext(window);
+    Window* win = (context != nullptr) ? context->window : nullptr;
     if (win) {
         win->m_width = static_cast<u32>(width);
         win->m_height = static_cast<u32>(height);
@@ -252,7 +278,8 @@ void Window::framebufferSizeCallback(GLFWwindow* window, int width, int height) 
 }
 
 void Window::windowIconifyCallback(GLFWwindow* window, int iconified) {
-    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = getUserContext(window);
+    Window* win = (context != nullptr) ? context->window : nullptr;
     if (win) {
         win->m_minimized = (iconified == GLFW_TRUE);
 
@@ -263,14 +290,16 @@ void Window::windowIconifyCallback(GLFWwindow* window, int iconified) {
 }
 
 void Window::windowCloseCallback(GLFWwindow* window) {
-    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = getUserContext(window);
+    Window* win = (context != nullptr) ? context->window : nullptr;
     if (win && win->m_closeCallback) {
         win->m_closeCallback();
     }
 }
 
 void Window::windowFocusCallback(GLFWwindow* window, int focused) {
-    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = getUserContext(window);
+    Window* win = (context != nullptr) ? context->window : nullptr;
     if (win) {
         win->m_focused = (focused == GLFW_TRUE);
 

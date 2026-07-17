@@ -791,6 +791,8 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
 
         worst_ratio = 0.0
         worst_frame = frame_start
+        worst_bone = None
+        exploded_bones = {}
         exploded = 0
         min_paw_z = float('inf')
         for k in range(frames_per_clip):
@@ -821,22 +823,32 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
                 if ratio > worst_ratio:
                     worst_ratio = ratio
                     worst_frame = f
+                    worst_bone = nearest_bone[i]
                 if ratio > ratio_limit:
                     exploded += 1
+                    exploded_bones[nearest_bone[i]] = exploded_bones.get(nearest_bone[i], 0) + 1
             eval_obj.to_mesh_clear()
 
         clean = exploded == 0
+        # Which bones the flagged verts belong to — an at-a-glance locator: a few
+        # verts around ear/snout/tail tips is extremity metric-strictness; verts
+        # spread across torso/leg bones would be a real body tear.
+        hot = ", ".join(f"{b}:{c}" for b, c in
+                        sorted(exploded_bones.items(), key=lambda kv: -kv[1])[:4])
         results.append({
             "clip": clip_name,
             "worst_ratio": worst_ratio,
             "worst_frame": worst_frame,
+            "worst_bone": worst_bone,
             "exploded_verts": exploded,
+            "exploded_bones": exploded_bones,
             "min_vertex_z": min_paw_z,
             "clean": clean,
         })
         flag = "OK" if clean else "EXPLODED"
-        print(f"[deform] {clip_name:16s} worst-ratio={worst_ratio:.3f} "
-              f"(limit {ratio_limit}) exploded={exploded} minZ={min_paw_z:+.4f} -> {flag}")
+        print(f"[deform] {clip_name:16s} worst-ratio={worst_ratio:.3f}@{worst_bone} "
+              f"(limit {ratio_limit}) exploded={exploded} minZ={min_paw_z:+.4f} -> {flag}"
+              + (f"  [{hot}]" if hot else ""))
 
     # Reset to rest.
     arm_obj.animation_data.action = None
@@ -938,31 +950,66 @@ def render_previews(mesh_obj, arm_obj, out_dir, base_name):
 # Self-contained fallback rig + gait (only used if rig_quadruped import failed)
 # ---------------------------------------------------------------------------
 
-def smooth_skin_weights(mesh_obj, factor=0.6, repeat=6):
-    """Blur the skin weights across adjacent vertices, then re-limit to 4
-    influences and renormalise. WHY: on the bulky variants the thin spine bones
-    sit deep inside a thick body, so heat weighting leaves sharp, locally-wrong
-    weight islands (and the reused envelope fallback can grab a broad radius);
-    under a large motion those islands make individual verts fly away from their
-    bone — the deformation gate's fly-away flags. Smoothing averages each vert's
-    weights with its neighbours, which removes the isolated bad verts and yields
-    the soft, continuous falloff a clean skin needs. It is the standard 'smooth
-    skin weights' finishing pass and is safe on the already-clean lean variants
-    (it only rounds transitions). Runs on our own mesh, not rig_quadruped."""
-    bpy.ops.object.select_all(action='DESELECT')
-    mesh_obj.select_set(True)
-    bpy.context.view_layer.objects.active = mesh_obj
-    try:
-        # Smooth every vertex group together so cross-bone transitions blend.
-        bpy.ops.object.vertex_group_smooth(group_select_mode='ALL',
-                                           factor=factor, repeat=repeat)
-        # glTF skins keep at most 4 influences per vertex; smoothing can spread a
-        # vert across more, so re-limit and renormalise to a valid skin.
-        bpy.ops.object.vertex_group_limit_total(limit=4)
-        bpy.ops.object.vertex_group_normalize_all(lock_active=False)
-        print(f"[build_quadruped] smoothed skin weights (factor={factor}, repeat={repeat})")
-    except Exception as err:
-        print(f"[build_quadruped] weight smoothing skipped ({err})", file=sys.stderr)
+def smooth_skin_weights(mesh_obj, factor=0.5, repeat=6):
+    """Blur the skin weights across adjacent vertices (neighbour averaging),
+    keeping the top-4 influences per vertex renormalised to sum 1.
+
+    WHY manual instead of bpy.ops.object.vertex_group_smooth: that operator's
+    poll fails under `blender --background` ("context is incorrect") because it
+    is a weight-paint context operator, so it silently no-ops headless. Averaging
+    the weights ourselves over the mesh edge graph is deterministic, context-free,
+    and does exactly the same job.
+
+    WHY it matters: on the bulky variants the thin spine bones sit deep inside a
+    thick body, so heat weighting leaves sharp, locally-wrong weight islands (and
+    the reused envelope fallback grabs a broad radius); under a large motion those
+    islands make individual verts fly away from their bone — the deformation
+    gate's fly-away flags. Blurring the weights removes the isolated bad verts and
+    yields the soft, continuous falloff a clean skin needs. It only rounds
+    transitions, so it is safe on the already-clean lean variants."""
+    mesh = mesh_obj.data
+    n = len(mesh.vertices)
+    if n == 0 or not mesh_obj.vertex_groups:
+        return
+
+    # Edge-graph adjacency.
+    neighbors = [[] for _ in range(n)]
+    for e in mesh.edges:
+        a, b = e.vertices
+        neighbors[a].append(b)
+        neighbors[b].append(a)
+
+    # Current per-vertex weights as {group_index: weight}.
+    weights = [{g.group: g.weight for g in v.groups if g.weight > 0.0}
+               for v in mesh.vertices]
+
+    # Iterated neighbour averaging: each pass blends (1-factor) of a vertex's own
+    # weights with `factor` of its neighbours' mean.
+    for _ in range(max(1, repeat)):
+        blended = [None] * n
+        for vi in range(n):
+            acc = {gi: (1.0 - factor) * w for gi, w in weights[vi].items()}
+            nb = neighbors[vi]
+            if nb:
+                share = factor / len(nb)
+                for ni in nb:
+                    for gi, w in weights[ni].items():
+                        acc[gi] = acc.get(gi, 0.0) + share * w
+            blended[vi] = acc
+        weights = blended
+
+    # Write back: keep the top-4 influences (glTF skin limit), normalise to 1.
+    for v in mesh.vertices:
+        acc = weights[v.index]
+        top = sorted(acc.items(), key=lambda kv: -kv[1])[:4]
+        total = sum(w for _, w in top) or 1.0
+        keep = {gi: w / total for gi, w in top if w > 1e-5}
+        current = {g.group for g in v.groups}
+        for gi in current - set(keep.keys()):
+            mesh_obj.vertex_groups[gi].remove([v.index])
+        for gi, w in keep.items():
+            mesh_obj.vertex_groups[gi].add([v.index], w, 'REPLACE')
+    print(f"[build_quadruped] smoothed skin weights (factor={factor}, repeat={repeat})")
 
 
 def _fallback_build_armature(bbox, species, anatomy):

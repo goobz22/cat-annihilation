@@ -13,8 +13,51 @@
 #include <GLFW/glfw3.h>
 #include <string>
 #include <functional>
+#include <memory>
 
 namespace Engine {
+
+class Window;
+class Input;
+class TouchInput;
+
+/**
+ * @brief The ONE legal payload of a GLFW window's user pointer.
+ *
+ * GLFW gives every window exactly one `void*` user-pointer slot, but three
+ * engine classes install static callbacks that need their owning object
+ * back: Window (resize / iconify / close / focus), Input (scroll), and
+ * TouchInput (cursor-pos / mouse-button for touch simulation). Historically
+ * each class called `glfwSetWindowUserPointer(window, this)` — last writer
+ * wins — so after startup (Window, then Input in main(), then TouchInput in
+ * CatAnnihilation::initialize) the slot held a TouchInput*, and every
+ * Window callback `static_cast`ed that TouchInput to Window.
+ *
+ * That type confusion was a live crash, not a theory (2026-07-16): on the
+ * first focus-change event of an interactive launch,
+ * Window::windowFocusCallback read "m_focusCallback" from TouchInput's
+ * bytes at Window's member offset, saw a non-null garbage std::function
+ * impl pointer, and virtual-called through it — 0xc0000005 at
+ * CatAnnihilation.exe+0xA9D50, reproduced 4/4 by forcing focus/minimize
+ * events. Whether it crashed depended on heap contents at that offset,
+ * which is why the same binary could survive one launch and die the next
+ * within seconds. Autoplay never hit it because `Config::noFocusSteal`
+ * windows receive no focus churn (and the test gate only runs autoplay).
+ *
+ * The fix is structural so the bug shape is impossible: the user pointer
+ * now ALWAYS holds this context struct, owned by the Window that created
+ * the GLFW window. Each consumer registers its typed pointer in its own
+ * slot and every static callback reads its own slot — no consumer may
+ * call glfwSetWindowUserPointer on an Engine::Window-owned handle, ever.
+ * The struct lives behind a unique_ptr inside Window so its address is
+ * stable across Window moves (the move constructor only has to update
+ * `window`, never re-seat the GLFW slot).
+ */
+struct GlfwWindowContext {
+    Window* window = nullptr;
+    Input* input = nullptr;
+    TouchInput* touchInput = nullptr;
+};
 
 /**
  * @brief Window creation and management using GLFW
@@ -133,6 +176,24 @@ public:
     GLFWwindow* getHandle() const { return m_window; }
 
     /**
+     * @brief Fetch the shared user-pointer context of an Engine::Window-
+     * owned GLFW handle.
+     *
+     * This is the ONLY sanctioned way to reach an engine object from a
+     * GLFW callback (see the GlfwWindowContext docblock for the crash this
+     * contract fixes). Returns nullptr for a null handle or a handle whose
+     * user pointer was never installed — callers must null-check both the
+     * context and their slot, because registration order is staged
+     * (Window at create, Input in main(), TouchInput at game init) and an
+     * event can legitimately arrive between those stages.
+     */
+    static GlfwWindowContext* getUserContext(GLFWwindow* handle) {
+        return handle != nullptr
+            ? static_cast<GlfwWindowContext*>(glfwGetWindowUserPointer(handle))
+            : nullptr;
+    }
+
+    /**
      * @brief Create Vulkan surface for this window
      * @param instance VkInstance handle
      * @return VkSurfaceKHR surface handle
@@ -209,6 +270,13 @@ private:
     static void windowFocusCallback(GLFWwindow* window, int focused);
 
     GLFWwindow* m_window = nullptr;
+
+    // Shared user-pointer payload for m_window (see GlfwWindowContext).
+    // unique_ptr so the context's ADDRESS survives Window moves — the GLFW
+    // user-pointer slot keeps pointing at the same allocation and only the
+    // context's `window` field is retargeted by the move members.
+    std::unique_ptr<GlfwWindowContext> m_userContext;
+
     u32 m_width = 0;
     u32 m_height = 0;
     bool m_minimized = false;

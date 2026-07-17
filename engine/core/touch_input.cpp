@@ -1,5 +1,8 @@
 #include "touch_input.hpp"
 #include "Logger.hpp"
+// For GlfwWindowContext + Window::getUserContext — the shared user-pointer
+// contract that replaced this file's raw glfwSetWindowUserPointer clobber.
+#include "Window.hpp"
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
@@ -53,8 +56,26 @@ void TouchInput::initialize() {
     m_hasTouchSupport = true;
     m_simulateTouch = true;
 
+    // Register into the window's shared user-pointer context. The old
+    // glfwSetWindowUserPointer(m_window, this) here was the LAST of three
+    // last-writer-wins clobbers of the raw slot (after Window's and
+    // Input's), which left every Window event callback reinterpreting this
+    // TouchInput as a Window — the 2026-07-16 interactive focus-event
+    // crash (see GlfwWindowContext in Window.hpp for the full mechanism).
+    // A missing context means the handle didn't come from Engine::Window;
+    // refuse to initialize rather than recreate the type-confusion bug.
+    GlfwWindowContext* context = Engine::Window::getUserContext(m_window);
+    if (!context) {
+        Logger::error("TouchInput::initialize: window has no user-pointer "
+                      "context (not an Engine::Window handle) — touch "
+                      "simulation disabled");
+        m_hasTouchSupport = false;
+        m_simulateTouch = false;
+        return;
+    }
+    context->touchInput = this;
+
     // Set up mouse callbacks for touch simulation
-    glfwSetWindowUserPointer(m_window, this);
     glfwSetCursorPosCallback(m_window, cursorPositionCallback);
     glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
 
@@ -65,6 +86,17 @@ void TouchInput::initialize() {
 void TouchInput::shutdown() {
     if (!m_initialized) {
         return;
+    }
+
+    // Unregister from the shared user-pointer context so a mouse event
+    // arriving after shutdown can't dispatch into this (soon-destroyed)
+    // object. CatAnnihilation::shutdown calls this while the Window is
+    // still alive (the game tears down input before the window), which is
+    // the ordering this GLFW-handle access depends on. The `== this` guard
+    // protects a replacement TouchInput's registration.
+    GlfwWindowContext* context = Engine::Window::getUserContext(m_window);
+    if (context && context->touchInput == this) {
+        context->touchInput = nullptr;
     }
 
     m_activeTouches.clear();
@@ -481,9 +513,15 @@ bool TouchInput::detectRotation(float& outAngle) {
     return false;
 }
 
-// GLFW Callbacks (for mouse simulation)
+// GLFW Callbacks (for mouse simulation). Both resolve through the shared
+// context's `touchInput` slot — the raw user pointer holds a
+// GlfwWindowContext, never a TouchInput (see Window.hpp). The old direct
+// static_cast happened to be "right" only because TouchInput was the last
+// clobberer of the raw slot; it simultaneously broke Window's and Input's
+// callbacks, which is the bug class the context removes.
 void TouchInput::cursorPositionCallback(GLFWwindow* window, double xpos, double ypos) {
-    TouchInput* input = static_cast<TouchInput*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = Engine::Window::getUserContext(window);
+    TouchInput* input = (context != nullptr) ? context->touchInput : nullptr;
     if (input && input->m_simulateTouch) {
         input->m_mousePosition = glm::vec2(static_cast<float>(xpos), static_cast<float>(ypos));
 
@@ -494,7 +532,8 @@ void TouchInput::cursorPositionCallback(GLFWwindow* window, double xpos, double 
 }
 
 void TouchInput::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    TouchInput* input = static_cast<TouchInput*>(glfwGetWindowUserPointer(window));
+    GlfwWindowContext* context = Engine::Window::getUserContext(window);
+    TouchInput* input = (context != nullptr) ? context->touchInput : nullptr;
     if (input && input->m_simulateTouch && button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             input->m_mouseDown = true;

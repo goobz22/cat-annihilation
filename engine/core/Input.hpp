@@ -203,6 +203,14 @@ public:
     explicit Input(GLFWwindow* window);
 
     /**
+     * @brief Unregisters this Input from the window's shared user-pointer
+     * context (GlfwWindowContext) so late scroll events cannot dispatch
+     * into a destroyed object. Must run before the owning Window is
+     * destroyed — see the destructor definition for the ordering contract.
+     */
+    ~Input();
+
+    /**
      * @brief Update input state (call once per frame)
      */
     void update();

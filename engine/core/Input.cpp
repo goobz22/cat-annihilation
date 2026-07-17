@@ -1,4 +1,5 @@
 #include "Input.hpp"
+#include "Window.hpp"
 #include <cstring>
 #include <stdexcept>
 
@@ -11,8 +12,22 @@ Input::Input(GLFWwindow* window)
         throw std::runtime_error("Input system requires valid GLFW window");
     }
 
-    // Store this pointer for callbacks
-    glfwSetWindowUserPointer(m_window, this);
+    // Register into the window's shared user-pointer context instead of
+    // overwriting the raw slot with `this`. The old
+    // glfwSetWindowUserPointer(m_window, this) here was one of the three
+    // last-writer-wins clobbers behind the 2026-07-16 interactive focus
+    // crash (Window's callbacks ended up static_cast'ing whichever object
+    // registered LAST — see GlfwWindowContext in Window.hpp). Failing hard
+    // on a missing context is deliberate: it means the handle didn't come
+    // from Engine::Window, and silently continuing would revive exactly
+    // the wrong-type dereference class this contract eliminates.
+    GlfwWindowContext* context = Window::getUserContext(m_window);
+    if (!context) {
+        throw std::runtime_error(
+            "Input requires an Engine::Window-owned GLFW window "
+            "(user-pointer context missing)");
+    }
+    context->input = this;
 
     // Setup callbacks
     setupCallbacks();
@@ -21,6 +36,22 @@ Input::Input(GLFWwindow* window)
     glfwGetCursorPos(m_window, &m_mouseX, &m_mouseY);
     m_mousePrevX = m_mouseX;
     m_mousePrevY = m_mouseY;
+}
+
+Input::~Input() {
+    // Unregister so a late scroll event can't dispatch into a destroyed
+    // Input. Precondition (holds today and must keep holding): the Input
+    // is destroyed BEFORE the Window that owns m_window — main.cpp
+    // declares `window` before `input`, so C++ reverse-destruction order
+    // guarantees it. Touching a GLFW handle after its window was destroyed
+    // is undefined, so this cannot be made safe from the Input side alone;
+    // the ordering is the contract. The `context->input == this` guard
+    // covers the separate replacement case (a second Input re-registered
+    // on the same window — we must not null out ITS slot).
+    GlfwWindowContext* context = Window::getUserContext(m_window);
+    if (context && context->input == this) {
+        context->input = nullptr;
+    }
 }
 
 void Input::update() {
@@ -222,7 +253,13 @@ void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int 
 }
 
 void Input::scrollCallback(GLFWwindow* window, f64 xoffset, f64 yoffset) {
-    auto* input = static_cast<Input*>(glfwGetWindowUserPointer(window));
+    // Resolve through the shared context's `input` slot — the raw user
+    // pointer holds a GlfwWindowContext, never an Input (see Window.hpp).
+    // Before this, TouchInput's later registration meant this callback was
+    // writing scroll deltas into a TouchInput object reinterpreted as
+    // Input — silent memory corruption on every mouse-wheel event.
+    GlfwWindowContext* context = Window::getUserContext(window);
+    Input* input = (context != nullptr) ? context->input : nullptr;
     if (input) {
         input->m_scrollX = xoffset;
         input->m_scrollY = yoffset;
