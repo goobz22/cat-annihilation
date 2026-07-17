@@ -38,10 +38,17 @@ under parity) · shield right-click block model · spell 1 s cooldown (web spamm
 · native music/SFX richness · mobile/touch (no native mobile) · dodge roll
 (native-only) · low-health vignette (kept: better feedback).
 
-**Remaining OPEN (parity):** real-time shadows in survival (web casts/receives
-shadow maps; native survival shaders are pure Lambert — implementation IN
-PROGRESS 2026-07-17, constants staged in WebParityConfig) · native Lambert vs
-three.js PBR falloff (cosmetic, accepted for now).
+**Remaining OPEN (parity):** none blocking. Native Lambert vs three.js PBR
+falloff remains a DEFERRED cosmetic (accepted; constants match numerically).
+
+- ✅ **Real-time shadows SHIPPED (2026-07-17)** — depth-only shadow pass in
+  ScenePass (2048² D32, 80-unit player-following ortho box, texel-snapped),
+  25-tap PCF into the direct Lambert term only, animated skinned casters via a
+  dedicated bone-palette ring, gated on kShadowsEnabled, tuning constants
+  pinned. Verified headlessly: cat/dogs/trees/rocks cast soft articulated
+  shadows (screenshots `build-ninja/headless/shadowprobe/`), zero Vulkan
+  validation errors, gate 4/4 + 7.72M assertions green. Deliberate upward
+  divergence from three.js's tiny 512²/±5 default shadow camera (documented).
 
 **Runtime-verified 2026-07-17 (headless probes, after the sweep landed):**
 - Lighting: post-fix frames are visibly brighter (screenshots
