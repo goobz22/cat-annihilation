@@ -14,6 +14,11 @@
 
 #include "config/WebParityConfig.hpp"
 #include "systems/xp_tables.hpp"
+// EnemyAISystem is included ONLY for its inline, header-only static
+// separationContribution() (pure X/Z math, no ECS state) — the boid-separation
+// parity regression below. No EnemyAISystem .cpp symbol is referenced, so this
+// adds no ECS link dependency to the test.
+#include "systems/EnemyAISystem.hpp"
 // HealthComponent is a header-only, all-inline struct (no engine linkage
 // beyond the DamageType enum in status_effects.hpp, which is already on the
 // test build's include path). It lets the melee-i-frame parity regression
@@ -794,4 +799,53 @@ TEST_CASE("pause modal ranges, copy and chrome colours match the web PauseMenu",
     // Instruction footer + key-hint chip (:186 / :191).
     CHECK(sameUi(WebParity::kPauseInstructionsColor, 0xAA, 0xAA, 0xAA)); // #aaa
     CHECK(sameUi(WebParity::kPauseKeyHintBg,         0x33, 0x33, 0x33)); // #333
+}
+
+TEST_CASE("enemy boid separation matches the web (radius 1.5, force 3.0, linear falloff)",
+          "[web-parity][enemy-ai][separation]") {
+    // Round-3 audit (2026-07-17), LOW. Native enemies had NO separation, so a
+    // wave stacked on the identical player-seek point; the web pushes each
+    // enemy away from neighbors within ENEMY_SEPARATION_RADIUS so dogs spread
+    // into a ring (LocalEnemySystem.tsx:113-114,200-205 / gameConfig.ts:23-24).
+
+    // Constants track the live web literals.
+    CHECK(WebParity::kEnemySeparationRadius == 1.5f);
+    CHECK(WebParity::kEnemySeparationForce == 3.0f);
+
+    const float R = WebParity::kEnemySeparationRadius;
+    const float F = WebParity::kEnemySeparationForce;
+
+    SECTION("neighbor at 0.5 along +X pushes +X with the web's linear strength") {
+        // self at (0.5,0,0), other at origin: dist=0.5, dir=(1,0,0),
+        // strength=(1.5-0.5)/1.5=2/3, force = (2/3)*3.0 = 2.0 along +X.
+        const Engine::vec3 f = EnemyAISystem::separationContribution(
+            Engine::vec3(0.5f, 0.0f, 0.0f), Engine::vec3(0.0f, 0.0f, 0.0f), R, F);
+        CHECK(f.x == Approx(2.0f));
+        CHECK(f.y == Approx(0.0f));
+        CHECK(f.z == Approx(0.0f));
+    }
+
+    SECTION("neighbor beyond the radius contributes nothing") {
+        const Engine::vec3 f = EnemyAISystem::separationContribution(
+            Engine::vec3(2.0f, 0.0f, 0.0f), Engine::vec3(0.0f, 0.0f, 0.0f), R, F);
+        CHECK(f.x == Approx(0.0f));
+        CHECK(f.z == Approx(0.0f));
+    }
+
+    SECTION("exactly coincident neighbors do not divide by zero") {
+        const Engine::vec3 f = EnemyAISystem::separationContribution(
+            Engine::vec3(1.0f, 0.0f, 1.0f), Engine::vec3(1.0f, 0.0f, 1.0f), R, F);
+        CHECK(f.x == Approx(0.0f));
+        CHECK(f.z == Approx(0.0f));
+    }
+
+    SECTION("push is purely planar and points away along the +Z diagonal") {
+        // self at (0,0,1), other at origin: dist=1.0, dir=(0,0,1),
+        // strength=(1.5-1.0)/1.5=1/3, force=(1/3)*3.0=1.0 along +Z.
+        const Engine::vec3 f = EnemyAISystem::separationContribution(
+            Engine::vec3(0.0f, 0.0f, 1.0f), Engine::vec3(0.0f, 0.0f, 0.0f), R, F);
+        CHECK(f.x == Approx(0.0f));
+        CHECK(f.y == Approx(0.0f));
+        CHECK(f.z == Approx(1.0f));
+    }
 }

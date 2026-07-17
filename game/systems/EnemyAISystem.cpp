@@ -318,25 +318,6 @@ float EnemyAISystem::getDistanceToTarget(const Engine::vec3& position, const Eng
     return diff.length();
 }
 
-Engine::vec3 EnemyAISystem::separationContribution(const Engine::vec3& selfPos,
-                                                   const Engine::vec3& otherPos,
-                                                   float radius, float force) {
-    // Planar (X/Z) push away from a single neighbor with the web's linear
-    // falloff. Zero outside the radius or when exactly coincident (the web
-    // guards `otherDistance > 0` to avoid a divide-by-zero; two stacked spawns
-    // therefore contribute nothing until they drift apart under other forces).
-    const float dx = selfPos.x - otherPos.x;
-    const float dz = selfPos.z - otherPos.z;
-    const float dist = std::sqrt(dx * dx + dz * dz);
-    if (dist <= 0.0f || dist >= radius) {
-        return Engine::vec3(0.0f, 0.0f, 0.0f);
-    }
-    const float strength = (radius - dist) / radius;
-    return Engine::vec3((dx / dist) * strength * force,
-                        0.0f,
-                        (dz / dist) * strength * force);
-}
-
 Engine::vec3 EnemyAISystem::computeSeparationForce(CatEngine::Entity self,
                                                    const Engine::vec3& selfPos) const {
     Engine::vec3 separation(0.0f, 0.0f, 0.0f);

@@ -103,6 +103,16 @@ inline constexpr float kEnemyAttackCooldown = 1.0f;   // tsx:349 (1000 ms)
 inline constexpr float kEnemyAggroRange = 10000.0f;
 inline constexpr float kEnemyIdleWait = 0.0f;
 
+// Boid separation (LocalEnemySystem.tsx:113-114 / gameConfig.ts:23-24). Each
+// enemy is pushed away from every other enemy within kEnemySeparationRadius,
+// with a linear falloff (strength = (radius-dist)/radius) scaled by
+// kEnemySeparationForce, SUMMED (not normalized) and added to the seek velocity
+// each frame. This makes a wave spread into a ring around the player instead of
+// stacking on the identical seek point. (BalanceConfig.hpp had an unused, wrong
+// SEPARATION_RADIUS=1.0; the web literal is 1.5.)
+inline constexpr float kEnemySeparationRadius = 1.5f;  // tsx:113 / gameConfig.ts:23
+inline constexpr float kEnemySeparationForce = 3.0f;   // tsx:114 / gameConfig.ts:24
+
 // gameStore.ts:671-693 (damagePlayer) — the web applies incoming enemy
 // melee with ZERO player invincibility. damagePlayer(amount) is a bare
 // `health = max(0, health - amount)` with no i-frame guard, and every dog
