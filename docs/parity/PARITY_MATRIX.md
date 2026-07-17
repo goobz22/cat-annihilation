@@ -1,5 +1,49 @@
 # Cat Annihilation — threejs → native parity matrix
 
+## ⭐ 2026-07-17 FULL VERIFY-FIX SWEEP (13-agent workflow) — the CURRENT per-row truth
+
+Every remaining P1/🟡 row was re-verified against BOTH codebases at HEAD by 9 parallel
+read-only agents (the old P1 section below is retained as audit history but is
+SUPERSEDED — it predated many fixes and was wrong on 14 rows). Verdicts:
+
+**Confirmed ALREADY AT PARITY (stale matrix rows):** enemies-per-wave formula ·
+endless waves (kEndlessWaves=true; wave-5 Victory cap compiled out under parity) ·
+survival end condition (death→GameOver only) · chase/aggro (all dogs aggro 10000
+range, no idle) · hotbar 1-7 · bow (speed 25 per-call plumbed) · spell/arrow
+projectile speeds (15/25) · magic kill bonus (+15/element, element-carrying kill
+record) · cat level-up +20 maxHP ratio-preserved heal · Nine Lives L15 wired into
+the death path · ability unlock levels 5/10/15/20/25 · S-backward · Shift-run 2× ·
+movement deadzone · idle Y-bob (deleted) · HUD ability strip + next-unlock (renders) ·
+bushes · rocks · fog · sky #87CEEB flat · day-cycle overridden · weather (dormant
+both sides) · ambient audio (dead code BOTH sides).
+
+**REAL GAPS — FIXED this sweep (each with pinned tests):**
+- glTF node `matrix` transposed on load (hermetic-GLB pinned).
+- Native-only 0.2 s shared melee i-frame capped dog swarms at 75 DPS; web is
+  uncapped (15/dog/frame). Removed under parity; Nine-Lives revive grace preserved.
+- Customize page eye-color picker (web's 8 swatches, exact sRGB) + pause/game-over
+  parity deltas.
+- Tree collision: web survival has NO player-tree collision (TerrainCollisionSystem
+  is story-only) — native now passes through under parity (Forest query gate).
+- Tree wind sway (±0.01 rad sin/cos, per-tree phase, trees only) wired into the
+  parity forest render.
+- Lighting: ambient 0.5 (was 0.28/0.35), sun normalize(10,10,5) pure white (was
+  warm tungsten) in scene+entity shaders.
+- Spell hit geometry (found by headless kill probes, not the audit): bolts spawned
+  at caster origin with 1.0 hit radius → point-blank casts missed everything; web
+  spawns 2 ahead with 1.5 radius. Fixed; first confirmed interactive kill.
+
+**Recorded DELIBERATE DIVERGENCES (see section below):** Victory screen (unreachable
+under parity) · shield right-click block model · spell 1 s cooldown (web spammable)
+· native music/SFX richness · mobile/touch (no native mobile) · dodge roll
+(native-only) · low-health vignette (kept: better feedback).
+
+**Remaining OPEN (parity):** real-time shadows in survival (web casts/receives
+shadow maps; native survival shaders are pure Lambert — P2, constants staged in
+WebParityConfig) · native Lambert vs three.js PBR falloff (cosmetic, accepted for
+now) · dog restart-wave anomaly seen once under space-spam (unreproduced with R;
+low priority).
+
 ## Fix log (2026-07-16 campaign)
 
 Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinned where noted:
@@ -83,7 +127,7 @@ Statuses: ✅ parity · 🟡 partial (delta spelled out) · ❌ missing · 🔵 
 | combat-abilities | 19 | 0 | 8 | 6 | 5 | 4 | 7 |
 | gameflow-states | 17 | 4 | 9 | 3 | 1 | 1 | 6 |
 
-## P1 gaps (gameplay-breaking, fix first)
+## P1 gaps (gameplay-breaking, fix first) — ⚠️ SUPERSEDED by the 2026-07-17 sweep section at the top; retained as audit history. Do NOT work from these rows.
 
 ### [waves] Enemies-per-wave count formula — 🟡 partial
 - **Web** (src/components/game/LocalEnemySystem.tsx:529-531): getEnemiesForWave(wave) = Math.floor((3 + (wave*2)) * 1.5). NOTE it uses wave*2, not (wave-1)*2. Wave1=7, Wave2=10, Wave3=13, Wave4=16, Wave5=19 — a strictly increasing linear ramp. (GAME_CONFIG.WAVES BASE_ENEMIES:3/ENEMIES_PER_WAVE:2/ENEMY_MULTIPLIER:1.5 exist at gameConfig.ts:67-75 but are NOT imported — LocalEnemySystem hardcodes the literals.) Same formula duplicated in WaveDisplay.tsx:77 for the 'N dogs this round' text.
