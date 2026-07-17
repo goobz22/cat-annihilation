@@ -221,12 +221,23 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 
+// Resolve the root arg into the model list. WHY the stat branch: the loop
+// iterates the whole asset tree by default, but a single-model iteration
+// ("does THIS export now carry a skin?") is the most common inner-loop use
+// while re-rigging one file — passing a .glb path directly must inspect just
+// that file rather than crash in readdirSync with ENOTDIR (a directory-only
+// walk assumes its arg is a directory, which a file path is not).
+function collectModels(root: string): string[] {
+  if (statSync(root).isDirectory()) return walk(root).sort()
+  return /\.(glb|gltf)$/i.test(root) ? [root] : []
+}
+
 const argv = process.argv.slice(2)
 const asJson = argv.includes('--json')
 const rootArg = argv.find((a) => !a.startsWith('--'))
 const root = rootArg ?? 'assets/models'
 
-const files = walk(root).sort()
+const files = collectModels(root)
 const reports = files.map(inspect)
 
 if (asJson) {

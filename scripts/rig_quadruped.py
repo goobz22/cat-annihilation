@@ -104,21 +104,56 @@ def collect_and_join_meshes():
     + eyes + collar as separate meshes under one empty). Joining everything
     into a single mesh before rigging means one armature modifier, one weight
     set, and one export — simpler and matches how the engine's ModelLoader
-    treats the model."""
+    treats the model.
+
+    Two headless-Blender traps this function has to defend against, both of
+    which otherwise silently discard the actual character body:
+
+      1. JOIN TARGET. The dog GLBs import as the body ("Mesh_0", 100k-250k
+         verts, skinned to the source armature) PLUS a tiny separate 42-vertex
+         "Icosphere" eyeball. bpy.ops.object.join() merges the SELECTED meshes
+         into the ACTIVE one, so the active object must be the body. The old
+         code set active = mesh_objs[0], which is the eyeball — joining the
+         body into a 42-vertex sphere and throwing the whole dog away, so
+         every downstream stage rigged a sphere and the export aborted
+         un-skinned. We pick the highest-vertex mesh as the join target.
+
+      2. HEADLESS JOIN CONTEXT. bpy.ops.object.join() silently returns
+         CANCELLED under `--background` because the default context carries no
+         3D viewport. A temp_override supplying the active + selected objects
+         lets it run headlessly. Belt-and-braces: after the join we remove any
+         mesh object other than the primary, because the override join can
+         copy a secondary's geometry into the primary yet leave the now-
+         duplicated source object behind (which would otherwise export as a
+         stray, unskinned eyeball floating beside the animated body).
+    """
     mesh_objs = [o for o in bpy.data.objects if o.type == 'MESH']
     if not mesh_objs:
         print("ERROR: no mesh found in input GLB", file=sys.stderr)
         sys.exit(2)
 
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in mesh_objs:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = mesh_objs[0]
+    primary = max(mesh_objs, key=lambda o: len(o.data.vertices))
 
     if len(mesh_objs) > 1:
-        bpy.ops.object.join()
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in mesh_objs:
+            obj.select_set(True)
+        bpy.context.view_layer.objects.active = primary
+        with bpy.context.temp_override(active_object=primary, object=primary,
+                                       selected_editable_objects=list(mesh_objs),
+                                       selected_objects=list(mesh_objs)):
+            bpy.ops.object.join()
 
-    return bpy.context.active_object
+        for obj in list(bpy.data.objects):
+            if obj.type == 'MESH' and obj is not primary:
+                bpy.data.objects.remove(obj, do_unlink=True)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    primary.select_set(True)
+    bpy.context.view_layer.objects.active = primary
+    print(f"[rig_quadruped] joined to single mesh '{primary.name}': "
+          f"{len(primary.data.vertices)} verts")
+    return primary
 
 
 def strip_existing_rig(mesh_obj):
@@ -1469,13 +1504,13 @@ def bake_animation_clips(arm_obj, fps=24):
         whole-period sinusoid the first and last keyframe are identical =
         loop-safe. attack is a one-shot that opens and closes on the rest pose.
 
-    Math mirrors asset_browser.html:
+    Shared rotation conventions:
       - leg / knee swings rotate around the rig's SIDE axis (perpendicular
         to the hip->chest forward direction, horizontal)
-      - tail swish rotates around world +Z (Blender up)
+      - tail swish / head turn / spine counter-sway rotate around world +Z
+        (Blender up)
       - sit/lay drop root bone along world -Z, spine bones along world
         +Z as compensation (non-linear 5-key curve matching paw reach)
-      - idle holds a zero-delta pose
 
     To map a world-axis rotation into a Blender pose rotation on a bone
     with arbitrary rest orientation, we use the conjugation identity:
@@ -1490,10 +1525,6 @@ def bake_animation_clips(arm_obj, fps=24):
     scene = bpy.context.scene
     scene.render.fps = fps
 
-    # Side axis from hips -> chest (same as computeRigSideAxis in the
-    # browser). Skeleton is in armature-local coords by now; we want the
-    # world-space direction so the rotation applies the same way as the
-    # browser computes it.
     # Rig frame in WORLD space (so world-axis pose rotations / translations
     # apply the same way the browser clip math computes them):
     #   side_axis    - left/right axis; leg fore-aft swings rotate about it.
@@ -2033,69 +2064,12 @@ def verify_export(glb_path):
 # Main
 # ---------------------------------------------------------------------------
 
-def disable_import_breaking_addons():
-    """Neutralise user-installed Blender add-ons that corrupt glTF import.
-
-    This machine has the MakeHuman `mpfb` community add-on installed, and on
-    Blender 4.4 its register() dies partway with a SyntaxError. A
-    half-registered add-on is not merely noisy (rig_batch.ps1 already filters
-    the stderr traceback): it leaves Blender's bundled glTF importer in a
-    broken state, so bpy.ops.import_scene.gltf silently yields a degenerate
-    42-vertex stand-in instead of the real 100k-250k-vertex dog mesh. Every
-    downstream stage (bbox, anatomy, heat weighting) then runs on garbage and
-    the export aborts with an unrigged, un-skinned file — which is exactly the
-    "looks rigged but is dead" failure this pipeline exists to prevent.
-
-    `blender --background --factory-startup` sidesteps the add-on entirely,
-    but the batch runner and manual invocations don't always pass it, so the
-    tool self-heals here: disable any add-on that is enabled yet failed to
-    load, plus anything matching the known mpfb / MakeHuman modules by name.
-    Doing this BEFORE the first import restores correct geometry (verified:
-    121,131 verts on dog_regular vs 42 without the guard). Best-effort and
-    fully guarded so a differing add-on API can never take down the re-rig.
-    """
-    try:
-        import addon_utils
-    except Exception as err:
-        print(f"[rig_quadruped] addon guard skipped ({err})", file=sys.stderr)
-        return
-
-    disabled = []
-    for module in list(addon_utils.modules()):
-        name = getattr(module, "__name__", "")
-        if not name:
-            continue
-        lname = name.lower()
-        try:
-            enabled, loaded = addon_utils.check(name)
-        except Exception:
-            # check() itself throwing is a strong signal the add-on is broken.
-            enabled, loaded = (True, False)
-        is_known_bad = ("mpfb" in lname) or ("makehuman" in lname)
-        # The bundled glTF importer (io_scene_gltf2) is a core add-on that
-        # loads cleanly, so `loaded` is True and it is never touched here.
-        if enabled and (is_known_bad or not loaded):
-            try:
-                addon_utils.disable(name, default_set=False)
-                disabled.append(name)
-            except Exception as err:
-                print(f"[rig_quadruped] could not disable add-on {name}: {err}",
-                      file=sys.stderr)
-    if disabled:
-        print(f"[rig_quadruped] disabled import-breaking add-on(s): "
-              f"{', '.join(disabled)}")
-
-
 def main():
     opts = parse_args()
     print(f"[rig_quadruped] input = {opts['input']}")
     print(f"[rig_quadruped] output = {opts['output']}")
     print(f"[rig_quadruped] species = {opts['species']}, "
           f"flip_forward = {opts['flip_forward']}")
-
-    # Must run before any import: a broken user add-on (mpfb/MakeHuman on this
-    # box) corrupts bpy.ops.import_scene.gltf into a 42-vertex stand-in.
-    disable_import_breaking_addons()
 
     reset_scene()
     import_glb(opts["input"])
