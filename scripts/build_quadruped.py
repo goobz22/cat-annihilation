@@ -246,21 +246,27 @@ def species_variant_profile(species, variant):
             p["r_snout"] *= 0.85
             size_mult = 0.90
         elif variant == "big":
-            # Bulky: thicker body/legs/neck, larger head, ~1.3x size.
+            # Bulky: thicker body/legs/neck, larger head, ~1.3x size. Radius
+            # bumps stay moderate (<=1.2x) so the thin spine bones don't bury so
+            # deep in the thick body that heat weighting leaks (which showed up
+            # as fly-away verts on the deformation gate at 1.25x).
             for k in ("r_pelvis", "r_chest", "r_waist", "r_neck", "r_head",
                       "r_leg_top", "r_leg_mid", "r_paw", "r_tail_base"):
-                p[k] *= 1.25
+                p[k] *= 1.18
             size_mult = 1.30
         elif variant == "boss":
-            # Boss: ~2x, with disproportionately HEAVIER neck and chest and a
-            # bigger head — a hulking silhouette that reads at a glance.
+            # Boss: ~2x, with a HEAVIER neck and chest and a bigger head — a
+            # hulking silhouette that reads at a glance. The heavy-part bumps are
+            # capped (chest/neck <=1.35x) for the same buried-bone reason as big;
+            # the 2x overall SIZE (a rigid scale) carries the "huge" read without
+            # needing extreme thickness that would tear.
             for k in ("r_pelvis", "r_waist", "r_leg_top", "r_leg_mid",
                       "r_paw", "r_tail_base"):
-                p[k] *= 1.30
-            p["r_chest"] *= 1.55      # heavy chest
-            p["r_neck"] *= 1.70       # heavy neck
-            p["r_head"] *= 1.35
-            p["r_snout"] *= 1.20
+                p[k] *= 1.18
+            p["r_chest"] *= 1.34      # heavy chest
+            p["r_neck"] *= 1.35       # heavy neck
+            p["r_head"] *= 1.25
+            p["r_snout"] *= 1.15
             p["back_height"] *= 1.05
             p["head_top"] *= 1.05
             size_mult = 2.00
@@ -932,6 +938,33 @@ def render_previews(mesh_obj, arm_obj, out_dir, base_name):
 # Self-contained fallback rig + gait (only used if rig_quadruped import failed)
 # ---------------------------------------------------------------------------
 
+def smooth_skin_weights(mesh_obj, factor=0.5, repeat=3):
+    """Blur the skin weights across adjacent vertices, then re-limit to 4
+    influences and renormalise. WHY: on the bulky variants the thin spine bones
+    sit deep inside a thick body, so heat weighting leaves sharp, locally-wrong
+    weight islands (and the reused envelope fallback can grab a broad radius);
+    under a large motion those islands make individual verts fly away from their
+    bone — the deformation gate's fly-away flags. Smoothing averages each vert's
+    weights with its neighbours, which removes the isolated bad verts and yields
+    the soft, continuous falloff a clean skin needs. It is the standard 'smooth
+    skin weights' finishing pass and is safe on the already-clean lean variants
+    (it only rounds transitions). Runs on our own mesh, not rig_quadruped."""
+    bpy.ops.object.select_all(action='DESELECT')
+    mesh_obj.select_set(True)
+    bpy.context.view_layer.objects.active = mesh_obj
+    try:
+        # Smooth every vertex group together so cross-bone transitions blend.
+        bpy.ops.object.vertex_group_smooth(group_select_mode='ALL',
+                                           factor=factor, repeat=repeat)
+        # glTF skins keep at most 4 influences per vertex; smoothing can spread a
+        # vert across more, so re-limit and renormalise to a valid skin.
+        bpy.ops.object.vertex_group_limit_total(limit=4)
+        bpy.ops.object.vertex_group_normalize_all(lock_active=False)
+        print(f"[build_quadruped] smoothed skin weights (factor={factor}, repeat={repeat})")
+    except Exception as err:
+        print(f"[build_quadruped] weight smoothing skipped ({err})", file=sys.stderr)
+
+
 def _fallback_build_armature(bbox, species, anatomy):
     """Minimal armature with the same bone NAMES/topology the engine + gait code
     require, placed from the provided anatomy landmarks. Only used when
@@ -1163,6 +1196,10 @@ def main():
         RIGLIB.parent_with_auto_weights(mesh_obj, arm_obj)
     else:
         _fallback_bind(mesh_obj, arm_obj)
+
+    # 4b) Smooth the skin weights so no isolated vert flies away under motion
+    #     (critical for the bulky variants; harmless on the lean ones).
+    smooth_skin_weights(mesh_obj)
 
     # 5) Eyes (weighted to head, joined into the body mesh).
     eye_r = add_eyes(mesh_obj, bbox, anatomy)
