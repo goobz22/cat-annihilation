@@ -38,10 +38,11 @@ fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
 not the source constants** — the capture pipeline is
 `scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
-Remaining cosmetic polish: tree crown brightness still reads lighter than the
-web's near-black greens (entity exposure calibrated for characters; a
-per-surface tree calibration vs web pixels is the next nicety) · enemy-bar
-vertical offset sits slightly higher than web's.
+Polish CLOSED 2026-07-17: tree crowns MEASURED at parity after the exposure
+fix (median crown pixels: web (27,77,29) vs native (32,67,37) — native is not
+brighter; no calibration warranted) · enemy-bar anchor calibrated to 1.2 units
+(kHudEnemyBarAnchorNative; the web's cited 1.5 floats over half-unit box dogs,
+native quadrupeds stand ~1.2 — reproduces the web's visual clearance, pinned).
 
 **Web-side finding:** `bun run dev` (vite 7 dev) fails to emit the optimized
 `@react-three/drei` dep on this machine (504 "Outdated Optimize Dep" forever;

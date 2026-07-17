@@ -844,6 +844,13 @@ inline constexpr ColorSwatch kHudWaveSubtitleColor{"survive subtitle",  0xD1, 0x
 // HUD projects each dog's world position with the live camera view-proj and
 // draws the bar with ImGui's foreground draw list.
 inline constexpr float kHudEnemyBarWorldHeight   = 1.5f;  // tsx:483 group position y
+// Calibrated native anchor: the web literal above floats the bar 1.5 units
+// over a HALF-UNIT box dog, i.e. roughly one dog-height of clearance. The
+// native quadruped meshes stand ~1.1-1.2 units tall, so the same 1.5 anchor
+// reads as a bar hovering far above the dog (2026-07-17 side-by-side
+// captures). 1.2 reproduces the web's VISUAL clearance over the native
+// silhouettes; the cited literal stays above as the web source of truth.
+inline constexpr float kHudEnemyBarAnchorNative  = 1.2f;
 inline constexpr float kHudEnemyBarWorldWidth    = 1.0f;  // tsx:485 boxGeometry width
 inline constexpr float kHudEnemyBarWorldBgHeight = 0.08f; // tsx:485 boxGeometry height
 inline constexpr float kHudEnemyBarWorldFgHeight = 0.06f; // tsx:489 fill height

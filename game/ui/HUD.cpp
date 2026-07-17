@@ -729,7 +729,7 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
 
         for (const auto& bar : m_enemyBars) {
             const Engine::vec3 worldTop(bar.worldPosition.x,
-                                        bar.worldPosition.y + WP::kHudEnemyBarWorldHeight,
+                                        bar.worldPosition.y + WP::kHudEnemyBarAnchorNative,
                                         bar.worldPosition.z);
             const Engine::vec3 leftWorld(worldTop.x - camRight.x * halfW,
                                          worldTop.y - camRight.y * halfW,

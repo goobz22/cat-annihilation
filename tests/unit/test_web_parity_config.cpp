@@ -543,6 +543,11 @@ TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-pari
     // Enemy overhead bar (LocalEnemySystem.tsx:483-494) — 1.5u above the dog,
     // 1.0 x 0.08u #333 track, health-tiered fill, tiers at 0.6 / 0.3.
     CHECK(WebParity::kHudEnemyBarWorldHeight == 1.5f);   // tsx:483
+    // The native anchor is a documented calibration UNDER the web literal:
+    // it must clear the ~1.1-1.2-unit native dog silhouette but never
+    // exceed the web value (that would float the bar higher than web).
+    CHECK(WebParity::kHudEnemyBarAnchorNative == 1.2f);
+    CHECK(WebParity::kHudEnemyBarAnchorNative < WebParity::kHudEnemyBarWorldHeight);
     CHECK(WebParity::kHudEnemyBarWorldWidth == 1.0f);    // tsx:485
     CHECK(WebParity::kHudEnemyBarHighThreshold == 0.6f); // tsx:491
     CHECK(WebParity::kHudEnemyBarMidThreshold == 0.3f);  // tsx:492
