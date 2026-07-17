@@ -388,12 +388,13 @@ void PlayerControlSystem::applyPlayerPhysicsTail(float dt,
             "," + std::to_string(movement->velocity.z) + ")");
     }
 
-    // Update health component invincibility
-    auto* health = ecs_->getComponent<HealthComponent>(playerEntity_);
-    if (health) {
-        health->updateInvincibility(dt);
-    }
-
+    // NOTE: HealthComponent::invincibilityTimer is ticked by
+    // HealthSystem::updateHealth, not here. The pre-unification tails ALSO
+    // ticked it (autoplay + legacy keyboard), which drained player i-frames
+    // at exactly 2× speed — every post-hit invincibility window was half
+    // its configured duration. Same single-owner rule as the attackCooldown
+    // note below: a per-frame timer gets exactly one ticker.
+    //
     // NOTE: CombatComponent::attackCooldown is ticked by CombatSystem::update,
     // not here. Ticking it from PlayerControlSystem (which runs at priority 0,
     // before CombatSystem at priority 10) caused the first-frame hit-detection

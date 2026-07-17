@@ -222,11 +222,17 @@ if (!quick && stages[stages.length - 1]!.ok) {
 // headroom: an idle/lightly-moved wave-1 cat dies ~8s into gameplay across
 // observed runs; the script allows ~20s.
 if (!quick && stages[stages.length - 1]!.ok) {
+  // expect:playerZ<=-4 pins the 2026-07-16 inert-keyboard regression: the
+  // WebParity movement branch computed velocity then early-returned BEFORE
+  // the velocity→position integration, so W/A/S/D never moved the cat (only
+  // autoplay's separate physics tail moved, masking it in every autoplay
+  // gate). Spawn faces -Z; 2 s of walk at web speed 6 ≈ -12, so -4 has
+  // ample headroom for the acceleration ramp and dog contact.
   const menuFlowScript = [
     'wait:3', 'expect:state=MainMenu', 'click:0.5,0.364', 'wait:1',
     'click:0.55,0.605', 'wait:2', 'expect:state=Playing', 'expect:wave>=1',
-    'hold:w,1', 'wait:20', 'expect:state=GameOver', 'expect:playerAlive=false',
-    'quit',
+    'hold:w,2', 'expect:playerZ<=-4', 'wait:20', 'expect:state=GameOver',
+    'expect:playerAlive=false', 'quit',
   ].join(';')
   stages.push(
     runStage('menu-flow', 'bun', [

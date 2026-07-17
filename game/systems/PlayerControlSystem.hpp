@@ -11,6 +11,7 @@ namespace CatGame {
 
 class Terrain;
 struct CombatComponent;
+struct MovementComponent;
 
 
 /**
@@ -323,6 +324,14 @@ private:
     // port's TerrainCollisionSystem.tsx static-object push (radius
     // tree + 0.5m player, push to the edge of the combined circle).
     void pushOutOfTrees();
+
+    // The ONE velocity→position physics tail (gravity → integrate →
+    // tree push-out → ground stick → invincibility tick). EVERY steering
+    // path (web-parity keyboard, legacy keyboard, autoplay AI) must end
+    // by calling this — a branch that skips it writes velocity that never
+    // moves the entity (the inert-keyboard regression, 2026-07-16).
+    void applyPlayerPhysicsTail(float dt, MovementComponent* movement,
+                                Engine::Transform* transform);
 
     // Dodge double-tap detection
     struct DoubleTapState {

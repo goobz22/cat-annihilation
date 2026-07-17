@@ -721,6 +721,18 @@ static std::string inputScriptQueryValue(const std::string& query,
         }
         return std::to_string(static_cast<int>(health->currentHealth));
     }
+    if (query == "playerX" || query == "playerY" || query == "playerZ") {
+        // World position — lets movement scripts prove the cat actually
+        // moved (hold:w + expect:playerZ<=...) and, combined with the
+        // state-log's per-tick x/z, lets a harness measure walk speed
+        // against the web's WALK_SPEED for parity.
+        const auto* transform = game->getECS().getComponent<Engine::Transform>(
+            game->getPlayerEntity());
+        if (!transform) return "<no-transform>";
+        if (query == "playerX") return std::to_string(transform->position.x);
+        if (query == "playerY") return std::to_string(transform->position.y);
+        return std::to_string(transform->position.z);
+    }
     return "<unknown-query:" + query + ">";
 }
 
@@ -781,6 +793,15 @@ static void writeStateLogLine(std::ofstream& out, double tSeconds,
     if (const auto* leveling = game->getLevelingSystem()) {
         out << ",\"level\":" << leveling->getLevel()
             << ",\"xp\":" << leveling->getXP();
+    }
+    if (const auto* transform = game->getECS().getComponent<Engine::Transform>(
+            game->getPlayerEntity())) {
+        // Per-tick position turns the timeline into a movement oracle:
+        // distance/Δt across ticks measures actual walk speed for parity
+        // checks without any in-engine instrumentation.
+        out << ",\"x\":" << transform->position.x
+            << ",\"y\":" << transform->position.y
+            << ",\"z\":" << transform->position.z;
     }
     out << "}\n";
     out.flush();
