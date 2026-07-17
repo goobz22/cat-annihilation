@@ -334,7 +334,7 @@ TEST_CASE("Query property: AND-query result matches std::set oracle under churn"
         allEntities.push_back(ecs.createEntity());
     }
 
-    std::mt19937 rng(0xFA571337u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_query:0xFA571337")));
     std::uniform_int_distribution<int> opCoin(0, 5);
 
     for (int step = 0; step < 2000; ++step) {
