@@ -26,10 +26,10 @@
 // vTexCoord still passes through from the vertex shader so a future
 // authored-UV path (e.g. road decals, biome blends) can reuse it.
 //
-// Lighting (Lambert + sun + ambient) and the existing distance fog
-// stay in place — Step 2 of the survival port retunes the fog values
-// to the web port's #4c6156 near=30 far=150 forest fog. Until that
-// lands, fog still blends to SKY_COLOR with the pre-port density.
+// Lighting (Lambert + sun + ambient) stays in place; the distance fog
+// blends the ground toward the web scene's ACTUAL fog colour #87CEEB
+// (the sky), near=30 far=150 — see the FOG_COLOR block below for why the
+// reference's #4c6156 <fog> literal is inert and #87CEEB is what renders.
 
 // Percentage-closer-filtering helpers (pcfShadow + SHADOW_BIAS/PCF_RADIUS via
 // constants.glsl). Reused verbatim from the engine's shadow toolkit rather
@@ -74,37 +74,68 @@ layout(push_constant) uniform TerrainFragPC {
 const vec3 SUN_DIR   = normalize(vec3(10.0, 10.0, 5.0)); // web BasicScene.tsx:196 directionalLight position [10,10,5] = (2/3, 2/3, 1/3)
 const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);              // web directional light is pure white, intensity 1
 
-// SKY_COLOR — kept here for the existing swapchain-clear-lockstep
-// invariant only. The terrain fragment shader no longer blends TO
-// this value; it now uses FOG_COLOR (forest haze) per the web port
-// (see ForestEnvironment.tsx `<fog args={['#4c6156', 30, 150]}>`).
-// Sky is its own thing now.
+// SKY_COLOR — retained only for the swapchain-clear-lockstep invariant
+// (kept in sync with the engine's clear value). The terrain shader does
+// NOT blend to this stale (0.50,0.72,0.95); the distance fog below blends
+// to FOG_COLOR, which is now the web scene's ACTUAL fog colour #87CEEB.
 const vec3 SKY_COLOR = vec3(0.50, 0.72, 0.95);
 
-// 2026-04-26 SURVIVAL-PORT (Step 2) — fog values switched to mirror
-// the web port's ForestEnvironment fog exactly:
-//   fog color  #4c6156  =  (76, 97, 86) / 255  ≈  (0.298, 0.380, 0.337)
-//   fog model  linear, near=30, far=150
+// 2026-07-17 WORLD-RENDER PARITY — fog colour corrected to #87CEEB (the
+// SKY colour), NOT the #4c6156 the previous port used.
 //
-// Why we ditched the prior exp² fog:
-// The web port uses three.js's basic linear fog
-// (`<fog attach="fog" args={[color, near, far]}>` = THREE.Fog, linear).
-// The two formulas give visibly different falloff curves: linear is
-// flat at d<near, ramps in a straight line to 1 at d=far, and clamps
-// past that. exp² has a long soft tail that never quite saturates.
-// To get a visually identical look to the web port's forest haze we
-// match the linear formula directly here. If a future iteration wants
-// the exp² aesthetic back (e.g. for an open-sky biome) it can branch
-// on a uniform — that's not in scope for survival parity.
-// LINEAR-SPACE fog color. The web reference authors #4c6156 as an sRGB
-// hex; this shader's output goes through the swapchain's linear→sRGB
-// encode, so the constant must hold the DECODED linear value
-// srgb_to_linear(76,97,86 / 255) — writing the raw hex bytes here (the
-// previous value) meant the swapchain re-encoded them and the displayed
-// haze came out a washed-out (147,163,155) instead of #4c6156.
-const vec3  FOG_COLOR = vec3(0.0723, 0.1193, 0.0929);
+// The earlier port fogged the ground to #4c6156 (a dark forest green),
+// read from ForestEnvironment.tsx:485 `<fog args={['#4c6156', 30, 150]}>`.
+// But that <fog> is a child of ForestEnvironment's <group>, so R3F's
+// attach="fog" assigns it to group.fog — which three.js NEVER reads (only
+// scene.fog participates in rendering). The fog that ACTUALLY renders is
+// SurvivalScene's own `<fog args={['#87CEEB', 30, 150]}>` (BasicScene.tsx
+// :192), a direct Canvas child → scene.fog. So the web ground fades toward
+// the SKY colour #87CEEB, which is why the reference horizon is a bright
+// blue-green haze that blends seamlessly into the sky (build-ninja/webref/
+// web_03_gameplay_early.png) rather than a hard dark-green edge. Fogging the
+// native ground to #4c6156 instead produced exactly that hard edge — a dark
+// band where the ground met the flat sky. Verified 2026-07-17 by reading the
+// live scene.fog off http://localhost:4173 and by sampling the horizon
+// pixels (a light ~(170,192,193) haze, not a dark #4c6156 band).
+//
+// Stored as the srgb_to_linear DECODE of #87CEEB (135,206,235) so the
+// swapchain's linear→sRGB encode lands the fogged horizon EXACTLY on the
+// pinned sky colour (WebParity::kSkyLinear — the sky_gradient pass paints
+// the identical value), making the fogged ground and the sky meet with no
+// seam. Linear falloff, near=30 far=150 (THREE.Fog is linear; matches
+// SurvivalScene's fog args exactly).
+const vec3  FOG_COLOR = vec3(0.2418, 0.6174, 0.8315); // srgb_to_linear(#87CEEB) == WebParity::kSkyLinear
 const float FOG_NEAR  = 30.0;
 const float FOG_FAR   = 150.0;
+
+// Ground diffuse .color — the web ground is
+//   <meshStandardMaterial color="#7fb069" map={grassTexture} .../>
+// (ForestEnvironment.tsx:308-314). three multiplies BOTH:
+// diffuseColor = color * mapTexel. The grass texture's base fill is ALSO
+// #7fb069 (GrassTexture.cpp), so the web ground albedo is decode(#7fb069)^2
+// — far deeper than the single map decode this shader used to sample. The
+// grassSampler is a VK_FORMAT_..._SRGB texture, so it already decodes the
+// map's #7fb069 to linear; the native path just omitted the material .color
+// multiply, leaving the ground ~2x too light. GROUND_COLOR_LINEAR ports that
+// omitted .color as the linear decode of #7fb069 (== WebParity::
+// kGroundColorLinear, pinned).
+const vec3 GROUND_COLOR_LINEAR = vec3(0.2121, 0.4340, 0.1413);
+
+// Ground lighting reconciliation — WebParity::kWebGroundExposure.
+// three shades the ground with a physical Lambert BRDF (diffuse * 1/PI ≈
+// 0.318) and the R3F default renderer tone-maps (ACESFilmic); the native
+// ground uses a non-physical Lambert (no 1/PI) and no tone map, so with the
+// SAME 0.5 ambient + intensity-1 sun it rendered ~3x too bright. This single
+// exposure factor reconciles the two so the ground matches the measured web
+// reference — a deep green ~(27,60,15) sRGB near the camera (sampled
+// 2026-07-17 from web_03_gameplay_early.png and the live localhost:4173
+// capture). It is folded into the ALBEDO below rather than the lit colour:
+// the ground shading is linear in albedo, so pre-scaling the albedo is
+// numerically identical to post-scaling the lit result, and it keeps the
+// ambient/directional lighting-term lines untouched. The fog target (sky)
+// is deliberately NOT scaled — the sky stays full-bright so the fogged
+// horizon meets it seam-free.
+const float WEB_GROUND_EXPOSURE = 0.21;
 
 // Tile size in world units — must match
 // CatGame::GrassTextureBuffer::TileSize. If a future iteration changes
@@ -147,7 +178,14 @@ void main() {
     // address mode (configured in ScenePass::CreateTextureResources)
     // gives us seamless tiling across the entire heightmap.
     vec2 grassUv = vWorldPos.xz / GRASS_TILE_SIZE;
-    vec3 albedo = texture(grassSampler, grassUv).rgb;
+    // Effective ground albedo: three does diffuseColor = material.color * map;
+    // the native path sampled only the map, so multiply in the omitted .color
+    // (#7fb069, GROUND_COLOR_LINEAR). WEB_GROUND_EXPOSURE is folded in here
+    // too — the ground shading is linear in albedo, so pre-scaling the albedo
+    // is identical to post-scaling the lit colour, and it leaves the ambient/
+    // directional lighting-term lines below byte-for-byte untouched.
+    vec3 albedo = texture(grassSampler, grassUv).rgb
+                  * GROUND_COLOR_LINEAR * WEB_GROUND_EXPOSURE;
 
     vec3 n = normalize(vNormal);
     float lambert = max(dot(n, SUN_DIR), 0.0);
