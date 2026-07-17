@@ -342,4 +342,132 @@ inline float srgbChannelToLinear(int srgbChannel255) {
                                   : std::pow((channel + 0.055) / 1.055, 2.4));
 }
 
+// ---------------------------------------------------------------------
+// Environment — reference: the SURVIVAL composition in
+// src/components/game/BasicScene.tsx (SurvivalScene, lines 181-211) and
+// the forest props in src/components/game/ForestEnvironment.tsx.
+//
+// PARITY-TARGET WARNING (mirrors the wave/hotbar live-path notes above):
+// BasicScene.tsx ships TWO scenes. Survival mode renders SurvivalScene
+// (181-211); story mode renders StoryScene (213-251), a DIFFERENT
+// composition that additionally mounts <SimpleTerrainSystem/> and
+// <TerrainCollisionSystem/>. The 1:1 target is SURVIVAL, so every value
+// below is read from SurvivalScene — NOT from the story path, whose
+// terrain-collision behaviour is deliberately absent from survival.
+// ---------------------------------------------------------------------
+
+// Tree wind sway — ForestEnvironment.tsx:145-148. Every Pine/Oak `Tree`
+// runs a per-frame useFrame that rotates the whole tree group about its
+// base by a tiny amount, so the canopy shimmers in the wind:
+//     time       = animOffset + clock.elapsedTime * 0.5      (tsx:145)
+//     rotation.x = Math.sin(time)       * 0.01               (tsx:147)
+//     rotation.z = Math.cos(time * 0.7) * 0.01               (tsx:148)
+// `animOffset` is a per-tree random phase uniform in [0, 2π)
+// (tsx:130: Math.random() * Math.PI * 2), which keeps neighbours out of
+// phase so the forest doesn't oscillate in lockstep. Bushes (tsx:201) and
+// Rocks (tsx:218) have NO useFrame — they never sway — so the native sway
+// MUST be applied to Pine/Oak instances ONLY.
+//
+// AUDIT DELTA (verified at HEAD): an earlier parity note paraphrased the z
+// term as cos((animOffset + elapsed) * 0.7). The LIVE code multiplies 0.7
+// into the ALREADY-time-scaled value (elapsed is scaled by 0.5 first, then
+// the whole `time` is scaled by 0.7), NOT into elapsed at full rate. The
+// helpers below reproduce the executed literals exactly.
+inline constexpr float kTreeSwayAmplitudeRadians = 0.01f;   // tsx:146 swayAmount
+inline constexpr float kTreeSwayTimeScale = 0.5f;           // tsx:145 elapsed * 0.5
+inline constexpr float kTreeSwayZFrequencyFactor = 0.7f;    // tsx:148 time * 0.7
+// tsx:130 — the per-tree random phase spans [0, 2π). The render side seeds
+// one animOffset per Pine/Oak instance with a uniform draw over this range.
+inline constexpr float kTreeSwayPhaseMaxRadians = 6.2831853071795862f; // 2π
+
+// Sway rotation about the tree's local X axis (radians) for a given
+// monotonic engine-clock time and the tree's fixed random phase. Apply the
+// X and Z rotations at the tree's BASE pivot — i.e. fold them into the
+// model matrix as translate(pos) * rotateX(sway) * rotateZ(sway) *
+// rotateY(baseYaw) * scale, matching three.js applying `group.rotation`
+// about the group origin that sits at the trunk base. Not constexpr:
+// std::sin/std::cos are not constexpr in C++20.
+inline float treeSwayRotationX(float animOffsetRadians, float elapsedSeconds) {
+    const float swayTime = animOffsetRadians + elapsedSeconds * kTreeSwayTimeScale;
+    return std::sin(swayTime) * kTreeSwayAmplitudeRadians;
+}
+// Sway rotation about the tree's local Z axis (radians). Note the extra
+// kTreeSwayZFrequencyFactor applied to the SAME `swayTime` used by the X
+// axis, so the two axes trace a slow Lissajous rather than a circle.
+inline float treeSwayRotationZ(float animOffsetRadians, float elapsedSeconds) {
+    const float swayTime = animOffsetRadians + elapsedSeconds * kTreeSwayTimeScale;
+    return std::cos(swayTime * kTreeSwayZFrequencyFactor) * kTreeSwayAmplitudeRadians;
+}
+
+// Lighting — SurvivalScene (BasicScene.tsx:195-196). The native survival
+// shaders (shaders/scene/scene.frag, shaders/scene/entity.frag) HARDCODE
+// their own GLSL light literals; GLSL cannot include this C++ header, so
+// these constants are the WEB TARGETS the shader-side owner matches the
+// literals against (and that the pinning test guards) — exactly the
+// authored-here / consumed-by-the-shader-path arrangement kSkyLinear* uses.
+//
+// LIGHTING-MODEL CAVEAT (surfaced as a group risk): three.js
+// MeshStandardMaterial is a full PBR BRDF, whereas the native survival
+// shaders are pure Lambert + a flat ambient term. Matching these numbers
+// only APPROXIMATES the web look; an exact match is impossible without
+// porting the BRDF, so treat the numeric parity as "close, deliberately".
+
+// tsx:195 — <ambientLight intensity={0.5} />. ONE scene-wide ambient
+// intensity. The native side currently splits ambient into a terrain
+// constant (scene.frag: albedo * 0.28) and an entity constant
+// (entity.frag: albedo * 0.35); web parity wants BOTH to read 0.5.
+inline constexpr float kAmbientLightIntensity = 0.5f;
+
+// tsx:196 — <directionalLight position={[10, 10, 5]} intensity={1} castShadow />.
+// three.js aims a directionalLight FROM its position TOWARD the target
+// (default origin), so the shading DIRECTION (surface→light) a shader needs
+// is normalize(position). No `color` prop is set, so three.js uses the
+// default white 0xffffff. These are the PRE-normalize position components.
+inline constexpr float kSunDirectionX = 10.0f; // tsx:196 position.x
+inline constexpr float kSunDirectionY = 10.0f; // tsx:196 position.y
+inline constexpr float kSunDirectionZ = 5.0f;  // tsx:196 position.z
+inline constexpr float kSunIntensity = 1.0f;   // tsx:196 intensity
+inline constexpr float kSunColorR = 1.0f;      // tsx:196 default white
+inline constexpr float kSunColorG = 1.0f;
+inline constexpr float kSunColorB = 1.0f;
+
+// Length of the raw sun position vector; normalize(10,10,5) has length
+// sqrt(225) = 15, so the unit light direction is (2/3, 2/3, 1/3) ≈
+// (0.6667, 0.6667, 0.3333). Provided so the shader owner and the pinning
+// test share ONE derived value rather than each re-deriving the sqrt (and
+// so nobody re-uses the incorrect (0.766,0.766,0.383) from the stale audit
+// note — that vector is not even unit length). Not constexpr: std::sqrt.
+inline float sunDirectionLength() {
+    return std::sqrt(kSunDirectionX * kSunDirectionX +
+                     kSunDirectionY * kSunDirectionY +
+                     kSunDirectionZ * kSunDirectionZ);
+}
+inline float sunDirectionNormalizedX() { return kSunDirectionX / sunDirectionLength(); }
+inline float sunDirectionNormalizedY() { return kSunDirectionY / sunDirectionLength(); }
+inline float sunDirectionNormalizedZ() { return kSunDirectionZ / sunDirectionLength(); }
+
+// tsx:190 — <Canvas shadows> — plus the directionalLight's castShadow
+// (tsx:196) and castShadow/receiveShadow on the ground and every
+// tree/foliage/bush/rock mesh (ForestEnvironment.tsx). Real-time shadow
+// maps are ON in web survival; the native survival ScenePass currently
+// renders none (pure Lambert + ambient with no shadow sampler). This flag
+// records the web target for the shadow-pass wiring + its regression test.
+inline constexpr bool kShadowsEnabled = true;
+
+// Player ↔ tree collision — the web SURVIVAL scene has NONE, so under
+// parity the cat walks straight through every tree/bush/rock. Full trace:
+//   - SurvivalScene (BasicScene.tsx:181-211) mounts NEITHER
+//     <TerrainCollisionSystem/> NOR <SimpleTerrainSystem/>.
+//   - TerrainCollisionSystem.tsx:84-96 (the only code that pushes the
+//     player out of static objects) iterates terrainCollisionData
+//     .staticObjects, which is populated ONLY by SimpleTerrainSystem.tsx:252.
+//   - Both of those systems are mounted EXCLUSIVELY in StoryScene
+//     (BasicScene.tsx:232,239); ForestEnvironment.tsx registers no colliders.
+// Therefore the native player-tree push (PlayerControlSystem::pushOutOfTrees,
+// fed by Forest::findTreesInRadius) must be a no-op under parity. The
+// pre-parity owner directive "make sure i cant walk through" is preserved on
+// the !kEnabled branch — the same behind-the-flag divergence pattern the rest
+// of this header uses. Forest::findTreesInRadius reads this flag directly.
+inline constexpr bool kForestPlayerCollision = false;
+
 } // namespace CatGame::WebParity
