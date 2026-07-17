@@ -128,6 +128,16 @@ void GameUI::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, u
 
         case GameState::Playing:
             m_hud->render(uiPass, screenWidth, screenHeight);
+            // The between-waves transition panel. The GAME state stays
+            // Playing through the entire clear→gate→popup→spawn window (the
+            // dedicated WaveComplete UI state below is never entered during
+            // live play), so gating the popup on THAT state meant it never
+            // rendered once in a real run — showWaveComplete() fired, the
+            // panel stayed invisible, and no capture ever showed it
+            // (diagnosed 2026-07-17 via the wavescan probe). The popup
+            // early-returns unless visible, so this line is inert outside
+            // the transition window.
+            m_wavePopup->render(uiPass, screenWidth, screenHeight);
             break;
 
         case GameState::Paused:
