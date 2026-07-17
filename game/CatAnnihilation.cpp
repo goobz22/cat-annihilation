@@ -1685,8 +1685,21 @@ void CatAnnihilation::updateUI(float dt) {
                     ? static_cast<float>(window_->getWidth()) /
                           static_cast<float>(window_->getHeight())
                     : 1.0f;
+                // Feed the HUD the SAME lookAt inputs the scene render uses
+                // (render(): view = lookAt(getCameraPosition(),
+                // playerPos + (0,0.75,0))) so bars project onto the rendered
+                // dogs instead of floating above them (2026-07-17 audit).
+                // getCameraPosition() is the pre-shake eye — the transient
+                // hit-shake the scene adds is a sub-frame wobble not worth
+                // caching a frame late for.
+                const Engine::vec3 camPos = playerControlSystem_->getCameraPosition();
+                Engine::vec3 camTarget = camPos + playerControlSystem_->getCameraForward();
+                if (const auto* playerXform =
+                        ecs_.getComponent<Engine::Transform>(playerEntity_)) {
+                    camTarget = playerXform->position + Engine::vec3(0.0f, 0.75f, 0.0f);
+                }
                 activeHud.setEnemyBarCamera(
-                    playerControlSystem_->getCameraTransform(),
+                    camPos, camTarget,
                     60.0f * Engine::Math::DEG_TO_RAD, aspect, 0.1f, 2000.0f);
                 auto enemyQuery = ecs_.query<Engine::Transform, HealthComponent>();
                 for (const auto& [entity, transform, health] : enemyQuery.view()) {

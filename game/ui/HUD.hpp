@@ -177,7 +177,12 @@ public:
      * @param nearPlane        Camera near plane.
      * @param farPlane         Camera far plane.
      */
-    void setEnemyBarCamera(const Engine::Transform& cameraTransform,
+    // Feed the scene's exact camera as lookAt inputs: `cameraPosition` and
+    // `cameraTarget` must be the SAME eye/target the scene render passes to
+    // mat4::lookAt (including any camera shake on the eye), so projected
+    // bars land on the rendered dogs.
+    void setEnemyBarCamera(const Engine::vec3& cameraPosition,
+                           const Engine::vec3& cameraTarget,
                            float fovYRadians, float aspect,
                            float nearPlane, float farPlane);
 
@@ -379,7 +384,14 @@ private:
         float healthRatio;
     };
     std::vector<EnemyBar> m_enemyBars;
-    Engine::Transform m_enemyBarCamera;
+    // Enemy-bar camera stored as the SCENE's lookAt inputs (eye + target),
+    // not a free camera Transform: the bars must project with the EXACT same
+    // view the scene renders the dogs with, or they float off the heads
+    // (2026-07-17 audit — the old getCameraTransform path used the camera's
+    // yaw/pitch, ~2.6 deg off the scene's lookAt(camPos, playerTorso), and
+    // missed camera shake). The view is rebuilt as mat4::lookAt(pos, target).
+    Engine::vec3 m_enemyBarCamPos{0.0f, 0.0f, 0.0f};
+    Engine::vec3 m_enemyBarCamTarget{0.0f, 0.0f, -1.0f};
     float m_enemyBarFovY = 1.309f;     // 75 deg (web PerspectiveCamera fov=75) until fed
     float m_enemyBarAspect = 16.0f / 9.0f;
     float m_enemyBarNear = 0.1f;

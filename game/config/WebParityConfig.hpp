@@ -860,13 +860,14 @@ inline constexpr ColorSwatch kHudWaveSubtitleColor{"survive subtitle",  0xD1, 0x
 // HUD projects each dog's world position with the live camera view-proj and
 // draws the bar with ImGui's foreground draw list.
 inline constexpr float kHudEnemyBarWorldHeight   = 1.5f;  // tsx:483 group position y
-// Calibrated native anchor: the web literal above floats the bar 1.5 units
-// over a HALF-UNIT box dog, i.e. roughly one dog-height of clearance. The
-// native quadruped meshes stand ~1.1-1.2 units tall, so the same 1.5 anchor
-// reads as a bar hovering far above the dog (2026-07-17 side-by-side
-// captures). 1.2 reproduces the web's VISUAL clearance over the native
-// silhouettes; the cited literal stays above as the web source of truth.
-inline constexpr float kHudEnemyBarAnchorNative  = 1.2f;
+// Native anchor. Now that the bar projection uses the SCENE's exact lookAt
+// view (2026-07-17 audit fix — previously it used a ~2.6-deg-off yaw/pitch
+// camera that floated bars high, and this was hacked down to 1.2 to
+// compensate), the web's cited 1.5 projects honestly: 1.5 above the dog's
+// origin sits ~0.3 over a ~1.2-tall native quadruped's head — the same
+// "just above the head" clearance the web shows. So the calibration hack is
+// gone and the native anchor equals the web literal.
+inline constexpr float kHudEnemyBarAnchorNative  = 1.5f;
 
 // ---- Wave-transition panel (WaveTransition.tsx, mounted BasicScene:184) --
 // The BETWEEN-waves popup is a small centered dark panel with three

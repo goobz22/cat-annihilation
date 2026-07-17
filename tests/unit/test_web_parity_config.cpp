@@ -607,7 +607,7 @@ TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-pari
     // The native anchor is a documented calibration UNDER the web literal:
     // it must clear the ~1.1-1.2-unit native dog silhouette but never
     // exceed the web value (that would float the bar higher than web).
-    CHECK(WebParity::kHudEnemyBarAnchorNative == 1.2f);
+    CHECK(WebParity::kHudEnemyBarAnchorNative == 1.5f);  // == web literal after the projection fix
 
     // Wave-transition panel (WaveTransition.tsx) — the between-waves popup
     // is a small dark card with three STAGGERED lines; it says "WAVE" while
@@ -620,7 +620,7 @@ TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-pari
     CHECK(WebParity::kWaveTransitionNext.green == 0xFF);
     CHECK(WebParity::kWaveTransitionNextDelay == 0.8f);         // tsx:18 800ms
     CHECK(WebParity::kWaveTransitionEnemiesDelay == 1.6f);      // tsx:19 1600ms
-    CHECK(WebParity::kHudEnemyBarAnchorNative < WebParity::kHudEnemyBarWorldHeight);
+    CHECK(WebParity::kHudEnemyBarAnchorNative == WebParity::kHudEnemyBarWorldHeight);  // honest projection -> web literal used directly
     CHECK(WebParity::kHudEnemyBarWorldWidth == 1.0f);    // tsx:485
     CHECK(WebParity::kHudEnemyBarHighThreshold == 0.6f); // tsx:491
     CHECK(WebParity::kHudEnemyBarMidThreshold == 0.3f);  // tsx:492

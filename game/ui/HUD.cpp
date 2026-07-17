@@ -715,15 +715,27 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
     // camera and at least one enemy this frame (INTEGRATION: see setEnemyBarCamera
     // / addEnemyBar); empty otherwise, so this is inert until wired.
     if (m_enemyBarCameraValid && !m_enemyBars.empty()) {
+        // Build the view from the SCENE's exact lookAt inputs so the bars
+        // project onto the rendered dogs (not the ~2.6-deg-off yaw/pitch
+        // camera the old getCameraTransform path used). mat4::perspective
+        // stays the HUD's GL-convention projection, which projectWorldPoint's
+        // (1 - ndcY) mapping already matches — only the VIEW was wrong.
+        const Engine::vec3 worldUp(0.0f, 1.0f, 0.0f);
         const Engine::mat4 view =
-            m_enemyBarCamera.rotation.toMatrix().transposed() *
-            Engine::mat4::translate(Engine::vec3(-m_enemyBarCamera.position.x,
-                                                 -m_enemyBarCamera.position.y,
-                                                 -m_enemyBarCamera.position.z));
+            Engine::mat4::lookAt(m_enemyBarCamPos, m_enemyBarCamTarget, worldUp);
         const Engine::mat4 proj = Engine::mat4::perspective(
             m_enemyBarFovY, m_enemyBarAspect, m_enemyBarNear, m_enemyBarFar);
         const Engine::mat4 viewProj = proj * view;
-        const Engine::vec3 camRight = m_enemyBarCamera.right();
+        // Camera right for the horizontal billboard: forward x up. Falls back
+        // to world +X if the camera looks straight down (degenerate cross).
+        Engine::vec3 forward = m_enemyBarCamTarget - m_enemyBarCamPos;
+        const float forwardLen = forward.length();
+        forward = forwardLen > 1e-5f ? forward * (1.0f / forwardLen)
+                                     : Engine::vec3(0.0f, 0.0f, -1.0f);
+        Engine::vec3 camRight = forward.cross(worldUp);
+        const float rightLen = camRight.length();
+        camRight = rightLen > 1e-5f ? camRight * (1.0f / rightLen)
+                                    : Engine::vec3(1.0f, 0.0f, 0.0f);
         const float halfW = WP::kHudEnemyBarWorldWidth * 0.5F;
         ImDrawList* fg = ImGui::GetForegroundDrawList();
 
@@ -897,10 +909,12 @@ void HUD::setActiveWeaponSkill(int level, int currentXp, int xpToNextLevel) {
     m_weaponSkillXpToNext = xpToNextLevel;
 }
 
-void HUD::setEnemyBarCamera(const Engine::Transform& cameraTransform,
+void HUD::setEnemyBarCamera(const Engine::vec3& cameraPosition,
+                            const Engine::vec3& cameraTarget,
                             float fovYRadians, float aspect,
                             float nearPlane, float farPlane) {
-    m_enemyBarCamera = cameraTransform;
+    m_enemyBarCamPos = cameraPosition;
+    m_enemyBarCamTarget = cameraTarget;
     m_enemyBarFovY = fovYRadians;
     m_enemyBarAspect = aspect;
     m_enemyBarNear = nearPlane;
