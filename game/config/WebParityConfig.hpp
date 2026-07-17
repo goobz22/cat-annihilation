@@ -357,6 +357,187 @@ inline float srgbChannelToLinear(int srgbChannel255) {
 }
 
 // ---------------------------------------------------------------------
+// Pre-game menu + death screen — full COPY and CHROME COLORS.
+// reference: src/components/ui/GameModeSelection.tsx (menu + customize),
+// src/components/ui/GameOverScreen.tsx (death modal), and their CSS in
+// src/styles/components/menus.css + src/styles/components/ui.css.
+//
+// WHY THESE LIVE HERE: the 2026-07-17 presentation audit found the native
+// menu/death screens diverging DRASTICALLY from the web even though the
+// gameplay NUMBERS matched — a gold free-floating title + five stacked
+// buttons vs the web's white-on-navy card with two side-by-side mode
+// cards, and a fullscreen death text vs the web's red-glow modal. The
+// strings and the exact web hex colors are the parity contract for the
+// rebuilt MainMenu / renderEndScreenOverlay; pinning them here (and in
+// test_web_parity_config.cpp) means the rendered look can no longer drift
+// from the reference silently, exactly like the gameplay constants above.
+//
+// COLOR-SPACE NOTE: these are UI CHROME colors handed to Dear ImGui as the
+// raw web sRGB bytes (divide by 255, no linear decode) — ImGui composites
+// widget/DrawList colors without any color-space conversion, so a swatch or
+// panel shows the literal web hex. This is the SAME path the fur/eye
+// swatches use (see the ColorButton note in MainMenu.cpp); it is the
+// opposite of kSkyLinear*/getSelected*Linear, which decode to LINEAR
+// because THOSE feed a shader that multiplies in linear space. UI chrome
+// never touches a shader, so it must NOT be linear-decoded.
+//
+// LAYOUT-SIZE NOTE: only COLORS + COPY are pinned here. The pixel paddings /
+// radii / card widths are native ImGui approximations of the CSS box model
+// (the web lays out with fl0.9x/rem/vw; the native menu positions absolute
+// px in a full-screen ImGui overlay), so they live as cited inline
+// constants at the MainMenu draw sites rather than as false-precision pins.
+
+// A UI chrome color as the raw web sRGB hex bytes (0-255). Distinct from
+// ColorSwatch (which carries a player-facing swatch name for a tooltip):
+// chrome colors are backgrounds/borders/text with no name to show, so this
+// is just the three bytes the ImGui DrawList consumes as IM_COL32(r,g,b,a).
+struct UiColor {
+    int red;   // sRGB 0-255, exactly the web hex literal
+    int green;
+    int blue;
+};
+
+// ---- Menu copy (GameModeSelection.tsx) ------------------------------
+// Survival card body — tsx:325-327 (description) + :329-332 (features).
+inline constexpr const char* kSurvivalCardDescription =
+    "Face unlimited waves of enemies and see how long you can survive. "
+    "Perfect your combat skills and climb the leaderboards.";
+inline constexpr const char* kSurvivalFeatures[] = {
+    "Endless wave-based combat",
+    "Weapon skill progression",
+    "Increasing difficulty",
+    "Quick action gameplay",
+};
+inline constexpr int kSurvivalFeatureCount =
+    static_cast<int>(sizeof(kSurvivalFeatures) / sizeof(kSurvivalFeatures[0]));
+
+// Story card body — tsx:344-346 (description) + :348-351 (features). The
+// story path is P3-deferred (docs/parity/PARITY_MATRIX.md), so the native
+// card renders these greyed with the coming-soon tag and does nothing on
+// click — the web card is fully live, this is a deliberate divergence.
+inline constexpr const char* kStoryCardDescription =
+    "Join a clan and embark on epic quests. Experience a Warriors-inspired "
+    "adventure with rich storytelling and character progression.";
+inline constexpr const char* kStoryFeatures[] = {
+    "Choose from 4 unique clans",
+    "Quest-based progression",
+    "Rich storylines & dialogue",
+    "Clan politics & relationships",
+};
+inline constexpr int kStoryFeatureCount =
+    static_cast<int>(sizeof(kStoryFeatures) / sizeof(kStoryFeatures[0]));
+inline constexpr const char* kStoryComingSoon = "Coming soon";
+
+// Development-status banner — tsx:360-361. The web bolds the "Development
+// Status:" lead; the native banner renders it in the bold font, the rest
+// regular, matching the <strong> treatment.
+inline constexpr const char* kDevStatusHeading = "Development Status:";
+inline constexpr const char* kDevStatusLine1 =
+    "All game modes are in active live development";
+inline constexpr const char* kDevStatusLine2 =
+    "Leaderboards coming soon! Track your progress and compete with other warriors.";
+
+// Footer / action labels. The web renders "🗑️ Reset Progress" and, on the
+// first click, "⚠️ Click again to confirm" (tsx:423, two-click guard); the
+// native menu drops the emoji (no atlas glyph) and keeps the two-step copy.
+// "← Back" / "Start Game" are the customize footer (tsx:291/304); native
+// uppercases them to match this menu's button voice. Quit has NO web analog
+// — it is the one deliberate desktop-exit affordance parity keeps.
+inline constexpr const char* kResetProgressLabel = "Reset Progress";
+inline constexpr const char* kResetConfirmLabel = "Click again to confirm";
+inline constexpr const char* kBackLabel = "BACK";
+inline constexpr const char* kStartGameLabel = "START GAME";
+inline constexpr const char* kQuitLabel = "Quit";
+
+// ---- Death screen copy (GameOverScreen.tsx) -------------------------
+// tsx:57 title, :60 message, :72 restart button, :76 hint. The native
+// modal ports these verbatim (the web button reads "Try Again"; native
+// uppercases the label to match its button voice, hint stays exact).
+inline constexpr const char* kDeathTitle = "YOU DIED";
+inline constexpr const char* kDeathMessage = "Your cat has fallen in battle!";
+inline constexpr const char* kDeathRestartLabel = "TRY AGAIN";
+inline constexpr const char* kDeathPrompt = "Press Space or click to restart";
+
+// ---- Menu chrome colors (menus.css) ---------------------------------
+// Overlay navy gradient stops — menus.css:1120 (135deg #1a1a2e→#16213e→
+// #0f3460). This REPLACES the native starfield: the web menu has NO star
+// specks, just this three-stop navy wash.
+inline constexpr UiColor kMenuBgTop    = {0x1A, 0x1A, 0x2E}; // #1a1a2e
+inline constexpr UiColor kMenuBgMid    = {0x16, 0x21, 0x3E}; // #16213e
+inline constexpr UiColor kMenuBgBottom = {0x0F, 0x34, 0x60}; // #0f3460
+// Card container gradient + border — menus.css:1177-1178 (145deg
+// #2d2d2d→#1a1a1a, 3px #444).
+inline constexpr UiColor kCardTop    = {0x2D, 0x2D, 0x2D}; // #2d2d2d
+inline constexpr UiColor kCardBottom = {0x1A, 0x1A, 0x1A}; // #1a1a1a
+inline constexpr UiColor kCardBorder = {0x44, 0x44, 0x44}; // #444
+// Card header band — menus.css:1201-1202 (180deg #444→#333, 3px #555
+// bottom rule).
+inline constexpr UiColor kHeaderTop    = {0x44, 0x44, 0x44}; // #444
+inline constexpr UiColor kHeaderBottom = {0x33, 0x33, 0x33}; // #333
+inline constexpr UiColor kHeaderRule   = {0x55, 0x55, 0x55}; // #555
+// Menu heading + subheading text — menus.css:1206 (#fff) / :1215 (#ccc).
+// The web title is WHITE, not the gold the pre-audit native menu used.
+inline constexpr UiColor kMenuTitleColor    = {0xFF, 0xFF, 0xFF}; // #fff
+inline constexpr UiColor kMenuSubtitleColor = {0xCC, 0xCC, 0xCC}; // #ccc
+// Mode card gradient + border — menus.css:1229-1230 (145deg #333→#2a2a2a,
+// 2px #555). The accent colors are the feature-panel left edge (:1297
+// survival red, :1301 story teal) and the card's hover border.
+inline constexpr UiColor kModeCardTop    = {0x33, 0x33, 0x33}; // #333
+inline constexpr UiColor kModeCardBottom = {0x2A, 0x2A, 0x2A}; // #2a2a2a
+inline constexpr UiColor kModeCardBorder = {0x55, 0x55, 0x55}; // #555
+inline constexpr UiColor kSurvivalAccent = {0xFF, 0x6B, 0x6B}; // #ff6b6b
+inline constexpr UiColor kStoryAccent    = {0x4E, 0xCD, 0xC4}; // #4ecdc4
+// Mode card text ramp — menus.css:1263 (#fff title) / :1271 (#bbb subtitle)
+// / :1278 (#aaa description) / :1286 (#ccc feature list).
+inline constexpr UiColor kModeTitleColor    = {0xFF, 0xFF, 0xFF}; // #fff
+inline constexpr UiColor kModeSubtitleColor = {0xBB, 0xBB, 0xBB}; // #bbb
+inline constexpr UiColor kModeDescColor     = {0xAA, 0xAA, 0xAA}; // #aaa
+inline constexpr UiColor kModeFeatureColor  = {0xCC, 0xCC, 0xCC}; // #ccc
+// Feature-panel inset fill — menus.css:1290 rgba(0,0,0,0.3); stored as the
+// black it tints from (the 0.3 alpha is applied at the draw site).
+inline constexpr UiColor kFeaturePanelFill = {0x00, 0x00, 0x00}; // rgba(0,0,0,.3)
+// Development-notice border + body text — menus.css:1307 rgba(153,153,153)
+// / :1337 (#ccc). The lead word uses the same #fff as strong (:1349).
+inline constexpr UiColor kDevNoticeBorder = {0x99, 0x99, 0x99}; // #999 @ .3
+inline constexpr UiColor kDevNoticeText   = {0xCC, 0xCC, 0xCC}; // #ccc
+inline constexpr UiColor kDevNoticeStrong = {0xFF, 0xFF, 0xFF}; // #fff
+
+// ---- Customize screen chrome (menus.css) ----------------------------
+// Title is web ORANGE/amber, NOT the yellow the pre-audit native used —
+// menus.css:2220 (#f39c12) / :2227 subtitle (#ecf0f1). The selected-swatch
+// ring is the same orange (:2296), replacing the gold ring the mode-select
+// keyboard nav uses.
+inline constexpr UiColor kCustomizeTitleColor    = {0xF3, 0x9C, 0x12}; // #f39c12
+inline constexpr UiColor kCustomizeSubtitleColor = {0xEC, 0xF0, 0xF1}; // #ecf0f1
+inline constexpr UiColor kSwatchSelectedColor    = {0xF3, 0x9C, 0x12}; // #f39c12
+// Preview / options panel fill + border — menus.css:2238-2239 /
+// :2255-2256 (rgba(0,0,0,0.3) fill, rgba(255,255,255,0.1) border).
+inline constexpr UiColor kPanelFill   = {0x00, 0x00, 0x00}; // rgba(0,0,0,.3)
+inline constexpr UiColor kPanelBorder = {0xFF, 0xFF, 0xFF}; // rgba(255,255,255,.1)
+
+// ---- Button colors (menus.css) --------------------------------------
+// Back (grey) menus.css:1523, Start (teal) :1534, Reset (grey) :2171.
+inline constexpr UiColor kBackButtonTop    = {0x66, 0x66, 0x66}; // #666
+inline constexpr UiColor kBackButtonBottom = {0x55, 0x55, 0x55}; // #555
+inline constexpr UiColor kStartButtonTop    = {0x4E, 0xCD, 0xC4}; // #4ecdc4
+inline constexpr UiColor kStartButtonBottom = {0x3A, 0xB5, 0xAE}; // #3ab5ae
+inline constexpr UiColor kResetButtonTop    = {0x95, 0xA5, 0xA6}; // #95a5a6
+inline constexpr UiColor kResetButtonBottom = {0x7F, 0x8C, 0x8D}; // #7f8c8d
+
+// ---- Death screen chrome (ui.css) -----------------------------------
+// Red accent (title + card border + button + glow) — ui.css:406/421/468
+// (#dc2626, darker press #b91c1c). Card gradient :405 (#1a1a1a→#0f0f0f).
+inline constexpr UiColor kDeathAccent     = {0xDC, 0x26, 0x26}; // #dc2626
+inline constexpr UiColor kDeathAccentDark = {0xB9, 0x1C, 0x1C}; // #b91c1c
+inline constexpr UiColor kDeathCardTop    = {0x1A, 0x1A, 0x1A}; // #1a1a1a
+inline constexpr UiColor kDeathCardBottom = {0x0F, 0x0F, 0x0F}; // #0f0f0f
+// Message + stats-panel text — ui.css:434 (#d1d5db) / :450 (#f3f4f6) /
+// hint :461 (#9ca3af). Stats-panel border is the red accent @ 0.3 (:444).
+inline constexpr UiColor kDeathMessageColor = {0xD1, 0xD5, 0xDB}; // #d1d5db
+inline constexpr UiColor kDeathStatsText    = {0xF3, 0xF4, 0xF6}; // #f3f4f6
+inline constexpr UiColor kDeathHintColor    = {0x9C, 0xA3, 0xAF}; // #9ca3af
+
+// ---------------------------------------------------------------------
 // Environment — reference: the SURVIVAL composition in
 // src/components/game/BasicScene.tsx (SurvivalScene, lines 181-211) and
 // the forest props in src/components/game/ForestEnvironment.tsx.
