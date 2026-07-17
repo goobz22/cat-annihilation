@@ -671,6 +671,29 @@ def _point_segment_distance(p, a, b):
     return (p - (a + ab * t)).length
 
 
+def _isolate_actions(arm_obj):
+    """Mute every NLA track so a single active action can be evaluated in
+    isolation. bake_animation_clips pushes each clip onto its own NLA strip for
+    the exporter; those strips all start at frame 0 and would otherwise stack
+    into a garbage pose when we set the active action for measurement/preview
+    (un-keyed bones fall through to the NLA stack). Muting is in-memory and runs
+    AFTER export, so the GLB's animations are unaffected."""
+    if arm_obj.animation_data is None:
+        return
+    for track in arm_obj.animation_data.nla_tracks:
+        track.mute = True
+
+
+def _reset_pose(arm_obj):
+    """Return every pose bone to its rest (identity) transform. Called before
+    switching to a clip so bones the clip does not key stay at rest instead of
+    retaining a previous clip's pose."""
+    for pb in arm_obj.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pb.location = (0.0, 0.0, 0.0)
+
+
 def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_per_clip=9):
     """Pose the rig at frames across each clip and measure the worst mesh
     'explosion': for every vertex, compare its distance to its nearest REST bone
@@ -683,6 +706,9 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
     mesh), so it measures the real skin the GLB will carry.
     """
     depsgraph = bpy.context.evaluated_depsgraph_get()
+
+    # Isolate single-action evaluation so the NLA strips don't contaminate poses.
+    _isolate_actions(arm_obj)
 
     # Rest bone segments (world) from the armature's rest bones.
     rest_seg = {}
@@ -711,6 +737,7 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
         action = bpy.data.actions.get(clip_name)
         if action is None:
             continue
+        _reset_pose(arm_obj)
         arm_obj.animation_data.action = action
         frame_start = int(action.frame_range[0])
         frame_end = int(action.frame_range[1])
@@ -829,7 +856,13 @@ def render_previews(mesh_obj, arm_obj, out_dir, base_name):
         bpy.data.objects.remove(cam, do_unlink=True)
     _place_preview_camera(center, max_extent)
 
+    # Isolate single-action posing so the stacked NLA strips (present for the
+    # exporter) don't blend into the rendered pose — the rest render must show
+    # the true bind pose, not the sum of every clip's frame 0.
+    _isolate_actions(arm_obj)
+
     def pose_and_render(action_name, frame_fraction, label):
+        _reset_pose(arm_obj)
         action = bpy.data.actions.get(action_name) if action_name else None
         if action is not None:
             arm_obj.animation_data.action = action
