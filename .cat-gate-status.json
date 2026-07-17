@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-17T21:45:09.062Z",
+  "ts": "2026-07-17T23:33:33.643Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
@@ -7,52 +7,66 @@
       "name": "lint-pause-parity-guards:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 66,
+      "durationMs": 107,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-pause-parity-guards",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 69,
+      "durationMs": 100,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-cooldown-reset-shape:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 106,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-cooldown-reset-shape",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 142,
       "summary": "passed (0.1s)"
     },
     {
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 31,
-      "summary": "passed (0.0s)"
+      "durationMs": 54,
+      "summary": "passed (0.1s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 32,
-      "summary": "passed (0.0s)"
+      "durationMs": 52,
+      "summary": "passed (0.1s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 59510,
-      "summary": "passed (59.5s)"
+      "durationMs": 59662,
+      "summary": "passed (59.7s)"
     },
     {
       "name": "menu-flow",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 38044,
-      "summary": "passed (38.0s)"
+      "durationMs": 39135,
+      "summary": "passed (39.1s)"
     },
     {
       "name": "nine-lives-rearm",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 35637,
-      "summary": "passed (35.6s)"
+      "durationMs": 36701,
+      "summary": "passed (36.7s)"
     }
   ],
-  "gitSha": "609925f",
+  "gitSha": "0db89ee",
   "invocation": "--json"
 }
