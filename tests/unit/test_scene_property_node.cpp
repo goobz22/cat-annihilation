@@ -44,6 +44,7 @@
 
 #define CATCH_CONFIG_FAST_COMPILE
 #include "catch2/catch.hpp"
+#include "test_seed.hpp"
 
 #include "ecs/Entity.hpp"
 #include "scene/Scene.hpp"
