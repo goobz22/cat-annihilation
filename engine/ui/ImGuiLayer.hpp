@@ -7,6 +7,8 @@
 struct GLFWwindow;
 struct ImFont;
 
+struct ImDrawData;  // from imgui.h — forward-declared so this header stays imgui-free
+
 namespace Engine {
 
 // ImGuiLayer owns the Dear ImGui context + its Vulkan/GLFW backends.
@@ -44,6 +46,12 @@ public:
     // Finalize UI build (ImGui::Render) and record draw commands into cmd.
     // cmd must already be in a render pass compatible with the one passed at Init.
     void RenderDrawData(VkCommandBuffer cmd);
+
+    // Decode every draw-list vertex color sRGB->linear so the sRGB
+    // swapchain's hardware encode reproduces the authored bytes on screen
+    // (see the definition for the double-encode story). Static: operates
+    // purely on the passed draw data.
+    static void ConvertDrawDataSrgbToLinear(ImDrawData* drawData);
 
     [[nodiscard]] ImFont* GetRegularFont() const { return m_regularFont; }
     [[nodiscard]] ImFont* GetBoldFont() const { return m_boldFont; }

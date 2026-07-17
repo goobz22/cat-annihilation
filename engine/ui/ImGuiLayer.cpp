@@ -6,6 +6,7 @@
 
 #include <GLFW/glfw3.h>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 
@@ -202,9 +203,51 @@ void ImGuiLayer::RenderDrawData(VkCommandBuffer cmd) {
     ImGui::Render();
     ImDrawData* drawData = ImGui::GetDrawData();
     if (drawData != nullptr && drawData->CmdListsCount > 0) {
+        ConvertDrawDataSrgbToLinear(drawData);
         ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
     }
     m_frameStarted = false;
+}
+
+void ImGuiLayer::ConvertDrawDataSrgbToLinear(ImDrawData* drawData) {
+    // The swapchain is VK_FORMAT_B8G8R8A8_SRGB: the hardware treats shader
+    // outputs as LINEAR and sRGB-ENCODES them on store. ImGui colors are
+    // authored in sRGB space (web CSS hex bytes fed straight into
+    // IM_COL32), so without this pass they get encoded a second time and
+    // every panel washes out ~2.2x brighter — the 2026-07-17 presentation
+    // rebuild landed with near-black #1a1a2e navy rendering as mid grey.
+    // Decoding the vertex colors here (one 256-entry LUT lookup per
+    // channel) makes the round-trip identity: authored sRGB -> linear ->
+    // hardware encode -> the authored bytes on screen. Alpha is coverage,
+    // not color — it stays untouched. Done post-Render() so EVERY ImGui
+    // color (draw lists, fonts' vertex tints, style colors) is covered in
+    // one place instead of chasing hundreds of IM_COL32 call sites, and
+    // in-place on the frame's transient vertex buffer (ImGui rebuilds it
+    // every frame, so nothing persists).
+    static const auto srgbToLinearByteTable = [] {
+        std::array<unsigned char, 256> table{};
+        for (int value = 0; value < 256; ++value) {
+            const float srgb = static_cast<float>(value) / 255.0f;
+            const float linear = srgb <= 0.04045f
+                ? srgb / 12.92f
+                : std::pow((srgb + 0.055f) / 1.055f, 2.4f);
+            table[static_cast<size_t>(value)] =
+                static_cast<unsigned char>(std::lround(linear * 255.0f));
+        }
+        return table;
+    }();
+
+    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
+        ImDrawList* drawList = drawData->CmdLists[listIndex];
+        for (ImDrawVert& vertex : drawList->VtxBuffer) {
+            const ImU32 color = vertex.col;
+            vertex.col =
+                (color & IM_COL32_A_MASK) |
+                (static_cast<ImU32>(srgbToLinearByteTable[(color >> IM_COL32_R_SHIFT) & 0xFF]) << IM_COL32_R_SHIFT) |
+                (static_cast<ImU32>(srgbToLinearByteTable[(color >> IM_COL32_G_SHIFT) & 0xFF]) << IM_COL32_G_SHIFT) |
+                (static_cast<ImU32>(srgbToLinearByteTable[(color >> IM_COL32_B_SHIFT) & 0xFF]) << IM_COL32_B_SHIFT);
+        }
+    }
 }
 
 } // namespace Engine
