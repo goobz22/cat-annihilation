@@ -1,0 +1,816 @@
+"""
+retopo_rig.py — Meshy-look-preserving retopo + bake + rig pipeline (Blender headless).
+
+Why this exists:
+    The Meshy-AI character GLBs (ember_leader cat + the four dog variants) look
+    great as static sculpts, but their scan-style topology (120k-450k tris of
+    marching-cubes soup) deforms badly under a rig and blows the engine's
+    ~300k-tri budget. A pure-procedural replacement was tried and REJECTED for
+    looking like primitive blobs — the owner wants the MESHY LOOK kept. This
+    pipeline keeps that look two ways:
+      1. SILHOUETTE: a voxel remesh at a feature-preserving voxel size rebuilds
+         the exact sculpted surface as clean, manifold, evenly-sized topology,
+         then a collapse-decimate brings it to a deformation-friendly budget
+         (default 20k tris).
+      2. SURFACE DETAIL: the original model's baseColor texture is re-baked
+         onto the new mesh's fresh UVs (selected-to-active), so every marking,
+         fur gradient and eye stays pixel-identical even though the underlying
+         vertices are 10-20x fewer.
+    The clean topology is then run through the SAME hand-designed quadruped
+    skeleton + heat-diffusion weighting + authored idle/walk/run/attack clips
+    as scripts/rig_quadruped.py (imported, not forked), so the output GLB is a
+    drop-in for the engine loader contract.
+
+Usage (headless):
+    blender --background --python scripts/retopo_rig.py -- \
+        <raw_input.glb> <output.glb> --species cat|dog \
+        [--target-tris 20000] [--tex-size 2048] [--flip-forward]
+
+Stages (in order):
+    1. import + join + apply transforms; render <name>_original.png preview
+    2. adaptive voxel remesh -> triangulate -> decimate to --target-tris
+    3. Smart UV Project + Cycles bake of the original baseColor onto the new
+       UVs (cage-extrusion ladder, magenta-init + coverage-mask validation)
+    4. rig_quadruped skeleton / auto weights / animation clips on the retopo
+    5. numpy deformation sanity across the four core clips (<=1.5x ratio)
+    6. GLB export (embedded texture, skinned, animated) + posed previews
+
+Exit codes (so a batch wrapper can classify failures):
+    0 ok · 2 bad args · 3 import failed · 4 export failed/unrigged
+    5 deformation sanity exceeded 1.5x · 6 bake quality below the <2% bad-texel
+    bar after every cage-extrusion attempt
+"""
+
+import bpy
+import json
+import math
+import os
+import sys
+
+import numpy as np
+from mathutils import Vector
+
+# rig_quadruped lives beside this file; it is import-safe (its main() is
+# guarded) and holds the skeleton/weights/clips/export logic we are REQUIRED
+# to reuse rather than fork — any gait or weighting fix made there must apply
+# to this pipeline automatically.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import rig_quadruped as rq
+
+
+# ---------------------------------------------------------------------------
+# CLI parsing
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    argv = sys.argv
+    argv = argv[argv.index("--") + 1:] if "--" in argv else []
+
+    if len(argv) < 2:
+        print("Usage: blender --background --python retopo_rig.py -- "
+              "<raw_input.glb> <output.glb> --species cat|dog "
+              "[--target-tris 20000] [--tex-size 2048] [--flip-forward]",
+              file=sys.stderr)
+        sys.exit(2)
+
+    opts = {
+        "input": argv[0],
+        "output": argv[1],
+        "species": "cat",
+        "target_tris": 20000,
+        "tex_size": 2048,
+        "flip_forward": "--flip-forward" in argv,
+    }
+    if "--species" in argv:
+        i = argv.index("--species")
+        if i + 1 < len(argv):
+            opts["species"] = argv[i + 1]
+    if "--target-tris" in argv:
+        i = argv.index("--target-tris")
+        if i + 1 < len(argv):
+            opts["target_tris"] = int(argv[i + 1])
+    if "--tex-size" in argv:
+        i = argv.index("--tex-size")
+        if i + 1 < len(argv):
+            opts["tex_size"] = int(argv[i + 1])
+    return opts
+
+
+# ---------------------------------------------------------------------------
+# Small scene utilities
+# ---------------------------------------------------------------------------
+
+def select_only(obj):
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+
+def mesh_world_extents(obj):
+    """Per-axis world extents from the actual vertex data (not bound_box,
+    which caches and can be stale right after a modifier apply). numpy
+    foreach_get keeps this fast on the 100k-450k-vert raw meshes."""
+    mesh = obj.data
+    count = len(mesh.vertices)
+    coords = np.empty(count * 3, dtype=np.float32)
+    mesh.vertices.foreach_get('co', coords)
+    coords = coords.reshape(-1, 3)
+    rot = np.array(obj.matrix_world.to_3x3(), dtype=np.float32)
+    loc = np.array(obj.matrix_world.translation, dtype=np.float32)
+    world = coords @ rot.T + loc
+    return world.min(axis=0), world.max(axis=0)
+
+
+def bbox_diagonal(obj):
+    lo, hi = mesh_world_extents(obj)
+    return float(np.linalg.norm(hi - lo))
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 — import + normalize
+# ---------------------------------------------------------------------------
+
+def import_and_prepare(input_path):
+    """Import the raw Meshy GLB, join everything into one mesh (rig_quadruped
+    handles the eyeball-vs-body join-target and headless-join-context traps),
+    and bake object transforms into the vertex data.
+
+    Why apply transforms: Meshy sometimes stores scale/rotation on the node
+    instead of the vertices (the scout incident in rig_quadruped's history).
+    Every later stage — voxel_size in local units, bake cage extrusion, bone
+    placement, the deformation sanity's world math — is simpler and safer when
+    local space == world space, so we normalize once here."""
+    rq.reset_scene()
+    rq.import_glb(input_path)
+    source = rq.collect_and_join_meshes()
+    select_only(source)
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    # Gross-orientation fix BEFORE anything else so the original preview, the
+    # retopo copy, and the rig all share one frame (the retopo copy inherits
+    # this rotation, making rq.align_mesh_to_world a no-op later).
+    rq.align_mesh_to_world(source)
+    select_only(source)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+    return source
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — retopology (voxel remesh -> triangulate -> decimate)
+# ---------------------------------------------------------------------------
+
+def apply_modifier(obj, mod):
+    select_only(obj)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def make_working_copy(source_obj, name):
+    data = source_obj.data.copy()
+    obj = source_obj.copy()
+    obj.data = data
+    obj.name = name
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def retopologize(source_obj, target_tris):
+    """Rebuild the Meshy sculpt as clean topology at the tri budget.
+
+    Voxel remesh (OpenVDB) is the silhouette-preserving step: it re-samples
+    the surface as a watertight, manifold, evenly-dense grid mesh — exactly
+    the connectivity heat-diffusion weighting wants — while unioning junk like
+    interior eyeball spheres into one solid. The voxel size is tuned
+    ADAPTIVELY because a fixed fraction eats thin features on some models:
+      - if any world-bbox axis shrinks >2.5% the voxels swallowed a thin
+        extremity (ear tips / tail tip / paws define the bbox extremes on
+        these quadrupeds) -> refine and retry;
+      - if the remesh yields fewer than ~3x the target tris there is not
+        enough detail for the decimator to CHOOSE what to keep -> refine;
+      - if it yields >2.4M tris the pipeline gets needlessly slow -> coarsen.
+    Decimate(COLLAPSE) then walks the dense-but-clean mesh down to the budget;
+    collapse is shape-preserving at this reduction level because the remesh
+    already distributed vertices evenly.
+
+    Returns (retopo_obj, final_tri_count, voxel_size_used)."""
+    src_lo, src_hi = mesh_world_extents(source_obj)
+    src_ext = src_hi - src_lo
+    diag = float(np.linalg.norm(src_ext))
+    voxel = diag / 150.0
+
+    retopo = None
+    for attempt in range(1, 7):
+        candidate = make_working_copy(source_obj, "retopo")
+        mod = candidate.modifiers.new(name="VoxelRemesh", type='REMESH')
+        mod.mode = 'VOXEL'
+        mod.voxel_size = voxel
+        apply_modifier(candidate, mod)
+
+        lo, hi = mesh_world_extents(candidate)
+        ext = hi - lo
+        # Relative shrink per axis; expansion (voxel dilation) is fine, only
+        # LOSS of extent signals a swallowed feature.
+        shrink = float(np.max((src_ext - ext) / np.maximum(src_ext, 1e-9)))
+        face_count = len(candidate.data.polygons)
+        tri_estimate = face_count * 2  # remesh output is quad-dominant
+        print(f"[retopo_rig] remesh attempt {attempt}: voxel={voxel:.5f} "
+              f"faces={face_count} (~{tri_estimate} tris) worst-axis "
+              f"shrink={shrink*100:.2f}%")
+
+        if tri_estimate > 2_400_000:
+            bpy.data.objects.remove(candidate, do_unlink=True)
+            voxel *= 1.4
+            continue
+        if shrink > 0.025 or tri_estimate < target_tris * 3:
+            bpy.data.objects.remove(candidate, do_unlink=True)
+            voxel *= 0.65
+            continue
+        retopo = candidate
+        break
+
+    if retopo is None:
+        # Last attempt at the finest voxel reached; accept whatever it gives
+        # rather than dying — the bake/preview validation downstream will
+        # expose real quality loss to the operator.
+        retopo = make_working_copy(source_obj, "retopo")
+        mod = retopo.modifiers.new(name="VoxelRemesh", type='REMESH')
+        mod.mode = 'VOXEL'
+        mod.voxel_size = voxel
+        apply_modifier(retopo, mod)
+        print(f"[retopo_rig] WARNING: remesh tuning did not converge; using "
+              f"voxel={voxel:.5f}", file=sys.stderr)
+
+    # Triangulate BEFORE decimate so the collapse ratio is exact in TRIS (the
+    # engine budget unit) rather than in quad-dominant faces.
+    tri_mod = retopo.modifiers.new(name="Triangulate", type='TRIANGULATE')
+    apply_modifier(retopo, tri_mod)
+    tri_count = len(retopo.data.polygons)
+
+    if tri_count > target_tris:
+        dec = retopo.modifiers.new(name="Decimate", type='DECIMATE')
+        dec.decimate_type = 'COLLAPSE'
+        dec.ratio = target_tris / tri_count
+        dec.use_collapse_triangulate = True
+        apply_modifier(retopo, dec)
+    final_tris = len(retopo.data.polygons)
+    print(f"[retopo_rig] retopo: {tri_count} -> {final_tris} tris "
+          f"(target {target_tris}, voxel {voxel:.5f})")
+
+    # All-smooth shading: the mesh is one organic surface whose fine detail
+    # now lives in the baked texture; angle-based normal splits on a decimated
+    # blob only produce random faceting seams, so uniform smooth is the
+    # correct call (not an omission of auto-smooth).
+    smooth_flags = np.ones(final_tris, dtype=bool)
+    retopo.data.polygons.foreach_set('use_smooth', smooth_flags)
+    retopo.data.update()
+    return retopo, final_tris, voxel
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — UVs + texture bake
+# ---------------------------------------------------------------------------
+
+def smart_uv_project(obj):
+    """Fresh UVs for the new topology. The remesh destroyed the original UV
+    layout (by design — it was scan-soup anyway); Smart UV Project gives
+    well-margined islands good enough for a bake target. island_margin 0.02
+    leaves ~8px of padding between islands at 1024 (16px at 2048) so the
+    post-bake margin fill never bleeds one island into another."""
+    for uv_layer in list(obj.data.uv_layers):
+        obj.data.uv_layers.remove(uv_layer)
+    obj.data.uv_layers.new(name="UVMap")
+    select_only(obj)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0),
+                             island_margin=0.02, correct_aspect=True,
+                             scale_to_bounds=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def rewire_source_materials_to_emission(source_obj):
+    """Rewire every source material so whatever feeds Principled Base Color
+    drives an Emission shader straight into the output, then bake type=EMIT.
+
+    Why EMIT instead of a DIFFUSE color-pass bake: EMIT is semantics-free —
+    it captures the baseColor chain EXACTLY, with no chance of the Principled
+    BSDF zeroing the diffuse albedo under a metallic texture, and no lighting
+    leaking in. The source object is deleted after the bake, so there is
+    nothing to restore."""
+    for slot in source_obj.material_slots:
+        mat = slot.material
+        if mat is None or not mat.use_nodes:
+            continue
+        tree = mat.node_tree
+        principled = next((n for n in tree.nodes
+                           if n.type == 'BSDF_PRINCIPLED'), None)
+        output = next((n for n in tree.nodes
+                       if n.type == 'OUTPUT_MATERIAL' and n.is_active_output),
+                      None)
+        if output is None:
+            continue
+        emission = tree.nodes.new('ShaderNodeEmission')
+        if principled is not None:
+            base_input = principled.inputs['Base Color']
+            if base_input.is_linked:
+                tree.links.new(base_input.links[0].from_socket,
+                               emission.inputs['Color'])
+            else:
+                emission.inputs['Color'].default_value = \
+                    base_input.default_value[:]
+        else:
+            # No Principled at all (never seen from the glTF importer, but a
+            # grey bake beats a crash — the preview comparison will show it).
+            emission.inputs['Color'].default_value = (0.5, 0.5, 0.5, 1.0)
+        # Drop existing surface links so the emission is the only shader.
+        for link in list(output.inputs['Surface'].links):
+            tree.links.remove(link)
+        tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+
+
+def new_image(name, size, rgba):
+    img = bpy.data.images.new(name, width=size, height=size, alpha=True)
+    pixel_count = size * size
+    flat = np.tile(np.array(rgba, dtype=np.float32), pixel_count)
+    img.pixels.foreach_set(flat)
+    return img
+
+
+def read_pixels(img, size):
+    flat = np.empty(size * size * 4, dtype=np.float32)
+    img.pixels.foreach_get(flat)
+    return flat.reshape(-1, 4)
+
+
+def make_bake_material(bake_img):
+    mat = bpy.data.materials.new("BakedMeshyMat")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    principled = next(n for n in tree.nodes if n.type == 'BSDF_PRINCIPLED')
+    # Matte-organic response for fur/skin: the Meshy source materials are
+    # effectively albedo-only, so a fixed medium-rough dielectric reads the
+    # same in-engine as the raw import did.
+    principled.inputs['Roughness'].default_value = 0.8
+    principled.inputs['Metallic'].default_value = 0.0
+    tex = tree.nodes.new('ShaderNodeTexImage')
+    tex.image = bake_img
+    tree.links.new(tex.outputs['Color'],
+                   principled.inputs['Base Color'])
+    tree.nodes.active = tex  # bake target = the ACTIVE image node
+    return mat
+
+
+def bake_coverage_mask(retopo_obj, tex_size, bake_margin):
+    """Bake a white EMIT from the retopo mesh onto its OWN UVs to learn which
+    texels the rasterizer can ever write (islands + margin). The diffuse-bake
+    validation below must only judge texels inside this mask — everything
+    outside UV islands legitimately keeps its init color and is never sampled
+    at runtime, so counting it would fail every bake."""
+    cov_img = new_image("coverage", tex_size, (0.0, 0.0, 0.0, 1.0))
+    cov_mat = bpy.data.materials.new("CoverageMat")
+    cov_mat.use_nodes = True
+    tree = cov_mat.node_tree
+    for node in list(tree.nodes):
+        tree.nodes.remove(node)
+    emission = tree.nodes.new('ShaderNodeEmission')
+    emission.inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+    output = tree.nodes.new('ShaderNodeOutputMaterial')
+    tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+    tex = tree.nodes.new('ShaderNodeTexImage')
+    tex.image = cov_img
+    tree.nodes.active = tex
+
+    saved_materials = [slot.material for slot in retopo_obj.material_slots]
+    retopo_obj.data.materials.clear()
+    retopo_obj.data.materials.append(cov_mat)
+    select_only(retopo_obj)
+    bpy.ops.object.bake(type='EMIT', use_selected_to_active=False,
+                        margin=bake_margin, margin_type='EXTEND',
+                        use_clear=False)
+    retopo_obj.data.materials.clear()
+    for mat in saved_materials:
+        retopo_obj.data.materials.append(mat)
+
+    mask = read_pixels(cov_img, tex_size)[:, 0] > 0.5
+    bpy.data.images.remove(cov_img)
+    bpy.data.materials.remove(cov_mat)
+    print(f"[retopo_rig] coverage mask: {int(mask.sum())} / {tex_size*tex_size} "
+          f"texels inside UV islands+margin")
+    return mask
+
+
+BAD_TEXEL_LIMIT = 0.02  # <2% pure-black/pure-magenta texels inside islands
+
+
+def bake_texture(source_obj, retopo_obj, tex_size, diag):
+    """Selected-to-active bake of the original baseColor onto the retopo UVs,
+    iterating the cage extrusion until the bake has no meaningful holes.
+
+    The magenta trick: the target image is pre-filled MAGENTA and baked with
+    use_clear=False, so any texel whose cage ray MISSED the source surface
+    stays magenta and is machine-countable — a silent black/garbage patch on
+    the dog's flank becomes a number instead of something a human has to spot
+    in a preview. Pure black is counted too because a black patch is the other
+    classic bake-failure signature (and Meshy albedos are never pure black
+    over a whole region).
+
+    The extrusion ladder starts tight (0.4% of the bbox diagonal — the voxel
+    remesh surface hugs the source within about a voxel) and doubles on each
+    failure: too-small extrusion = misses where the retopo sits slightly
+    outside the source; too-large = rays that tunnel to the OPPOSITE surface
+    (inner thigh baking the other leg), which is why we do not simply start
+    huge. max_ray_distance tracks the extrusion so a miss stays a miss instead
+    of grabbing geometry from across the body.
+
+    Returns (bake_img, bad_fraction, extrusion_used, attempts)."""
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.device = 'CPU'   # deterministic headless; albedo needs no GPU
+    scene.cycles.samples = 4      # EMIT is noise-free; >1 only smooths island edges
+    bake_margin = max(4, tex_size // 128)  # 16px at 2048 — matches UV padding
+
+    bake_img = new_image("baked_basecolor", tex_size, (1.0, 0.0, 1.0, 1.0))
+    bake_mat = make_bake_material(bake_img)
+    retopo_obj.data.materials.clear()
+    retopo_obj.data.materials.append(bake_mat)
+
+    coverage = bake_coverage_mask(retopo_obj, tex_size, bake_margin)
+    coverage_count = max(1, int(coverage.sum()))
+
+    rewire_source_materials_to_emission(source_obj)
+
+    best = None  # (bad_frac, extrusion)
+    extrusion = diag * 0.004
+    attempts = 0
+    for attempt in range(1, 5):
+        attempts = attempt
+        # Re-fill magenta each attempt so a previous attempt's hits cannot
+        # mask this attempt's misses.
+        flat = np.tile(np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32),
+                       tex_size * tex_size)
+        bake_img.pixels.foreach_set(flat)
+
+        bpy.ops.object.select_all(action='DESELECT')
+        source_obj.select_set(True)
+        retopo_obj.select_set(True)
+        bpy.context.view_layer.objects.active = retopo_obj
+        bpy.ops.object.bake(type='EMIT', use_selected_to_active=True,
+                            cage_extrusion=extrusion,
+                            max_ray_distance=extrusion * 3.0,
+                            margin=bake_margin, margin_type='EXTEND',
+                            use_clear=False)
+
+        rgba = read_pixels(bake_img, tex_size)
+        red, green, blue = rgba[:, 0], rgba[:, 1], rgba[:, 2]
+        is_magenta = (red > 0.95) & (green < 0.05) & (blue > 0.95)
+        is_black = np.maximum(np.maximum(red, green), blue) < 0.02
+        bad = int(((is_magenta | is_black) & coverage).sum())
+        bad_frac = bad / coverage_count
+        print(f"[retopo_rig] bake attempt {attempt}: extrusion={extrusion:.5f} "
+              f"bad_texels={bad} ({bad_frac*100:.3f}% of covered)")
+
+        if best is None or bad_frac < best[0]:
+            best = (bad_frac, extrusion)
+        if bad_frac < BAD_TEXEL_LIMIT:
+            break
+        extrusion *= 2.0
+    else:
+        # Ladder exhausted without passing: rebake at the best extrusion seen
+        # so the SHIPPED texture is the least-bad one, not just the last one.
+        if best[1] != extrusion / 2.0:
+            flat = np.tile(np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32),
+                           tex_size * tex_size)
+            bake_img.pixels.foreach_set(flat)
+            bpy.ops.object.select_all(action='DESELECT')
+            source_obj.select_set(True)
+            retopo_obj.select_set(True)
+            bpy.context.view_layer.objects.active = retopo_obj
+            bpy.ops.object.bake(type='EMIT', use_selected_to_active=True,
+                                cage_extrusion=best[1],
+                                max_ray_distance=best[1] * 3.0,
+                                margin=bake_margin, margin_type='EXTEND',
+                                use_clear=False)
+
+    # Pack the pixels into the .blend datablock so the glTF exporter embeds
+    # them in the GLB; a generated (never-saved) image would otherwise export
+    # as a broken file reference.
+    bake_img.pack()
+    return bake_img, best[0], best[1], attempts
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 — deformation sanity
+# ---------------------------------------------------------------------------
+
+def segment_distances(points, seg_a, seg_b):
+    """Vectorized point-to-segment distance: points (N,3), segment a->b."""
+    seg = seg_b - seg_a
+    denom = float(seg.dot(seg))
+    if denom < 1e-12:
+        closest = np.broadcast_to(seg_a, points.shape)
+    else:
+        t = np.clip((points - seg_a) @ seg / denom, 0.0, 1.0)
+        closest = seg_a + t[:, None] * seg
+    return np.linalg.norm(points - closest, axis=1)
+
+
+def min_bone_distances(points, segments):
+    """Distance from every point to its NEAREST bone segment."""
+    result = np.full(len(points), np.inf, dtype=np.float64)
+    for seg_a, seg_b in segments:
+        np.minimum(result, segment_distances(points, seg_a, seg_b), out=result)
+    return result
+
+
+DEFORM_RATIO_LIMIT = 1.5
+DEFORM_SAMPLES_PER_CLIP = 8
+CORE_CLIPS = ('idle', 'walk', 'run', 'attack')
+
+
+def deformation_sanity(mesh_obj, arm_obj, diag):
+    """Pose frames of each core clip and verify no vertex escapes its bones.
+
+    The invariant: a correctly-weighted vertex rides its bones, so its
+    distance to the NEAREST posed bone segment stays comparable to its rest
+    distance to the nearest rest segment. A vertex whose ratio explodes is
+    being left behind (zero/weak weights) or dragged across the body (weight
+    leakage) — precisely the failure modes that made the raw Meshy topology
+    unusable. rest distances are floored at 2% of the bbox diagonal so verts
+    lying ON a bone (spine surface) don't turn ordinary deformation into a
+    huge ratio by dividing by ~0.
+
+    Runs against the FULL weight set in Blender (the exporter's top-4 trim is
+    a strictly small perturbation verify_rig.ts re-checks on the real file).
+
+    Returns (worst_ratio, worst_clip, worst_frame, passed)."""
+    floor = diag * 0.02
+
+    # Rest state: base mesh vertices (no modifiers) + edit-time bone layout.
+    rest_pts = np.empty(len(mesh_obj.data.vertices) * 3, dtype=np.float32)
+    mesh_obj.data.vertices.foreach_get('co', rest_pts)
+    rest_pts = rest_pts.reshape(-1, 3).astype(np.float64)
+    rot = np.array(mesh_obj.matrix_world.to_3x3(), dtype=np.float64)
+    loc = np.array(mesh_obj.matrix_world.translation, dtype=np.float64)
+    rest_pts = rest_pts @ rot.T + loc
+
+    arm_mat = arm_obj.matrix_world
+    rest_segments = []
+    for bone in arm_obj.data.bones:
+        head = np.array(arm_mat @ bone.head_local, dtype=np.float64)
+        tail = np.array(arm_mat @ bone.tail_local, dtype=np.float64)
+        rest_segments.append((head, tail))
+    rest_dist = np.maximum(min_bone_distances(rest_pts, rest_segments), floor)
+
+    # Sample clips one at a time: NLA tracks are muted so ONLY the active
+    # action poses the rig (otherwise every clip would evaluate stacked).
+    anim = arm_obj.animation_data
+    saved_mutes = [(track, track.mute) for track in anim.nla_tracks]
+    for track, _ in saved_mutes:
+        track.mute = True
+
+    worst = (0.0, 'none', 0)
+    for clip_name in CORE_CLIPS:
+        action = bpy.data.actions.get(clip_name)
+        if action is None:
+            continue
+        anim.action = action
+        frame_start, frame_end = action.frame_range
+        for i in range(DEFORM_SAMPLES_PER_CLIP):
+            frame = round(frame_start + (frame_end - frame_start)
+                          * i / (DEFORM_SAMPLES_PER_CLIP - 1))
+            bpy.context.scene.frame_set(int(frame))
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            eval_obj = mesh_obj.evaluated_get(depsgraph)
+            eval_mesh = eval_obj.to_mesh()
+            pts = np.empty(len(eval_mesh.vertices) * 3, dtype=np.float32)
+            eval_mesh.vertices.foreach_get('co', pts)
+            pts = pts.reshape(-1, 3).astype(np.float64)
+            emat = eval_obj.matrix_world
+            pts = pts @ np.array(emat.to_3x3(), dtype=np.float64).T \
+                + np.array(emat.translation, dtype=np.float64)
+            eval_obj.to_mesh_clear()
+
+            posed_segments = []
+            for pose_bone in arm_obj.pose.bones:
+                head = np.array(arm_mat @ pose_bone.head, dtype=np.float64)
+                tail = np.array(arm_mat @ pose_bone.tail, dtype=np.float64)
+                posed_segments.append((head, tail))
+            posed_dist = min_bone_distances(pts, posed_segments)
+
+            ratio = float(np.max(posed_dist / rest_dist))
+            if ratio > worst[0]:
+                worst = (ratio, clip_name, int(frame))
+
+    # Restore the exact post-bake_animation_clips state (action cleared, NLA
+    # unmuted) so the exporter sees the clips the way rig_quadruped left them.
+    anim.action = None
+    for track, was_muted in saved_mutes:
+        track.mute = was_muted
+    bpy.context.scene.frame_set(0)
+
+    passed = worst[0] <= DEFORM_RATIO_LIMIT
+    print(f"[retopo_rig] deformation sanity: worst ratio={worst[0]:.3f} "
+          f"(clip={worst[1]} frame={worst[2]}, limit {DEFORM_RATIO_LIMIT}) "
+          f"-> {'PASS' if passed else 'FAIL'}")
+    return worst[0], worst[1], worst[2], passed
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 — previews
+# ---------------------------------------------------------------------------
+
+def clear_preview_rig():
+    for obj in list(bpy.data.objects):
+        if obj.type in {'CAMERA', 'LIGHT'}:
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def setup_preview_scene(center, max_extent):
+    """Neutral-grey world + 3-point sun lighting + 3/4 camera, mirroring
+    render_cat.py's diagnostic look so previews stay comparable across the
+    whole asset toolchain. 'Standard' view transform (not AgX) keeps the
+    baked albedo colors faithful for the side-by-side against the raw
+    import."""
+    scene = bpy.context.scene
+    world = bpy.data.worlds[0] if bpy.data.worlds else bpy.data.worlds.new("W")
+    scene.world = world
+    world.use_nodes = True
+    background = world.node_tree.nodes.get('Background')
+    if background:
+        background.inputs[0].default_value = (0.22, 0.23, 0.26, 1.0)
+        background.inputs[1].default_value = 1.0
+
+    bpy.ops.object.light_add(type='SUN', location=(4, -4, 6))
+    key = bpy.context.active_object
+    key.data.energy = 3.5
+    key.rotation_euler = (math.radians(55), 0, math.radians(45))
+    bpy.ops.object.light_add(type='SUN', location=(-3, 3, 4))
+    fill = bpy.context.active_object
+    fill.data.energy = 1.3
+    fill.data.color = (0.75, 0.85, 1.0)
+    fill.rotation_euler = (math.radians(45), 0, math.radians(-135))
+
+    dist = max_extent * 2.5
+    position = center + Vector((dist * 0.7, -dist * 0.7, max_extent * 0.3))
+    bpy.ops.object.camera_add(location=position)
+    cam = bpy.context.active_object
+    direction = (center - position).normalized()
+    cam.rotation_mode = 'QUATERNION'
+    cam.rotation_quaternion = direction.to_track_quat('-Z', 'Y')
+    cam.data.lens = 35
+    scene.camera = cam
+
+    scene.render.engine = 'BLENDER_EEVEE_NEXT'
+    scene.render.resolution_x = 640
+    scene.render.resolution_y = 640
+    scene.view_settings.view_transform = 'Standard'
+
+
+def render_to(path):
+    bpy.context.scene.render.filepath = path
+    bpy.ops.render.render(write_still=True)
+    print(f"[retopo_rig] preview -> {path}")
+
+
+def render_single_preview(mesh_obj, path):
+    lo, hi = mesh_world_extents(mesh_obj)
+    center = Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2,
+                     (lo[2] + hi[2]) / 2))
+    setup_preview_scene(center, float(np.max(hi - lo)))
+    render_to(path)
+    clear_preview_rig()
+
+
+def render_posed_previews(mesh_obj, arm_obj, previews_dir, base_name):
+    """Rest / mid-walk / attack-apex previews of the final rigged model.
+    Frame choices are tied to the clip authoring in rig_quadruped:
+      - walk at 25% of the cycle = thigh_L max forward swing (legs visibly
+        split — the pose that exposes bad shoulder/hip weights fastest);
+      - attack at 58% = the authored strike peak (head/paw extension apex).
+    NLA tracks are muted so exactly one action poses the rig per render."""
+    anim = arm_obj.animation_data
+    for track in anim.nla_tracks:
+        track.mute = True
+
+    lo, hi = mesh_world_extents(mesh_obj)
+    center = Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2,
+                     (lo[2] + hi[2]) / 2))
+    setup_preview_scene(center, float(np.max(hi - lo)))
+
+    paths = {}
+    poses = [('rest', None, 0.0), ('walk', 'walk', 0.25),
+             ('attack', 'attack', 0.58)]
+    for label, clip_name, phase in poses:
+        if clip_name is None:
+            anim.action = None
+            bpy.context.scene.frame_set(0)
+        else:
+            action = bpy.data.actions.get(clip_name)
+            if action is None:
+                continue
+            anim.action = action
+            start, end = action.frame_range
+            bpy.context.scene.frame_set(int(round(start + (end - start) * phase)))
+        path = os.path.join(previews_dir, f"{base_name}_{label}.png")
+        render_to(path)
+        paths[label] = path
+
+    anim.action = None
+    for track in anim.nla_tracks:
+        track.mute = False
+    bpy.context.scene.frame_set(0)
+    clear_preview_rig()
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    opts = parse_args()
+    output_path = os.path.abspath(opts["output"])
+    base_name = os.path.splitext(os.path.basename(output_path))[0]
+    previews_dir = os.path.join(os.path.dirname(output_path), "previews")
+    os.makedirs(previews_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    print(f"[retopo_rig] input={opts['input']} output={output_path} "
+          f"species={opts['species']} target_tris={opts['target_tris']} "
+          f"tex={opts['tex_size']} flip_forward={opts['flip_forward']}")
+
+    source_obj = import_and_prepare(opts["input"])
+    diag = bbox_diagonal(source_obj)
+
+    # Original preview FIRST: the raw Meshy import (its own materials and
+    # textures) is the reference the orchestrator compares the retopo output
+    # against; it must be rendered before the source is consumed by the bake.
+    render_single_preview(source_obj,
+                          os.path.join(previews_dir,
+                                       f"{base_name}_original.png"))
+
+    retopo_obj, final_tris, voxel_used = retopologize(source_obj,
+                                                      opts["target_tris"])
+    smart_uv_project(retopo_obj)
+    bake_img, bake_bad_frac, bake_extrusion, bake_attempts = bake_texture(
+        source_obj, retopo_obj, opts["tex_size"], diag)
+    bake_ok = bake_bad_frac < BAD_TEXEL_LIMIT
+
+    # The high-poly source's job (silhouette reference + bake donor) is done;
+    # it must not reach the export or the tri budget is instantly blown.
+    bpy.data.objects.remove(source_obj, do_unlink=True)
+
+    # Rig with the shared quadruped pipeline. cleanup_mesh is deliberately
+    # SKIPPED: the voxel remesh already produced manifold, consistent-normal,
+    # duplicate-free topology, and remove_doubles would only risk disturbing
+    # the freshly-baked UV seam layout for zero heat-diffusion benefit.
+    rq.align_mesh_to_world(retopo_obj)  # no-op unless something drifted
+    bbox = rq.analyze_bbox(retopo_obj, opts["flip_forward"])
+    anatomy = rq.detect_anatomy(retopo_obj, bbox)
+    arm_obj = rq.build_armature(bbox, opts["species"], anatomy=anatomy)
+    rq.parent_with_auto_weights(retopo_obj, arm_obj)
+    rq.bake_animation_clips(arm_obj)
+
+    worst_ratio, worst_clip, worst_frame, deform_ok = deformation_sanity(
+        retopo_obj, arm_obj, diag)
+
+    # Export even when a validation failed: the file + previews are the
+    # evidence the operator needs to diagnose, and the exit code still marks
+    # the run red for any batch wrapper.
+    try:
+        rq.export_glb(output_path)
+    except RuntimeError as err:
+        print(str(err), file=sys.stderr)
+        sys.exit(4)
+
+    preview_paths = render_posed_previews(retopo_obj, arm_obj, previews_dir,
+                                          base_name)
+    preview_paths['original'] = os.path.join(previews_dir,
+                                             f"{base_name}_original.png")
+
+    summary = {
+        "output": output_path,
+        "tris": final_tris,
+        "voxel_size": round(voxel_used, 6),
+        "bake": {
+            "bad_texel_fraction": round(bake_bad_frac, 5),
+            "cage_extrusion": round(bake_extrusion, 5),
+            "attempts": bake_attempts,
+            "ok": bake_ok,
+        },
+        "deform": {
+            "worst_ratio": round(worst_ratio, 4),
+            "clip": worst_clip,
+            "frame": worst_frame,
+            "ok": deform_ok,
+        },
+        "previews": preview_paths,
+    }
+    print("RETOPO_RIG_SUMMARY_JSON: " + json.dumps(summary))
+
+    if not bake_ok:
+        sys.exit(6)
+    if not deform_ok:
+        sys.exit(5)
+
+
+if __name__ == "__main__":
+    main()
