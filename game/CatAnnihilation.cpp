@@ -2544,8 +2544,13 @@ void CatAnnihilation::render() {
                         // XZ direction (arrows fly flat in survival). The
                         // trunk mesh is a unit-ish vertical cylinder — lay
                         // it down (rotateX 90°) then yaw to the flight line.
+                        // rotateY maps local +Z to (sin yaw, 0, cos yaw), and
+                        // rotateX(+90°) lays the base-origin trunk along +Z —
+                        // so yaw must be atan2(vx, vz) for the shaft to trail
+                        // the flight line (base at the arrow position, tip
+                        // leading forward).
                         const float yaw = std::atan2(arrow.velocity.x,
-                                                     -arrow.velocity.z);
+                                                     arrow.velocity.z);
                         CatEngine::Renderer::ScenePass::EntityDraw d;
                         d.position    = arrow.position;
                         d.halfExtents = Engine::vec3(0.4F);

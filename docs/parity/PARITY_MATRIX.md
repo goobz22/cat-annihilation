@@ -38,6 +38,16 @@ fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
 not the source constants** — the capture pipeline is
 `scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
+**Combat visuals 2026-07-17:** projectiles previously flew INVISIBLY in
+survival (their only visual was a particle emitter the survival ScenePass
+never renders — dogs died to unseen force). Now web-parity geometry: spells
+render as the 0.2-radius item-color sphere (water cyan #00ffff,
+LocalProjectileSystem.tsx:133-136), arrows as a brown shaft
+(0.6-long, tsx:116-129; single-mesh stand-in for the web's 3-part arrow,
+Lambert-lit vs web unlit — documented approximations). Verified by mid-flight
+headless captures (`build-ninja/headless/combatvis2/`). Hotbar switching also
+re-verified: active ring recolors per item, weapon card flips (Bow Level 1).
+
 **Endurance + guards 2026-07-17:**
 - 10-minute hidden autoplay soak: median ~59 fps EVERY minute, no
   degradation trend (no leak signature), clean progression (30 kills, level
