@@ -24,6 +24,19 @@ public:
     void update(float dt) override;
     const char* getName() const override { return "EnemyAISystem"; }
 
+    /**
+     * Boid separation contribution from ONE neighbor (web parity).
+     *
+     * Pure planar (X/Z) math, exposed static so it is unit-testable without an
+     * ECS: returns the away-from-`otherPos` force applied to the enemy at
+     * `selfPos`, with the web's linear falloff strength = (radius-dist)/radius
+     * scaled by `force`. Zero when the neighbor is outside `radius` or exactly
+     * coincident (dist == 0). Mirrors LocalEnemySystem.tsx:200-205.
+     */
+    static Engine::vec3 separationContribution(const Engine::vec3& selfPos,
+                                               const Engine::vec3& otherPos,
+                                               float radius, float force);
+
 private:
     /**
      * Update individual enemy AI
@@ -57,6 +70,13 @@ private:
      * Move enemy toward target
      */
     void moveTowardTarget(CatEngine::Entity entity, const Engine::vec3& targetPos, float speed, float dt);
+
+    /**
+     * Sum the boid separation force over all OTHER live enemies within
+     * kEnemySeparationRadius of `selfPos` (web parity). O(N) per call over the
+     * enemy set; the caller adds it to the seek velocity before integrating.
+     */
+    Engine::vec3 computeSeparationForce(CatEngine::Entity self, const Engine::vec3& selfPos) const;
 
     /**
      * Rotate enemy to face target
