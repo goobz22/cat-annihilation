@@ -251,7 +251,6 @@ bool MainMenu::initialize() {
     };
     m_buttons.push_back(quitButton);
 
-    m_selectedButtonIndex = 0;
     m_currentPage = MenuPage::ModeSelect;
 
     m_initialized = true;
@@ -275,16 +274,22 @@ void MainMenu::update(float deltaTime) {
         return;
     }
 
-    // Update animations (drives the starfield drift/twinkle in
-    // renderBackground; the ImGui text needs no per-frame animation state)
-    m_backgroundAnimTimer += deltaTime * 0.5F;
+    // The web menu backdrop is a STATIC navy gradient (no starfield), so
+    // there is no per-frame background animation to advance anymore. Hover
+    // feedback is now owned by ImGui (IsItemHovered on the card / footer
+    // widgets in render), so there is no MenuButton hit-test poll here
+    // either — both the animated starfield and the manual hover pass were
+    // retired in the 2026-07-17 presentation rebuild.
 
-    // Update button states — mode-select page only. On the customize page
-    // the MenuButton list isn't drawn, so hit-testing its (now off-screen)
-    // rects would fire phantom hover sounds while the mouse crosses where
-    // the cards used to be.
-    if (m_currentPage == MenuPage::ModeSelect) {
-        updateButtons();
+    // Reset-Progress confirm window: the web arms "click again to confirm"
+    // for 3 s then auto-clears (GameModeSelection.tsx:41). Count it down so a
+    // player who armed it and walked away isn't left one stray click from a
+    // wipe.
+    if (m_resetConfirmPending) {
+        m_resetConfirmTimer -= deltaTime;
+        if (m_resetConfirmTimer <= 0.0F) {
+            m_resetConfirmPending = false;
+        }
     }
 }
 
@@ -324,6 +329,32 @@ void MainMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth,
         ImGuiWindowFlags_NoBackground;
 
     ImGui::Begin("##MainMenuOverlay", nullptr, kOverlayFlags);
+
+    // ---------------------------------------------------------------- Backdrop
+    // The web overlay is a single deep-navy gradient — menus.css:1120,
+    // `linear-gradient(135deg, #1a1a2e, #16213e, #0f3460)` — with NO star
+    // specks (the pre-rebuild native menu drew a 50-star field that has no
+    // web analog). ImGui's DrawList has no rounded gradient primitive but
+    // AddRectFilledMultiColor does a flat 4-corner blend; laying the three
+    // stops across the diagonal (top-left brightest, bottom-right deepest)
+    // reproduces the 135deg wash closely enough that a side-by-side read
+    // matches. Drawn first inside the overlay window so it sits behind the
+    // card; the UIPass base fill (renderBackground) only shows if ImGui is
+    // absent.
+    {
+        ImDrawList* backdrop = ImGui::GetWindowDrawList();
+        const ImU32 topLeft  = IM_COL32(WebParity::kMenuBgTop.red,
+                                        WebParity::kMenuBgTop.green,
+                                        WebParity::kMenuBgTop.blue, 255);
+        const ImU32 midTone  = IM_COL32(WebParity::kMenuBgMid.red,
+                                        WebParity::kMenuBgMid.green,
+                                        WebParity::kMenuBgMid.blue, 255);
+        const ImU32 bottomRt = IM_COL32(WebParity::kMenuBgBottom.red,
+                                        WebParity::kMenuBgBottom.green,
+                                        WebParity::kMenuBgBottom.blue, 255);
+        backdrop->AddRectFilledMultiColor(ImVec2(0.0F, 0.0F), ImVec2(width, height),
+                                          topLeft, midTone, bottomRt, midTone);
+    }
 
     // ------------------------------------------------------------------- Pages
     // The pre-game flow is two pages inside the one overlay window,
@@ -386,54 +417,20 @@ void MainMenu::handleInput() {
     }
 
     // ---- Mode-select page --------------------------------------------------
-
-    // Keyboard navigation
-    if (m_input.isKeyPressed(Engine::Input::Key::Down)) {
-        int32_t startIndex = m_selectedButtonIndex;
-        do {
-            m_selectedButtonIndex = (m_selectedButtonIndex + 1) % static_cast<int32_t>(m_buttons.size());
-        } while (!m_buttons[m_selectedButtonIndex].enabled && m_selectedButtonIndex != startIndex);
-
-        if (m_selectedButtonIndex != startIndex) {
-            m_audio.playMenuHover();
-        }
-    }
-
-    if (m_input.isKeyPressed(Engine::Input::Key::Up)) {
-        int32_t startIndex = m_selectedButtonIndex;
-        do {
-            m_selectedButtonIndex = (m_selectedButtonIndex - 1 + static_cast<int32_t>(m_buttons.size()))
-                                  % static_cast<int32_t>(m_buttons.size());
-        } while (!m_buttons[m_selectedButtonIndex].enabled && m_selectedButtonIndex != startIndex);
-
-        if (m_selectedButtonIndex != startIndex) {
-            m_audio.playMenuHover();
-        }
-    }
-
-    // Activate button with Enter or Space
+    // The web menu is mouse-driven: the two mode CARDS and the footer buttons
+    // are clicked (renderModeSelectPage owns those ImGui hit-tests). Keyboard
+    // support is kept to the ONE primary action a controller/keyboard player
+    // expects — Enter/Space opens the Survival customize screen, the web's
+    // handleSurvivalMode (GameModeSelection.tsx:46-49). Story is the only
+    // other card and it is coming-soon (no keyboard target), so the vertical
+    // Up/Down button-list navigation the plain-button menu used is gone with
+    // the button list itself. Mouse clicks are handled inside the render pass
+    // by ImGui, never here, so a card can't double-activate (press + release).
     if (m_input.isKeyPressed(Engine::Input::Key::Enter) ||
         m_input.isKeyPressed(Engine::Input::Key::Space)) {
-
-        if (m_selectedButtonIndex >= 0 &&
-            m_selectedButtonIndex < static_cast<int32_t>(m_buttons.size()) &&
-            m_buttons[m_selectedButtonIndex].enabled) {
-            m_audio.playMenuClick();
-            if (m_buttons[m_selectedButtonIndex].callback) {
-                m_buttons[m_selectedButtonIndex].callback();
-            }
-        }
+        m_audio.playMenuClick();
+        m_currentPage = MenuPage::Customize;
     }
-
-    // Mouse activation is deliberately NOT handled here. ImGui::Button in
-    // renderModeSelectPage already fires the callback on click, and now
-    // that render() writes the real on-screen rects back into each
-    // MenuButton (so updateButtons' hover detection is truthful), a
-    // second Engine::Input-driven click path would double-activate every
-    // button: once on press (edge-triggered isMouseButtonPressed) and
-    // again on release (ImGui's click semantics). For toggles like
-    // Settings that double-fire is a visible bug — the panel would open
-    // and instantly close on one click.
 }
 
 // ============================================================================
