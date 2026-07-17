@@ -63,7 +63,11 @@ using namespace CatEngine::Renderer::MeshOptimizer;
 
 namespace {
 
-constexpr uint32_t kPropertySeed = 0xC07E5EEDu;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property mesh_optimizer"));
 
 // Icosphere generator copied from test_mesh_optimizer.cpp (same pattern;
 // duplicated rather than shared so the property test file is self-
