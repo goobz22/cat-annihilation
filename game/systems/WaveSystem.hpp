@@ -85,6 +85,26 @@ public:
     void startWaves();
 
     /**
+     * Reset the wave machine to its pre-first-wave state so a subsequent
+     * startWaves() actually re-runs startWave(initialWave_).
+     *
+     * WHY THIS EXISTS (2026-07-17 correctness audit): the game class's
+     * restart()/quitToMenu() wipe entities + stats and re-enter Playing,
+     * which calls startWaves() again — but startWaves() early-returns on
+     * `wavesStarted_`, which was set true once on the first game and reset
+     * NOWHERE. So a restart left this system holding its pre-death
+     * currentWave_ and a stale InProgress state referencing now-dead entity
+     * handles; the next update() saw "all enemies gone", spuriously
+     * completed the stale wave, and advanced the player straight into
+     * wave N+1. Observed: die on wave 1 → hit Try Again → thrown into
+     * wave 2 (10 dogs) with 0 kills within ~6s. reset() clears the latch
+     * and all per-run wave state so restart genuinely starts over at
+     * initialWave_. Distinct from the pause/resume path, which must NOT
+     * reset (a resume keeps wavesStarted_ so the wave continues).
+     */
+    void reset();
+
+    /**
      * Override the wave number that startWaves() will spawn first.
      *
      * Why this exists: the user-directive scoreboard's "different dog

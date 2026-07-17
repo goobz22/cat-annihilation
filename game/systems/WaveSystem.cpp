@@ -170,6 +170,34 @@ void WaveSystem::startWaves() {
     startWave(initialWave_);
 }
 
+void WaveSystem::reset() {
+    // Destroy any live enemies this system still owns before dropping their
+    // handles — a restart's ecs_.clearEntities() usually does this first,
+    // but reset() must be safe to call standalone (and idempotent). The
+    // isAlive guard makes a double-clear a no-op.
+    if (ecs_ != nullptr) {
+        for (auto enemy : spawnedEnemies_) {
+            if (ecs_->isAlive(enemy)) {
+                ecs_->destroyEntity(enemy);
+            }
+        }
+    }
+    spawnedEnemies_.clear();
+
+    // Clear the latch + all per-run wave state so the next startWaves()
+    // re-runs startWave(initialWave_) from a clean slate. state_ goes to
+    // Transition (the constructor's initial value) rather than Spawning so
+    // a stray update() before startWaves() can't spawn against a zeroed
+    // budget.
+    wavesStarted_ = false;
+    currentWave_ = 0;
+    enemiesToSpawn_ = 0;
+    enemiesSpawned_ = 0;
+    spawnTimer_ = 0.0f;
+    stateTimer_ = 0.0f;
+    state_ = WaveState::Transition;
+}
+
 void WaveSystem::forceNextWave() {
     // Destroy all remaining enemies
     for (auto enemy : spawnedEnemies_) {

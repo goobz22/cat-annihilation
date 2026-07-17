@@ -232,11 +232,19 @@ if (!quick && stages[stages.length - 1]!.ok) {
   // MODE CARD centers at ~(0.39, 0.48) on the side-by-side card layout, and
   // the customize page's teal START GAME sits at ~(0.654, 0.664). If a click
   // stops landing, screenshot first and re-derive (HEADLESS_HARNESS.md).
+  // The tail (after the first death) pins the 2026-07-17 restart bug: a
+  // restart must drop back to a FRESH wave 1 (7 enemies, 0 kills), not
+  // spuriously auto-complete the stale wave and jump to wave 2. The +5s
+  // window catches the game alive on the restarted wave 1; before the fix
+  // enemiesRemaining was 0 by +1s and wave was 2 by +6s.
   const menuFlowScript = [
     'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
     'click:0.654,0.664', 'wait:2', 'expect:state=Playing', 'expect:wave>=1',
     'hold:w,2', 'expect:playerZ<=-4', 'wait:20', 'expect:state=GameOver',
-    'expect:playerAlive=false', 'quit',
+    'expect:playerAlive=false',
+    'key:r', 'wait:5', 'expect:state=Playing', 'expect:wave=1',
+    'expect:enemiesRemaining=7', 'expect:enemiesKilled=0',
+    'quit',
   ].join(';')
   stages.push(
     runStage('menu-flow', 'bun', [

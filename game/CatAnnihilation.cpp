@@ -2860,6 +2860,20 @@ void CatAnnihilation::restart() {
     // Clear all entities
     ecs_.clearEntities();
 
+    // Reset the wave machine BEFORE re-entering Playing. ecs_.clearEntities()
+    // above wipes the dogs but does NOT touch WaveSystem's own state (it
+    // survives clearEntities, which keeps systems). Without this, startWaves()
+    // re-entered from setState(Playing) below early-returns on its
+    // wavesStarted_ latch, leaving the stale pre-death currentWave_ + an
+    // InProgress state pointing at now-dead handles — the next update() then
+    // spuriously "completes" that ghost wave and dumps the player into
+    // wave N+1 with 0 kills (2026-07-17 audit; verified die-on-wave-1 →
+    // restart → wave 2 in ~6s). reset() clears the latch so the wave truly
+    // starts over at initialWave_.
+    if (waveSystem_ != nullptr) {
+        waveSystem_->reset();
+    }
+
     // Reset game statistics
     gameTime_ = 0.0F;
     enemiesKilled_ = 0;
@@ -2925,6 +2939,16 @@ void CatAnnihilation::quitToMenu() {
 
     // Clear all entities
     ecs_.clearEntities();
+
+    // Reset the wave machine too (same rationale as restart()): systems
+    // survive clearEntities(), so without this the next New Game inherits
+    // the stale wavesStarted_ latch + pre-quit currentWave_ and never
+    // starts fresh at wave 1. startNewGame() routes through restart(), which
+    // now also resets — this belt-and-suspenders call keeps quitToMenu
+    // correct on its own.
+    if (waveSystem_ != nullptr) {
+        waveSystem_->reset();
+    }
 
     // Reset statistics
     gameTime_ = 0.0F;
