@@ -149,9 +149,43 @@ bool PauseMenu::initialize() {
     // Create menu buttons
     m_buttons.clear();
 
-    // Resume button
+    // ---------------------------------------------------------------------
+    // Web-parity note — the pause menu is a DELIBERATE SUPERSET of the web's
+    // (surfaced for docs/parity/PARITY_MATRIX.md "Deliberate divergences";
+    // both sides DO have a pause menu — the earlier "web has none" hypothesis
+    // was wrong, web PauseMenu.tsx:80-225).
+    //
+    // Web pause face (PauseMenu.tsx): title "PAUSED", a TURN SENSITIVITY
+    // slider (0.1-2.0), a MOVEMENT SPEED slider (0.5-2.0), a read-only CONTROLS
+    // list, and two buttons — "Resume Game" and "Quit Game" (a SOFT quit that
+    // returns to the mode-select screen, handleQuitGame :59-76).
+    //
+    // Native keeps that and adds three things the web has no button for, all
+    // recorded here as intentional divergences:
+    //   • Restart Wave (re-run the current wave with confirmation),
+    //   • a Settings sub-panel (Master/Music/SFX volume, mouse sensitivity,
+    //     invert-Y, fullscreen, VSync) — the web has no in-pause audio/display
+    //     settings at all, and
+    //   • "Quit Game" == EXIT TO DESKTOP (a native app has a real process to
+    //     quit; the browser build does not). The web's soft "Quit Game"
+    //     (return to menu) maps onto native's separate "Main Menu" button.
+    //
+    // The web's two gameplay sliders are NOT reproduced here on purpose. They
+    // scale the control scheme at runtime via a persisted multiplier
+    // (spinSensitivity / moveSpeed, PauseMenu.tsx:8-16,43-53); the native
+    // control scheme reads WebParity::kPlayerTurnSpeed / kPlayerWalkSpeed as
+    // compile-time constants inside PlayerControlSystem (a different ownership
+    // area) and GameConfig has no turn/move multiplier field, so a FUNCTIONAL
+    // slider is a cross-cutting change owned elsewhere — not something this
+    // menu can wire. Adding an INERT slider that visibly does nothing would
+    // violate the repo's no-placeholder bar, so the parity path is tracked as
+    // a follow-up rather than faked here. Only the exact web button label
+    // "Resume Game" is adopted below.
+    // ---------------------------------------------------------------------
+
+    // Resume button — web label is exactly "Resume Game" (PauseMenu.tsx:204).
     MenuButton resumeButton;
-    resumeButton.text = "Resume";
+    resumeButton.text = "Resume Game";
     resumeButton.position = {400.0F, 250.0F};
     resumeButton.size = {200.0F, 50.0F};
     resumeButton.enabled = true;

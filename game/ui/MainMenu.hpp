@@ -158,6 +158,37 @@ public:
     void getSelectedFurLinear(float& r, float& g, float& b) const;
 
     /**
+     * @brief True once the player confirmed an eye colour via START GAME.
+     *
+     * Shares the single confirm latch with the fur colour: the web sets the
+     * whole CatCustomization object (fur + eyes + pattern + …) in ONE call
+     * inside confirmSurvivalMode (GameModeSelection.tsx:71), so there is no
+     * state in which the fur is confirmed but the eyes are not. Returning
+     * the same flag keeps that invariant explicit rather than tracking two
+     * booleans that can never legitimately disagree.
+     */
+    [[nodiscard]] bool hasSelectedEyeColor() const { return m_furColorConfirmed; }
+
+    /**
+     * @brief Linear-decoded rgb of the chosen eye swatch.
+     *
+     * Same decode path as getSelectedFurLinear (WebParityConfig
+     * srgbChannelToLinear): the eye swatch table stores the web's sRGB hex
+     * bytes and the consumer would multiply the tint in linear space.
+     *
+     * NOTE — downstream limitation, not a bug in this accessor: the native
+     * Meshy cat ships a BAKED eye texture, so the player-entity whole-body
+     * tint (which recolours fur) cannot repaint just the eyes
+     * (CatAnnihilation.cpp:2949-2950 records this). Making the picked eye
+     * colour VISIBLE needs a separable eye material/mask on the model or a
+     * shader that isolates the eye texels — an asset/shader change outside
+     * the menu. Until then this value is a truthful, latched player choice
+     * the picker exposes (mirroring the web's eyeColor), ready for whichever
+     * subsystem gains the ability to apply it.
+     */
+    void getSelectedEyeLinear(float& r, float& g, float& b) const;
+
+    /**
      * @brief Set version string to display
      * @param version Version string (e.g., "v1.0.0")
      */
@@ -261,6 +292,10 @@ private:
     // not on every swatch click.
     MenuPage m_currentPage = MenuPage::ModeSelect;
     int m_selectedFurIndex = CatGame::WebParity::kDefaultFurSwatchIndex;
+    // Eye swatch defaults to the web's initially-highlighted eye colour
+    // (#4CAF50 / index 0), same convention as the fur index above. Confirmed
+    // by the SAME m_furColorConfirmed latch — see hasSelectedEyeColor().
+    int m_selectedEyeIndex = CatGame::WebParity::kDefaultEyeSwatchIndex;
     bool m_furColorConfirmed = false;
 
     // Animation (starfield drift/twinkle phase for renderBackground)

@@ -220,8 +220,12 @@ private:
 
     // Game over / victory state
     float m_endGameTimer = 0.0F;
+    // Final score — shown on the native Victory screen (a story-mode superset
+    // the web survival build has no equivalent for). The death screen no
+    // longer shows a score: the web death screen (GameOverScreen.tsx) has no
+    // score line, so parity dropped it (and with it the former m_finalWave,
+    // which had no reader left and would have tripped -Wunused-private-field).
     uint32_t m_finalScore = 0;
-    uint32_t m_finalWave = 0;
     float m_survivalTime = 0.0F;
     // Enemies still alive at the moment of death — the web death screen's
     // "Enemies Remaining" stat (GameOverScreen.tsx:63). Fed via

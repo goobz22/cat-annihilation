@@ -700,89 +700,151 @@ void MainMenu::renderCustomizePage(float width, float height) {
         ImGui::PopFont();
     }
 
-    // ------------------------------------------------------------ Fur swatches
-    // The web's fur picker (GameModeSelection.tsx:196-209) renders
-    // colors.fur as a grid of unlabeled color buttons with the current
-    // choice outlined. Same here: a 5x2 grid of ImGui color buttons over
-    // the parity table's kFurSwatches, gold ring on the selection.
+    // ---------------------------------------------------------- Colour pickers
+    // The web customize screen stacks two identical pickers — Fur Color
+    // (GameModeSelection.tsx:196-209) then Eye Color (:211-224) — each a
+    // labeled section over a grid of unlabeled colour buttons with the
+    // active choice outlined. Because the two controls are structurally the
+    // same, ONE lambda draws both instead of duplicating the
+    // ColorButton / selection-ring / tooltip logic twice; it returns the
+    // index clicked this frame (or -1) and reports the grid's bottom Y so
+    // the next section can stack beneath it.
     constexpr int kSwatchColumns = 5;
     constexpr float kSwatchSize = 56.0F;
     constexpr float kSwatchGap = 14.0F;
     const float gridWidth = static_cast<float>(kSwatchColumns) * kSwatchSize +
                             static_cast<float>(kSwatchColumns - 1) * kSwatchGap;
     const float gridX = (width - gridWidth) * 0.5F;
-    const float gridY = height * 0.40F;
+    // The whole customize stack starts at 0.30h (was 0.40h before the eye
+    // picker existed): the added eye row needs vertical room, and starting
+    // higher keeps BACK / START on screen down to 720p.
+    const float furGridY = height * 0.30F;
 
-    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
-        ImGui::PushFont(boldFont);
-    }
-    const char* furLabel = "FUR COLOR";
-    const ImVec2 furLabelSize = ImGui::CalcTextSize(furLabel);
-    ImGui::SetCursorPos(ImVec2((width - furLabelSize.x) * 0.5F,
-                               gridY - furLabelSize.y - 14.0F));
-    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", furLabel);
-    if (m_imguiLayer->GetBoldFont() != nullptr) {
-        ImGui::PopFont();
-    }
-
-    for (int i = 0; i < WebParity::kFurSwatchCount; ++i) {
-        const auto& swatch = WebParity::kFurSwatches[i];
-        const int column = i % kSwatchColumns;
-        const int row = i / kSwatchColumns;
-        ImGui::SetCursorPos(
-            ImVec2(gridX + static_cast<float>(column) * (kSwatchSize + kSwatchGap),
-                   gridY + static_cast<float>(row) * (kSwatchSize + kSwatchGap)));
-
-        // ImGui hands style/widget colors to the backend as-authored (no
-        // color-space conversion), so the swatch face takes the raw web
-        // sRGB bytes and displays exactly the web hex. Only the value fed
-        // onward to the tint push constant is linear-decoded — that's
-        // getSelectedFurLinear's job, not the preview's.
-        const ImVec4 faceColor(static_cast<float>(swatch.red) / 255.0F,
-                               static_cast<float>(swatch.green) / 255.0F,
-                               static_cast<float>(swatch.blue) / 255.0F,
-                               1.0F);
-        ImGui::PushID(i);
-        if (ImGui::ColorButton("##fur", faceColor,
-                               ImGuiColorEditFlags_NoTooltip |
-                                   ImGuiColorEditFlags_NoDragDrop |
-                                   ImGuiColorEditFlags_NoAlpha,
-                               ImVec2(kSwatchSize, kSwatchSize))) {
-            m_audio.playMenuClick();
-            m_selectedFurIndex = i;
+    auto drawSwatchGrid = [&](const char* label,
+                              const WebParity::ColorSwatch* swatches,
+                              int swatchCount,
+                              int columns,
+                              float swatchSize,
+                              int selectedIndex,
+                              float originX,
+                              float originY,
+                              float& outBottomY) -> int {
+        // Section label (gold, bold) centred above the grid.
+        if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+            ImGui::PushFont(boldFont);
         }
-        // Our own tooltip (the swatch's parity-table name) instead of
-        // ColorButton's default r/g/b readout, which is picker chrome
-        // that means nothing to a player.
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", swatch.name);
+        const ImVec2 labelSize = ImGui::CalcTextSize(label);
+        ImGui::SetCursorPos(ImVec2((width - labelSize.x) * 0.5F,
+                                   originY - labelSize.y - 14.0F));
+        ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", label);
+        if (m_imguiLayer->GetBoldFont() != nullptr) {
+            ImGui::PopFont();
         }
-        ImGui::PopID();
 
-        // Selection ring — the ImGui take on the web's `.selected` outline
-        // (GameModeSelection.tsx:203). Same gold as the keyboard ring on
-        // the mode-select page.
-        if (i == m_selectedFurIndex) {
-            const ImVec2 rectMin = ImGui::GetItemRectMin();
-            const ImVec2 rectMax = ImGui::GetItemRectMax();
-            ImGui::GetWindowDrawList()->AddRect(
-                ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
-                ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
-                IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
+        int clickedIndex = -1;
+        int rowsDrawn = 0;
+        for (int i = 0; i < swatchCount; ++i) {
+            const auto& swatch = swatches[i];
+            const int column = i % columns;
+            const int row = i / columns;
+            rowsDrawn = row + 1;
+            ImGui::SetCursorPos(
+                ImVec2(originX + static_cast<float>(column) * (swatchSize + kSwatchGap),
+                       originY + static_cast<float>(row) * (swatchSize + kSwatchGap)));
+
+            // ImGui hands widget colours to the backend as-authored (no
+            // colour-space conversion), so the swatch face shows the raw
+            // web sRGB bytes — exactly the web hex. Only the value fed
+            // onward to a tint push constant is linear-decoded (that is
+            // getSelected*Linear's job, not the preview's).
+            const ImVec4 faceColor(static_cast<float>(swatch.red) / 255.0F,
+                                   static_cast<float>(swatch.green) / 255.0F,
+                                   static_cast<float>(swatch.blue) / 255.0F,
+                                   1.0F);
+            // Two-level ID scope: the section label disambiguates the fur
+            // grid from the eye grid (both draw a "##swatch" button), and
+            // the index disambiguates swatches within one grid — without the
+            // label push the two grids' same-index buttons would collide.
+            ImGui::PushID(label);
+            ImGui::PushID(i);
+            if (ImGui::ColorButton("##swatch", faceColor,
+                                   ImGuiColorEditFlags_NoTooltip |
+                                       ImGuiColorEditFlags_NoDragDrop |
+                                       ImGuiColorEditFlags_NoAlpha,
+                                   ImVec2(swatchSize, swatchSize))) {
+                m_audio.playMenuClick();
+                clickedIndex = i;
+            }
+            // Our own tooltip (the swatch's parity-table name) rather than
+            // ColorButton's default r/g/b readout, which is picker chrome
+            // that means nothing to a player.
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", swatch.name);
+            }
+            ImGui::PopID();
+            ImGui::PopID();
+
+            // Selection ring — the ImGui take on the web's `.selected`
+            // outline (GameModeSelection.tsx:203 fur / :218 eye). Same gold
+            // as the keyboard ring on the mode-select page.
+            if (i == selectedIndex) {
+                const ImVec2 rectMin = ImGui::GetItemRectMin();
+                const ImVec2 rectMax = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddRect(
+                    ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
+                    ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
+                    IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
+            }
         }
+        outBottomY = rowsDrawn > 0
+            ? originY + static_cast<float>(rowsDrawn) * swatchSize +
+                  static_cast<float>(rowsDrawn - 1) * kSwatchGap
+            : originY;
+        return clickedIndex;
+    };
+
+    // FUR COLOR — 5x2 grid over kFurSwatches.
+    float furGridBottom = furGridY;
+    const int furClicked = drawSwatchGrid(
+        "FUR COLOR", WebParity::kFurSwatches, WebParity::kFurSwatchCount,
+        kSwatchColumns, kSwatchSize, m_selectedFurIndex, gridX, furGridY,
+        furGridBottom);
+    if (furClicked >= 0) {
+        m_selectedFurIndex = furClicked;
     }
 
-    // Selected swatch name. The web shows the choice on a live 3D cat
-    // preview beside the grid; the native menu draws no 3D scene (a noted
-    // parity delta), so naming the selection is the stand-in feedback.
+    // EYE COLOR — eight swatches in one row directly below the fur grid,
+    // mirroring the web ordering (fur section, then eye section). The eye
+    // swatches are a touch smaller so eight of them span roughly the same
+    // width as the five-wide fur grid above.
+    constexpr int kEyeColumns = 8;
+    constexpr float kEyeSwatchSize = 44.0F;
+    const float eyeGridWidth = static_cast<float>(kEyeColumns) * kEyeSwatchSize +
+                               static_cast<float>(kEyeColumns - 1) * kSwatchGap;
+    const float eyeGridX = (width - eyeGridWidth) * 0.5F;
+    const float eyeGridY = furGridBottom + 48.0F; // leave room for the EYE COLOR label
+    float eyeGridBottom = eyeGridY;
+    const int eyeClicked = drawSwatchGrid(
+        "EYE COLOR", WebParity::kEyeSwatches, WebParity::kEyeSwatchCount,
+        kEyeColumns, kEyeSwatchSize, m_selectedEyeIndex, eyeGridX, eyeGridY,
+        eyeGridBottom);
+    if (eyeClicked >= 0) {
+        m_selectedEyeIndex = eyeClicked;
+    }
+
+    // Selected-choice readout. The web shows the choices on a live 3D cat
+    // preview beside the grids; the native menu draws no 3D scene (a noted
+    // parity delta), so naming both selections is the stand-in feedback.
     if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
         ImGui::PushFont(regularFont);
     }
-    const char* selectedName = WebParity::kFurSwatches[m_selectedFurIndex].name;
-    const ImVec2 nameSize = ImGui::CalcTextSize(selectedName);
-    const float nameY = gridY + 2.0F * kSwatchSize + kSwatchGap + 16.0F;
+    const std::string selectionText =
+        std::string("Fur: ") + WebParity::kFurSwatches[m_selectedFurIndex].name +
+        "    Eyes: " + WebParity::kEyeSwatches[m_selectedEyeIndex].name;
+    const ImVec2 nameSize = ImGui::CalcTextSize(selectionText.c_str());
+    const float nameY = eyeGridBottom + 20.0F;
     ImGui::SetCursorPos(ImVec2((width - nameSize.x) * 0.5F, nameY));
-    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", selectedName);
+    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", selectionText.c_str());
     if (m_imguiLayer->GetRegularFont() != nullptr) {
         ImGui::PopFont();
     }
@@ -833,6 +895,17 @@ void MainMenu::confirmStartGame() {
 
 void MainMenu::getSelectedFurLinear(float& r, float& g, float& b) const {
     const auto& swatch = WebParity::kFurSwatches[m_selectedFurIndex];
+    r = WebParity::srgbChannelToLinear(swatch.red);
+    g = WebParity::srgbChannelToLinear(swatch.green);
+    b = WebParity::srgbChannelToLinear(swatch.blue);
+}
+
+void MainMenu::getSelectedEyeLinear(float& r, float& g, float& b) const {
+    // Identical decode to getSelectedFurLinear, over the eye palette. See
+    // the header's getSelectedEyeLinear note for why applying this to the
+    // native cat's eyes is currently asset/shader-gated (the baked Meshy eye
+    // texture); the value itself is a truthful latched player choice.
+    const auto& swatch = WebParity::kEyeSwatches[m_selectedEyeIndex];
     r = WebParity::srgbChannelToLinear(swatch.red);
     g = WebParity::srgbChannelToLinear(swatch.green);
     b = WebParity::srgbChannelToLinear(swatch.blue);
