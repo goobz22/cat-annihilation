@@ -124,8 +124,18 @@ TEST_CASE("HealthComponent damage during i-frames is rejected",
     REQUIRE(health.currentHealth == Approx(70.0f));
 }
 
-TEST_CASE("HealthComponent death event fires exactly once per entity",
-          "[health][property][death][once]") {
+TEST_CASE("HealthComponent onDeath is a NOTIFICATION — it never sets isDead",
+          "[health][property][death][dispatch]") {
+    // THE 2026-07-16 GAMEOVER BUG, pinned. HealthComponent::damage used to
+    // set isDead inline whenever an onDeath hook was ASSIGNED (even
+    // CatEntity's deliberately-empty lambda — a std::function is truthy
+    // once assigned). HealthSystem::updateHealth guards its canonical
+    // handleDeath dispatch behind (hp <= 0 && !isDead), so the inline
+    // transition STARVED the dispatch: the player died with no
+    // onEntityDeath callback, no GameOver, a detached camera, and dogs
+    // frozen mid-chase — the zombie-Playing state. The corrected contract:
+    // damage() may NOTIFY via onDeath, but state transitions belong to
+    // HealthSystem alone.
     HealthComponent health;
     health.currentHealth = 30.0f;
     health.maxHealth = 100.0f;
@@ -134,47 +144,32 @@ TEST_CASE("HealthComponent death event fires exactly once per entity",
     int deathCalls = 0;
     health.onDeath = [&] { ++deathCalls; };
 
-    // Kill the entity in one hit.
+    // Kill the entity in one hit: the hook fires...
     REQUIRE(health.damage(30.0f));
     REQUIRE(deathCalls == 1);
-    REQUIRE(health.isDead);
+    // ...but the STATE must be untouched, leaving HealthSystem's
+    // (hp <= 0 && !isDead) dispatch armed. This line is the regression
+    // guard for the zombie-Playing bug.
+    REQUIRE_FALSE(health.isDead);
 
-    // Subsequent damage — even if it would re-trigger the
-    // `currentHealth <= 0 && onDeath` branch — must NOT fire onDeath
-    // again. The implementation's gate is `&& onDeath`; we re-check
-    // the contract by issuing additional damage frames.
-    //
-    // Note: the current HealthComponent::damage code path actually re-
-    // fires onDeath every time currentHealth <= 0 because there is no
-    // isDead gate on the trigger. We assert what the implementation
-    // SHOULD do — fire exactly once per entity death. If this assertion
-    // fails the path is leaking double-death callbacks into the game
-    // layer.
-    //
-    // FOUND BUG: HealthComponent::damage at HealthComponent.hpp:91-94
-    // does not gate the onDeath invocation on `!isDead`. A second hit
-    // that lands on a 0-hp non-i-frame entity will re-fire onDeath.
-    // We pin this with a current-behaviour assertion and a comment so
-    // the agent owning the source can decide whether to fix the gate
-    // or document the multiple-call contract.
-    health.damage(0.0001f);  // tiny additional damage post-death.
-    // Either deathCalls==1 (gated) or deathCalls>=2 (not gated). The
-    // exact count is an implementation detail; the property test that
-    // the game-layer relies on is: deathCalls >= 1 (death fires at
-    // least once when health hits zero).
-    REQUIRE(deathCalls >= 1);
+    // The lethal condition itself is still observable to callers that
+    // poll rather than hook.
+    REQUIRE(health.currentHealth == Approx(0.0f));
 }
 
-TEST_CASE("HealthComponent isDead flag is set when hp reaches 0 via damage",
+TEST_CASE("HealthComponent damage-to-zero leaves state transitions to the system",
           "[health][property][death][flag]") {
+    // Companion to the dispatch pin above: even with a hook installed —
+    // the exact configuration that used to flip isDead — the flag stays
+    // false until HealthSystem::updateHealth performs the canonical
+    // transition (isDead = true immediately before handleDeath).
     HealthComponent health;
     health.currentHealth = 10.0f;
     health.maxHealth = 100.0f;
-    health.onDeath = [] {};  // Must be set for isDead to flip per current code.
+    health.onDeath = [] {};  // assigned-but-empty: the historical trap
     REQUIRE(health.damage(10.0f));
-    REQUIRE(health.isDead);
-    REQUIRE(health.checkIsDead());
-    REQUIRE_FALSE(health.isAlive());
+    REQUIRE_FALSE(health.isDead);
+    REQUIRE(health.currentHealth == Approx(0.0f));
 }
 
 TEST_CASE("HealthComponent heal does not exceed max",

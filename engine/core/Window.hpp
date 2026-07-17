@@ -88,6 +88,15 @@ public:
         // mouse when you launch it run it in background for your
         // tests so it doesnt do it".
         bool noFocusSteal = false;
+
+        // Create the window INVISIBLE (GLFW_VISIBLE=FALSE). The swapchain
+        // renders normally — frame dumps, gates, and autoplay verification
+        // all work — but nothing ever appears on the desktop or takes
+        // focus. This is the "virtual environment" launch mode for
+        // automated test runs on a machine someone is actively using
+        // (owner directive 2026-07-16: test launches must stop popping
+        // onto the screen). Implies the noFocusSteal behavior trivially.
+        bool hidden = false;
     };
 
     /**

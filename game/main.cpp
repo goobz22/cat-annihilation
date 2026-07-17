@@ -549,6 +549,7 @@ void printHelp() {
     std::cout << "  --validation, -v           Enable Vulkan validation layers\n";
     std::cout << "  --config <path>            Path to config file (default: config.json)\n";
     std::cout << "  --autoplay, -a             Skip main menu, start in arcade mode\n";
+    std::cout << "  --hidden                   Never show or focus the window (automated runs)\n";
     std::cout << "  --max-frames <N>           Exit cleanly after rendering N frames (0 = no cap)\n";
     std::cout << "  --exit-after-seconds <S>   Exit cleanly after S seconds (0 = no cap)\n";
     std::cout << "  --log-file <path>          Mirror Logger output to <path> (in addition to console)\n";

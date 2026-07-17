@@ -100,17 +100,16 @@ CatEngine::Entity CatEntity::createCustom(
     // bypass the !isDead guard in HealthSystem::updateHealth and prevent
     // handleDeath / handleEnemyDeath / the death-pose freeze (and now the
     // particle burst) from firing.
-    health.onDeath = [entity]() {
-        (void)entity;  // Entity ID available if needed for cleanup
-    };
-
-    // Set up damage callback - triggers visual/audio feedback
-    health.onDamage = [](float damage) {
-        // Damage feedback is handled by the DamageEvent published by CombatSystem
-        // The CatAnnihilation class listens for this and triggers HUD effects + audio
-        // No direct action needed here - event-driven architecture handles it
-        (void)damage;  // Damage amount available if needed for scaling effects
-    };
+    // NO onDeath/onDamage hooks — deliberately UNSET, and this time it
+    // actually is. The previous code assigned EMPTY lambdas "to leave
+    // death handling to the game layer", but an assigned std::function is
+    // truthy, and HealthComponent::damage()'s old `hp <= 0 && onDeath`
+    // branch treated that as "owner manages death" — setting isDead
+    // inline and starving HealthSystem::handleDeath, so the player died
+    // without a GameOver transition (the zombie-Playing bug). damage() no
+    // longer transitions state at all, but empty hook assignments stay
+    // banned here: they document nothing and re-arm the same trap in any
+    // older branch.
 
     ecs.addComponent(entity, health);
 

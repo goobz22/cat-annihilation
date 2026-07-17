@@ -87,9 +87,18 @@ struct HealthComponent {
             onDamage(amount);
         }
 
-        // Check for death
+        // Death NOTIFICATION only — never a state transition. Setting
+        // isDead here starved the canonical death dispatch: HealthSystem::
+        // updateHealth guards handleDeath behind (hp <= 0 && !isDead), so
+        // any entity whose owner had assigned onDeath — even CatEntity's
+        // deliberately-EMPTY hook (a std::function is truthy once
+        // assigned) — died silently: no handleDeath, no onEntityDeath_
+        // callback, no GameOver. The 2026-07-16 zombie-Playing state
+        // (player at 0 HP, camera detached, dogs frozen) was exactly this.
+        // HealthSystem::handleDeath is the single canonical "this entity
+        // just died" point; this hook only lets the component's owner
+        // observe the lethal hit.
         if (currentHealth <= 0.0f && onDeath) {
-            isDead = true;
             onDeath();
         }
 

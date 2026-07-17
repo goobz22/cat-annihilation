@@ -1,4 +1,5 @@
 #include "Window.hpp"
+#include <algorithm>
 #include <stdexcept>
 #include <iostream>
 
