@@ -506,3 +506,72 @@ TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-pari
     CHECK(sameRGB(WebParity::kHudEnemyBarMid,  0xFF, 0x88, 0x44)); // tsx:492 #ff8844
     CHECK(sameRGB(WebParity::kHudEnemyBarLow,  0xCC, 0x22, 0x22)); // tsx:492 #cc2222
 }
+
+TEST_CASE("pre-game menu + death screen COPY and CHROME colours match the web",
+          "[web-parity][menu][ui]") {
+    // The 2026-07-17 presentation-parity pins: the rendered LOOK of the
+    // menu / customize / death screens, which a constants-only sweep missed
+    // entirely (the numbers matched while the screens looked nothing alike).
+    // Reference: GameModeSelection.tsx + GameOverScreen.tsx and their CSS in
+    // menus.css / ui.css. String identity + exact web hex bytes are the
+    // contract the rebuilt MainMenu / renderEndScreenOverlay render against.
+    auto sameUi = [](const WebParity::UiColor& color, int r, int g, int b) {
+        return color.red == r && color.green == g && color.blue == b;
+    };
+
+    // ---- Menu copy (GameModeSelection.tsx) --------------------------
+    CHECK(std::string(WebParity::kSurvivalCardDescription) ==
+          "Face unlimited waves of enemies and see how long you can survive. "
+          "Perfect your combat skills and climb the leaderboards.");
+    REQUIRE(WebParity::kSurvivalFeatureCount == 4);
+    CHECK(std::string(WebParity::kSurvivalFeatures[0]) == "Endless wave-based combat");
+    CHECK(std::string(WebParity::kSurvivalFeatures[3]) == "Quick action gameplay");
+    CHECK(std::string(WebParity::kStoryCardDescription) ==
+          "Join a clan and embark on epic quests. Experience a Warriors-inspired "
+          "adventure with rich storytelling and character progression.");
+    REQUIRE(WebParity::kStoryFeatureCount == 4);
+    CHECK(std::string(WebParity::kStoryFeatures[0]) == "Choose from 4 unique clans");
+    CHECK(std::string(WebParity::kStoryFeatures[3]) == "Clan politics & relationships");
+    CHECK(std::string(WebParity::kDevStatusHeading) == "Development Status:");
+    CHECK(std::string(WebParity::kDevStatusLine1) ==
+          "All game modes are in active live development");
+    CHECK(std::string(WebParity::kDevStatusLine2) ==
+          "Leaderboards coming soon! Track your progress and compete with other warriors.");
+    CHECK(std::string(WebParity::kResetProgressLabel) == "Reset Progress");
+    CHECK(std::string(WebParity::kStartGameLabel) == "START GAME");
+    CHECK(std::string(WebParity::kBackLabel) == "BACK");
+
+    // ---- Death copy (GameOverScreen.tsx) ----------------------------
+    CHECK(std::string(WebParity::kDeathTitle) == "YOU DIED");            // tsx:57
+    CHECK(std::string(WebParity::kDeathMessage) == "Your cat has fallen in battle!"); // tsx:60
+    CHECK(std::string(WebParity::kDeathRestartLabel) == "TRY AGAIN");    // tsx:72
+    CHECK(std::string(WebParity::kDeathPrompt) == "Press Space or click to restart"); // tsx:76
+
+    // ---- Menu chrome colours (menus.css) — the drift the audit named --
+    // Navy overlay gradient, NOT a starfield (menus.css:1120).
+    CHECK(sameUi(WebParity::kMenuBgTop,    0x1A, 0x1A, 0x2E)); // #1a1a2e
+    CHECK(sameUi(WebParity::kMenuBgMid,    0x16, 0x21, 0x3E)); // #16213e
+    CHECK(sameUi(WebParity::kMenuBgBottom, 0x0F, 0x34, 0x60)); // #0f3460
+    CHECK(sameUi(WebParity::kCardTop,      0x2D, 0x2D, 0x2D)); // #2d2d2d
+    CHECK(sameUi(WebParity::kCardBorder,   0x44, 0x44, 0x44)); // #444
+    // The title is WHITE (menus.css:1206), the exact regression the pre-audit
+    // gold title violated.
+    CHECK(sameUi(WebParity::kMenuTitleColor,    0xFF, 0xFF, 0xFF)); // #fff
+    CHECK(sameUi(WebParity::kMenuSubtitleColor, 0xCC, 0xCC, 0xCC)); // #ccc
+    CHECK(sameUi(WebParity::kSurvivalAccent, 0xFF, 0x6B, 0x6B)); // #ff6b6b (menus.css:1297)
+    CHECK(sameUi(WebParity::kStoryAccent,    0x4E, 0xCD, 0xC4)); // #4ecdc4 (menus.css:1301)
+
+    // ---- Customize chrome (menus.css) — orange title, not yellow -----
+    CHECK(sameUi(WebParity::kCustomizeTitleColor, 0xF3, 0x9C, 0x12)); // #f39c12 (:2220)
+    CHECK(sameUi(WebParity::kSwatchSelectedColor, 0xF3, 0x9C, 0x12)); // #f39c12 (:2296)
+    CHECK(sameUi(WebParity::kStartButtonTop,      0x4E, 0xCD, 0xC4)); // teal START (:1534)
+    CHECK(sameUi(WebParity::kResetButtonTop,      0x95, 0xA5, 0xA6)); // grey reset (:2171)
+
+    // ---- Death chrome (ui.css) — red glow modal ---------------------
+    CHECK(sameUi(WebParity::kDeathAccent,       0xDC, 0x26, 0x26)); // #dc2626 (:406)
+    CHECK(sameUi(WebParity::kDeathAccentDark,   0xB9, 0x1C, 0x1C)); // #b91c1c (:468)
+    CHECK(sameUi(WebParity::kDeathCardTop,      0x1A, 0x1A, 0x1A)); // #1a1a1a (:405)
+    CHECK(sameUi(WebParity::kDeathMessageColor, 0xD1, 0xD5, 0xDB)); // #d1d5db (:434)
+    CHECK(sameUi(WebParity::kDeathStatsText,    0xF3, 0xF4, 0xF6)); // #f3f4f6 (:450)
+    CHECK(sameUi(WebParity::kDeathHintColor,    0x9C, 0xA3, 0xAF)); // #9ca3af (:461)
+}
