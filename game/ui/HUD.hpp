@@ -114,6 +114,18 @@ public:
      */
     void setXpProgress(float progress);
 
+    /**
+     * @brief Set the ability-status caption under the XP bar.
+     *
+     * Mirrors web CatStats' ability strip: unlocked ability names plus the
+     * "next unlock" hint (CatStats.tsx:64-75 picks the next of
+     * regeneration/agility/nineLives/predatorInstinct/alphaStrike by level).
+     * The game layer composes the full string from LevelingSystem state so
+     * the HUD stays a dumb renderer, same as setWave/setScore.
+     * @param line Composed text; empty hides the row.
+     */
+    void setAbilityLine(const std::string& line);
+
     // ========================================================================
     // Visual Effects
     // ========================================================================
@@ -273,6 +285,10 @@ private:
     // a 0..1 fraction of the current level, fed from LevelingSystem::getXPProgress().
     uint32_t m_catLevel = 1;
     float m_xpProgress = 0.0F;
+
+    // Ability strip under the XP bar (web CatStats ability icons + next-unlock
+    // hint). Composed by the game layer; empty = row hidden.
+    std::string m_abilityLine;
 
     // Visual options
     bool m_showCrosshair = true;

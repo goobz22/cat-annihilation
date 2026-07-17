@@ -1537,6 +1537,47 @@ void CatAnnihilation::updateUI(float dt) {
                 activeHud.setEnemyCount(static_cast<uint32_t>(std::max(remaining, 0)),
                                         static_cast<uint32_t>(std::max(total, 0)));
             }
+
+            // Ability strip: unlocked names + the next-unlock hint, the
+            // web CatStats readout (CatStats.tsx:64-75 walks the same
+            // 5/10/15/20/25 ladder). Composed here because the HUD is a
+            // dumb renderer and this layer owns the LevelingSystem.
+            if (levelingSystem_ != nullptr) {
+                const auto& abilities = levelingSystem_->getStats().abilities;
+                std::string unlockedNames;
+                const auto appendName = [&unlockedNames](const char* name) {
+                    if (!unlockedNames.empty()) {
+                        unlockedNames += ", ";
+                    }
+                    unlockedNames += name;
+                };
+                if (abilities.regeneration) appendName("Regeneration");
+                if (abilities.agility) appendName("Agility");
+                if (abilities.nineLives) appendName("Nine Lives");
+                if (abilities.predatorInstinct) appendName("Predator Instinct");
+                if (abilities.alphaStrike) appendName("Alpha Strike");
+
+                const int level = levelingSystem_->getLevel();
+                std::string abilityLine;
+                const char* nextName = level < 5    ? "Regeneration"
+                                       : level < 10 ? "Agility"
+                                       : level < 15 ? "Nine Lives"
+                                       : level < 20 ? "Predator Instinct"
+                                       : level < 25 ? "Alpha Strike"
+                                                    : nullptr;
+                if (nextName != nullptr) {
+                    const int nextLevel = level < 5 ? 5 : level < 10 ? 10
+                                          : level < 15 ? 15 : level < 20 ? 20 : 25;
+                    abilityLine = "Next: " + std::string(nextName) + " @ LVL " +
+                                  std::to_string(nextLevel);
+                }
+                if (!unlockedNames.empty()) {
+                    abilityLine = abilityLine.empty()
+                                      ? unlockedNames
+                                      : unlockedNames + "  |  " + abilityLine;
+                }
+                activeHud.setAbilityLine(abilityLine);
+            }
             activeHud.setScore(static_cast<uint32_t>(enemiesKilled_));
 
             // Active weapon indicator — mirrors web InventoryHotbar's active-slot

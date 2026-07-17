@@ -117,6 +117,44 @@ TEST_CASE("weapon-skill rewards and curve match the web literals", "[web-parity]
     CHECK(getWeaponSkillXPToNextLevel(99) == -1);
 }
 
+TEST_CASE("pre-game menu strings and fur swatches match the web", "[web-parity]") {
+    // GameModeSelection.tsx:312-313 headings; :322-323 / :341-342 mode
+    // cards; :179-180 customize headings; :162 the ten fur hexes in web
+    // order. String identity matters — the menu is the first thing a
+    // side-by-side comparison reads.
+    CHECK(std::string(WebParity::kMenuHeading) == "Cat Warriors");
+    CHECK(std::string(WebParity::kMenuSubheading) == "Choose your adventure");
+    CHECK(std::string(WebParity::kSurvivalCardTitle) == "Survival Mode");
+    CHECK(std::string(WebParity::kSurvivalCardSubtitle) == "Endless waves of enemies");
+    CHECK(std::string(WebParity::kStoryCardTitle) == "Story Mode");
+    CHECK(std::string(WebParity::kStoryCardSubtitle) == "Quest-driven clan adventure");
+    CHECK(std::string(WebParity::kCustomizeHeading) == "Customize Your Cat");
+    CHECK(std::string(WebParity::kCustomizeSubheading) == "Survival Warrior");
+
+    constexpr int kExpectedSwatches[][3] = {
+        {0x96, 0x4B, 0x00}, {0x8B, 0x45, 0x13}, {0xD2, 0x69, 0x1E},
+        {0xCD, 0x85, 0x3F}, {0xF4, 0xA4, 0x60}, {0xDE, 0xB8, 0x87},
+        {0x2D, 0x37, 0x48}, {0x4A, 0x55, 0x68}, {0x71, 0x80, 0x96},
+        {0xE2, 0xE8, 0xF0},
+    };
+    REQUIRE(WebParity::kFurSwatchCount == 10);
+    for (int i = 0; i < 10; ++i) {
+        CHECK(WebParity::kFurSwatches[i].red == kExpectedSwatches[i][0]);
+        CHECK(WebParity::kFurSwatches[i].green == kExpectedSwatches[i][1]);
+        CHECK(WebParity::kFurSwatches[i].blue == kExpectedSwatches[i][2]);
+    }
+    CHECK(WebParity::kDefaultFurSwatchIndex == 0);  // tsx:19 primaryColor '#964B00'
+
+    // The linear decode used for the tint push constant: spot-check the
+    // exact srgb_to_linear at both ends of the ramp.
+    CHECK(WebParity::srgbChannelToLinear(0) == 0.0f);
+    CHECK(WebParity::srgbChannelToLinear(255) > 0.999f);
+    // #964B00's red channel 0x96=150: srgb 0.588 -> linear ~0.3050
+    const float linearR = WebParity::srgbChannelToLinear(0x96);
+    CHECK(linearR > 0.30f);
+    CHECK(linearR < 0.31f);
+}
+
 TEST_CASE("leveling thresholds consume the web curve under parity", "[web-parity]") {
     // LevelingSystem::addXP does subtract-and-carry against
     // getCatXPToNextLevel, so the per-level threshold must equal the web

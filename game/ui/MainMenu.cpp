@@ -275,8 +275,8 @@ void MainMenu::update(float deltaTime) {
         return;
     }
 
-    // Update animations
-    m_titleAnimTimer += deltaTime;
+    // Update animations (drives the starfield drift/twinkle in
+    // renderBackground; the ImGui text needs no per-frame animation state)
     m_backgroundAnimTimer += deltaTime * 0.5F;
 
     // Update button states — mode-select page only. On the customize page
@@ -532,258 +532,310 @@ void MainMenu::renderBackground(CatEngine::Renderer::UIPass& uiPass) {
     uiPass.DrawQuad(gradientOverlay);
 }
 
-void MainMenu::renderTitle(CatEngine::Renderer::UIPass& uiPass) {
-    float centerX = static_cast<float>(m_screenWidth) / 2.0F;
-
-    // Animated title bounce
-    float bounce = std::sin(m_titleAnimTimer * 2.0F) * 8.0F;
-    float titleY = (static_cast<float>(m_screenHeight) * 0.18F) + bounce;
-
-    // Title shadow
-    CatEngine::Renderer::UIPass::TextDesc titleShadow;
-    titleShadow.text = "CAT ANNIHILATION";
-    titleShadow.x = centerX - 280.0F + 3.0F;
-    titleShadow.y = titleY + 3.0F;
-    titleShadow.fontSize = 56.0F;
-    titleShadow.r = 0.0F;
-    titleShadow.g = 0.0F;
-    titleShadow.b = 0.0F;
-    titleShadow.a = 0.6F;
-    titleShadow.depth = 0.09F;
-    titleShadow.fontAtlas = nullptr;
-    uiPass.DrawText(titleShadow);
-
-    // Main title with pulsing effect
-    float pulse = (std::sin(m_titleAnimTimer * 3.0F) + 1.0F) * 0.5F;
-    float titleR = 1.0F;
-    float titleG = 0.7F + (pulse * 0.2F);
-    float titleB = 0.0F + (pulse * 0.1F);
-
-    CatEngine::Renderer::UIPass::TextDesc titleText;
-    titleText.text = "CAT ANNIHILATION";
-    titleText.x = centerX - 280.0F;
-    titleText.y = titleY;
-    titleText.fontSize = 56.0F;
-    titleText.r = titleR;
-    titleText.g = titleG;
-    titleText.b = titleB;
-    titleText.a = 1.0F;
-    titleText.depth = 0.1F;
-    titleText.fontAtlas = nullptr;
-    uiPass.DrawText(titleText);
-
-    // Subtitle
-    float subtitleY = titleY + 70.0F;
-    CatEngine::Renderer::UIPass::TextDesc subtitleText;
-    subtitleText.text = "Survive the Waves";
-    subtitleText.x = centerX - 120.0F;
-    subtitleText.y = subtitleY;
-    subtitleText.fontSize = 24.0F;
-    subtitleText.r = 0.7F;
-    subtitleText.g = 0.7F;
-    subtitleText.b = 0.8F;
-    subtitleText.a = 0.9F;
-    subtitleText.depth = 0.1F;
-    subtitleText.fontAtlas = nullptr;
-    uiPass.DrawText(subtitleText);
-}
-
-void MainMenu::renderButtons(CatEngine::Renderer::UIPass& uiPass) {
-    static int renderCount = 0;
-    renderCount++;
-    
-    if (renderCount <= 3) {
-        std::cout << "[MainMenu::renderButtons] Drawing " << m_buttons.size() << " buttons\n";
+void MainMenu::renderModeSelectPage(float width, float height) {
+    // ------------------------------------------------------------------ Title
+    // Web parity: the web's menu heads itself "Cat Warriors" / "Choose
+    // your adventure" (GameModeSelection.tsx:312-313) — deliberately NOT
+    // the app name; the strings live in the parity table.
+    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+        ImGui::PushFont(titleFont);
     }
-    
+    const char* titleText = WebParity::kMenuHeading;
+    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
+    const float titleY = height * 0.13F;
+    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
+    if (m_imguiLayer->GetTitleFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // --------------------------------------------------------------- Subtitle
+    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const char* subtitleText = WebParity::kMenuSubheading;
+    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
+    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
+    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
+    if (m_imguiLayer->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // ----------------------------------------------------------------- Buttons
+    // One MenuButton model, two visual treatments: the mode cards
+    // (subtitle set) draw a taller ID-only button with title / subtitle /
+    // hint overlaid, the native-desktop extras keep ImGui's own centered
+    // label — exactly the split between the web's .game-mode-option cards
+    // and plain buttons.
+    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    const float buttonWidth = 360.0F;
+    const float plainButtonHeight = 60.0F;
+    const float cardButtonHeight = 96.0F;
+    const float buttonSpacing = 16.0F;
+    float cursorY = height * 0.32F;
+    const float buttonX = (width - buttonWidth) * 0.5F;
+
     for (size_t i = 0; i < m_buttons.size(); ++i) {
-        const auto& button = m_buttons[i];
-        bool isSelected = (static_cast<int32_t>(i) == m_selectedButtonIndex);
-        bool isHovered = button.hovered;
-        
-        if (renderCount <= 3) {
-            std::cout << "[MainMenu::renderButtons] Button " << i << ": pos=(" << button.position[0] << "," << button.position[1] 
-                      << "), size=(" << button.size[0] << "x" << button.size[1] << "), text=" << button.text << "\n";
+        auto& button = m_buttons[i];
+        const bool isCard = !button.subtitle.empty();
+        const float buttonHeight = isCard ? cardButtonHeight : plainButtonHeight;
+
+        ImGui::SetCursorPos(ImVec2(buttonX, cursorY));
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::BeginDisabled(!button.enabled);
+        // Cards use an ID-only label so the overlay text below fully
+        // controls the typography (two fonts on one button is beyond
+        // ImGui::Button's single label).
+        const bool clicked = ImGui::Button(isCard ? "##card" : button.text.c_str(),
+                                           ImVec2(buttonWidth, buttonHeight));
+        const bool hovered = ImGui::IsItemHovered();
+        const ImVec2 rectMin = ImGui::GetItemRectMin();
+        const ImVec2 rectMax = ImGui::GetItemRectMax();
+        ImGui::EndDisabled();
+        ImGui::PopID();
+
+        if (clicked) {
+            m_audio.playMenuClick();
+            if (button.callback) {
+                button.callback();
+            }
         }
 
-        // Button background
-        float bgR = 0.25F;
-        float bgG = 0.25F;
-        float bgB = 0.3F;
-        float bgA = 0.8F;
-        if (!button.enabled) {
-            bgR = 0.2F;
-            bgG = 0.2F;
-            bgB = 0.2F;
-            bgA = 0.4F;
-        } else if (isHovered || isSelected) {
-            bgR = 0.6F;
-            bgG = 0.4F;
-            bgB = 0.1F;
-            bgA = 0.9F;
+        // Write the real drawn geometry back into the model so
+        // updateButtons() hover-tests what is actually on screen (the same
+        // sync PauseMenu::render does). Item-rect coords are absolute
+        // screen coords, which match Engine::Input's window-relative mouse
+        // because this overlay window fills the screen from (0,0).
+        button.position = {rectMin.x, rectMin.y};
+        button.size = {rectMax.x - rectMin.x, rectMax.y - rectMin.y};
+
+        button.hovered = hovered;
+        if (hovered) {
+            m_hoveredButtonIndex = static_cast<int32_t>(i);
         }
 
-        CatEngine::Renderer::UIPass::QuadDesc buttonBg;
-        buttonBg.x = button.position[0];
-        buttonBg.y = button.position[1];
-        buttonBg.width = button.size[0];
-        buttonBg.height = button.size[1];
-        buttonBg.r = bgR;
-        buttonBg.g = bgG;
-        buttonBg.b = bgB;
-        buttonBg.a = bgA;
-        buttonBg.depth = 0.2F;
-        buttonBg.texture = nullptr;
-        uiPass.DrawQuad(buttonBg);
-
-        // Selection/highlight border
-        if (isSelected && button.enabled) {
-            float borderThickness = 3.0F;
-
-            // Top border
-            CatEngine::Renderer::UIPass::QuadDesc topBorder;
-            topBorder.x = button.position[0];
-            topBorder.y = button.position[1];
-            topBorder.width = button.size[0];
-            topBorder.height = borderThickness;
-            topBorder.r = 1.0F;
-            topBorder.g = 0.8F;
-            topBorder.b = 0.0F;
-            topBorder.a = 1.0F;
-            topBorder.depth = 0.25F;
-            topBorder.texture = nullptr;
-            uiPass.DrawQuad(topBorder);
-
-            // Bottom border
-            CatEngine::Renderer::UIPass::QuadDesc bottomBorder;
-            bottomBorder.x = button.position[0];
-            bottomBorder.y = button.position[1] + button.size[1] - borderThickness;
-            bottomBorder.width = button.size[0];
-            bottomBorder.height = borderThickness;
-            bottomBorder.r = 1.0F;
-            bottomBorder.g = 0.8F;
-            bottomBorder.b = 0.0F;
-            bottomBorder.a = 1.0F;
-            bottomBorder.depth = 0.25F;
-            bottomBorder.texture = nullptr;
-            uiPass.DrawQuad(bottomBorder);
-
-            // Left border
-            CatEngine::Renderer::UIPass::QuadDesc leftBorder;
-            leftBorder.x = button.position[0];
-            leftBorder.y = button.position[1];
-            leftBorder.width = borderThickness;
-            leftBorder.height = button.size[1];
-            leftBorder.r = 1.0F;
-            leftBorder.g = 0.8F;
-            leftBorder.b = 0.0F;
-            leftBorder.a = 1.0F;
-            leftBorder.depth = 0.25F;
-            leftBorder.texture = nullptr;
-            uiPass.DrawQuad(leftBorder);
-
-            // Right border
-            CatEngine::Renderer::UIPass::QuadDesc rightBorder;
-            rightBorder.x = button.position[0] + button.size[0] - borderThickness;
-            rightBorder.y = button.position[1];
-            rightBorder.width = borderThickness;
-            rightBorder.height = button.size[1];
-            rightBorder.r = 1.0F;
-            rightBorder.g = 0.8F;
-            rightBorder.b = 0.0F;
-            rightBorder.a = 1.0F;
-            rightBorder.depth = 0.25F;
-            rightBorder.texture = nullptr;
-            uiPass.DrawQuad(rightBorder);
-
-            // Selection indicator arrow
-            CatEngine::Renderer::UIPass::TextDesc arrow;
-            arrow.text = ">";
-            arrow.x = button.position[0] - 30.0F;
-            arrow.y = button.position[1] + (button.size[1] / 2.0F) - 12.0F;
-            arrow.fontSize = 24.0F;
-            arrow.r = 1.0F;
-            arrow.g = 0.8F;
-            arrow.b = 0.0F;
-            arrow.a = 1.0F;
-            arrow.depth = 0.25F;
-            arrow.fontAtlas = nullptr;
-            uiPass.DrawText(arrow);
+        // Keyboard-selection ring: handleInput moves m_selectedButtonIndex
+        // with Up/Down, and without a visual that path is unusable. Gold
+        // matches the selection border this menu used pre-ImGui.
+        if (static_cast<int32_t>(i) == m_selectedButtonIndex && button.enabled) {
+            ImGui::GetWindowDrawList()->AddRect(
+                ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
+                ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
+                IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
         }
 
-        // Button text
-        float textR = 1.0F;
-        float textG = 1.0F;
-        float textB = 1.0F;
-        float textA = 1.0F;
-        if (!button.enabled) {
-            textR = 0.5F;
-            textG = 0.5F;
-            textB = 0.5F;
-            textA = 0.7F;
+        // Card overlay text, drawn after the button so it layers on top;
+        // Text items carry no ID so they never steal the button's hover.
+        // Colors are explicit rather than BeginDisabled-driven so the
+        // disabled story card greys its text to match its button face.
+        if (isCard) {
+            const ImVec4 titleColor = button.enabled
+                ? ImVec4(1.00F, 1.00F, 1.00F, 1.00F)
+                : ImVec4(0.55F, 0.55F, 0.60F, 0.85F);
+            const ImVec4 subtitleColor = button.enabled
+                ? ImVec4(0.80F, 0.80F, 0.90F, 0.90F)
+                : ImVec4(0.50F, 0.50F, 0.55F, 0.80F);
+
+            const ImVec2 cardTitleSize = ImGui::CalcTextSize(button.text.c_str());
+            ImGui::SetCursorPos(ImVec2(buttonX + (buttonWidth - cardTitleSize.x) * 0.5F,
+                                       cursorY + 14.0F));
+            ImGui::TextColored(titleColor, "%s", button.text.c_str());
+
+            if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+                ImGui::PushFont(regularFont);
+            }
+            const ImVec2 cardSubSize = ImGui::CalcTextSize(button.subtitle.c_str());
+            ImGui::SetCursorPos(ImVec2(buttonX + (buttonWidth - cardSubSize.x) * 0.5F,
+                                       cursorY + 14.0F + cardTitleSize.y + 4.0F));
+            ImGui::TextColored(subtitleColor, "%s", button.subtitle.c_str());
+
+            if (!button.hint.empty()) {
+                // Amber so "Coming soon" reads as a status tag, not body copy.
+                const ImVec2 hintSize = ImGui::CalcTextSize(button.hint.c_str());
+                ImGui::SetCursorPos(
+                    ImVec2(buttonX + (buttonWidth - hintSize.x) * 0.5F,
+                           cursorY + buttonHeight - hintSize.y - 8.0F));
+                ImGui::TextColored(ImVec4(0.85F, 0.70F, 0.30F, 0.90F), "%s",
+                                   button.hint.c_str());
+            }
+            if (m_imguiLayer->GetRegularFont() != nullptr) {
+                ImGui::PopFont();
+            }
         }
 
-        // Estimate text centering
-        float textWidth = static_cast<float>(button.text.length()) * 10.0F;
-        float textX = button.position[0] + ((button.size[0] - textWidth) / 2.0F);
-        float textY = button.position[1] + ((button.size[1] - 20.0F) / 2.0F);
-
-        CatEngine::Renderer::UIPass::TextDesc buttonText;
-        buttonText.text = button.text.c_str();
-        buttonText.x = textX;
-        buttonText.y = textY;
-        buttonText.fontSize = 22.0F;
-        buttonText.r = textR;
-        buttonText.g = textG;
-        buttonText.b = textB;
-        buttonText.a = textA;
-        buttonText.depth = 0.3F;
-        buttonText.fontAtlas = nullptr;
-        uiPass.DrawText(buttonText);
+        cursorY += buttonHeight + buttonSpacing;
+    }
+    if (m_imguiLayer->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
     }
 }
 
-void MainMenu::renderVersion(CatEngine::Renderer::UIPass& uiPass) {
-    float versionX = static_cast<float>(m_screenWidth) - 120.0F;
-    float versionY = static_cast<float>(m_screenHeight) - 40.0F;
+void MainMenu::renderCustomizePage(float width, float height) {
+    // ------------------------------------------------------------------ Title
+    // Web parity: "Customize Your Cat" / "Survival Warrior"
+    // (GameModeSelection.tsx:179-180, survival path). Same heading
+    // treatment as the mode-select page so the two pages read as one menu.
+    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
+        ImGui::PushFont(titleFont);
+    }
+    const char* titleText = WebParity::kCustomizeHeading;
+    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
+    const float titleY = height * 0.13F;
+    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
+    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
+    if (m_imguiLayer->GetTitleFont() != nullptr) {
+        ImGui::PopFont();
+    }
 
-    CatEngine::Renderer::UIPass::TextDesc versionText;
-    versionText.text = m_versionString.c_str();
-    versionText.x = versionX;
-    versionText.y = versionY;
-    versionText.fontSize = 14.0F;
-    versionText.r = 0.5F;
-    versionText.g = 0.5F;
-    versionText.b = 0.5F;
-    versionText.a = 0.7F;
-    versionText.depth = 0.1F;
-    versionText.fontAtlas = nullptr;
-    uiPass.DrawText(versionText);
+    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const char* subtitleText = WebParity::kCustomizeSubheading;
+    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
+    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
+    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
+    if (m_imguiLayer->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
 
-    // Credits
-    CatEngine::Renderer::UIPass::TextDesc creditsText;
-    creditsText.text = "Made with CatEngine";
-    creditsText.x = 20.0F;
-    creditsText.y = static_cast<float>(m_screenHeight) - 40.0F;
-    creditsText.fontSize = 12.0F;
-    creditsText.r = 0.4F;
-    creditsText.g = 0.4F;
-    creditsText.b = 0.5F;
-    creditsText.a = 0.6F;
-    creditsText.depth = 0.1F;
-    creditsText.fontAtlas = nullptr;
-    uiPass.DrawText(creditsText);
+    // ------------------------------------------------------------ Fur swatches
+    // The web's fur picker (GameModeSelection.tsx:196-209) renders
+    // colors.fur as a grid of unlabeled color buttons with the current
+    // choice outlined. Same here: a 5x2 grid of ImGui color buttons over
+    // the parity table's kFurSwatches, gold ring on the selection.
+    constexpr int kSwatchColumns = 5;
+    constexpr float kSwatchSize = 56.0F;
+    constexpr float kSwatchGap = 14.0F;
+    const float gridWidth = static_cast<float>(kSwatchColumns) * kSwatchSize +
+                            static_cast<float>(kSwatchColumns - 1) * kSwatchGap;
+    const float gridX = (width - gridWidth) * 0.5F;
+    const float gridY = height * 0.40F;
+
+    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    const char* furLabel = "FUR COLOR";
+    const ImVec2 furLabelSize = ImGui::CalcTextSize(furLabel);
+    ImGui::SetCursorPos(ImVec2((width - furLabelSize.x) * 0.5F,
+                               gridY - furLabelSize.y - 14.0F));
+    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", furLabel);
+    if (m_imguiLayer->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    for (int i = 0; i < WebParity::kFurSwatchCount; ++i) {
+        const auto& swatch = WebParity::kFurSwatches[i];
+        const int column = i % kSwatchColumns;
+        const int row = i / kSwatchColumns;
+        ImGui::SetCursorPos(
+            ImVec2(gridX + static_cast<float>(column) * (kSwatchSize + kSwatchGap),
+                   gridY + static_cast<float>(row) * (kSwatchSize + kSwatchGap)));
+
+        // ImGui hands style/widget colors to the backend as-authored (no
+        // color-space conversion), so the swatch face takes the raw web
+        // sRGB bytes and displays exactly the web hex. Only the value fed
+        // onward to the tint push constant is linear-decoded — that's
+        // getSelectedFurLinear's job, not the preview's.
+        const ImVec4 faceColor(static_cast<float>(swatch.red) / 255.0F,
+                               static_cast<float>(swatch.green) / 255.0F,
+                               static_cast<float>(swatch.blue) / 255.0F,
+                               1.0F);
+        ImGui::PushID(i);
+        if (ImGui::ColorButton("##fur", faceColor,
+                               ImGuiColorEditFlags_NoTooltip |
+                                   ImGuiColorEditFlags_NoDragDrop |
+                                   ImGuiColorEditFlags_NoAlpha,
+                               ImVec2(kSwatchSize, kSwatchSize))) {
+            m_audio.playMenuClick();
+            m_selectedFurIndex = i;
+        }
+        // Our own tooltip (the swatch's parity-table name) instead of
+        // ColorButton's default r/g/b readout, which is picker chrome
+        // that means nothing to a player.
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", swatch.name);
+        }
+        ImGui::PopID();
+
+        // Selection ring — the ImGui take on the web's `.selected` outline
+        // (GameModeSelection.tsx:203). Same gold as the keyboard ring on
+        // the mode-select page.
+        if (i == m_selectedFurIndex) {
+            const ImVec2 rectMin = ImGui::GetItemRectMin();
+            const ImVec2 rectMax = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRect(
+                ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
+                ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
+                IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
+        }
+    }
+
+    // Selected swatch name. The web shows the choice on a live 3D cat
+    // preview beside the grid; the native menu draws no 3D scene (a noted
+    // parity delta), so naming the selection is the stand-in feedback.
+    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
+        ImGui::PushFont(regularFont);
+    }
+    const char* selectedName = WebParity::kFurSwatches[m_selectedFurIndex].name;
+    const ImVec2 nameSize = ImGui::CalcTextSize(selectedName);
+    const float nameY = gridY + 2.0F * kSwatchSize + kSwatchGap + 16.0F;
+    ImGui::SetCursorPos(ImVec2((width - nameSize.x) * 0.5F, nameY));
+    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", selectedName);
+    if (m_imguiLayer->GetRegularFont() != nullptr) {
+        ImGui::PopFont();
+    }
+
+    // ----------------------------------------------------------------- Actions
+    // Mirrors the web's footer pair — "← Back" (GameModeSelection.tsx:291)
+    // and "Start Game" (tsx:304); uppercase to match this menu's native
+    // button voice.
+    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
+        ImGui::PushFont(boldFont);
+    }
+    constexpr float kBackWidth = 170.0F;
+    constexpr float kStartWidth = 230.0F;
+    constexpr float kActionHeight = 56.0F;
+    constexpr float kActionGap = 24.0F;
+    const float actionsY = nameY + nameSize.y + 32.0F;
+    const float actionsX = (width - (kBackWidth + kActionGap + kStartWidth)) * 0.5F;
+
+    ImGui::SetCursorPos(ImVec2(actionsX, actionsY));
+    if (ImGui::Button("< BACK", ImVec2(kBackWidth, kActionHeight))) {
+        m_audio.playMenuClick();
+        m_currentPage = MenuPage::ModeSelect;
+    }
+
+    ImGui::SetCursorPos(ImVec2(actionsX + kBackWidth + kActionGap, actionsY));
+    if (ImGui::Button("START GAME", ImVec2(kStartWidth, kActionHeight))) {
+        m_audio.playMenuClick();
+        confirmStartGame();
+    }
+    if (m_imguiLayer->GetBoldFont() != nullptr) {
+        ImGui::PopFont();
+    }
 }
 
-bool MainMenu::isMouseOverButton(const MenuButton& button) const {
-    Engine::f64 mouseX = 0.0;
-    Engine::f64 mouseY = 0.0;
-    m_input.getMousePosition(mouseX, mouseY);
+void MainMenu::confirmStartGame() {
+    // Latch the choice BEFORE firing the callback: the game layer reads
+    // hasSelectedFurColor() / getSelectedFurLinear() from inside its
+    // start-game path to seed the player entity's tint.
+    m_furColorConfirmed = true;
+    // Reset to mode-select so returning to the menu later (death,
+    // quit-to-menu) lands on the mode cards again — the web equivalent is
+    // GameModeSelection remounting with fresh page state.
+    m_currentPage = MenuPage::ModeSelect;
+    if (m_startGameCallback) {
+        m_startGameCallback();
+    }
+}
 
-    return mouseX >= button.position[0] &&
-           mouseX <= button.position[0] + button.size[0] &&
-           mouseY >= button.position[1] &&
-           mouseY <= button.position[1] + button.size[1];
+void MainMenu::getSelectedFurLinear(float& r, float& g, float& b) const {
+    const auto& swatch = WebParity::kFurSwatches[m_selectedFurIndex];
+    r = WebParity::srgbChannelToLinear(swatch.red);
+    g = WebParity::srgbChannelToLinear(swatch.green);
+    b = WebParity::srgbChannelToLinear(swatch.blue);
 }
 
 } // namespace Game

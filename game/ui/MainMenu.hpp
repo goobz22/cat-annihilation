@@ -89,7 +89,13 @@ public:
     // ========================================================================
 
     /**
-     * @brief Set callback for Start Game button
+     * @brief Set callback that starts a new run.
+     *
+     * Fired by the customize page's START GAME button (and its Enter/Space
+     * keyboard shortcut) — the mode-select Survival card only navigates to
+     * that page, mirroring the web flow. Existing consumers keep working
+     * unchanged: the wiring point and signature are identical, the button
+     * that pulls the trigger just moved one page deeper.
      */
     void setStartGameCallback(ButtonCallback callback) {
         m_startGameCallback = std::move(callback);
@@ -257,8 +263,7 @@ private:
     int m_selectedFurIndex = CatGame::WebParity::kDefaultFurSwatchIndex;
     bool m_furColorConfirmed = false;
 
-    // Animation
-    float m_titleAnimTimer = 0.0F;
+    // Animation (starfield drift/twinkle phase for renderBackground)
     float m_backgroundAnimTimer = 0.0F;
 
     // Screen dimensions (cached during render)

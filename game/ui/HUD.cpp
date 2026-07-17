@@ -1,5 +1,6 @@
 #include "HUD.hpp"
 #include "../audio/GameAudio.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../../engine/core/Logger.hpp"
 #include "../../engine/ui/ImGuiLayer.hpp"
 
@@ -232,6 +233,17 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
         }
         draw->AddRect(ImVec2(xpBarX, xpRowY),
                       ImVec2(xpBarRight, xpRowY + xpBarHeight), xpBorderColor, 4.0F, 0, 1.5F);
+
+        // Ability strip (web CatStats.tsx:64-75): unlocked ability names +
+        // the next-unlock hint, one muted line under the XP bar. Text is
+        // composed by the game layer (it owns the LevelingSystem state);
+        // an empty line collapses the row entirely.
+        if (!m_abilityLine.empty()) {
+            const float abilityRowY = xpRowY + xpBarHeight + 6.0F;
+            draw->AddText(ImVec2(healthBarX, abilityRowY),
+                          IM_COL32(156, 163, 175, 220),  // web muted grey #9ca3af
+                          m_abilityLine.c_str());
+        }
     }
 
     // ---------------------------------------------- Wave / enemies (top-center)
@@ -317,7 +329,12 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
     }
 
     // ------------------------------------- Low-health vignette (pulses red)
-    if (m_lowHealthWarning) {
+    // Native-only flourish gated off under web parity: the reference has no
+    // screen-edge damage vignette (its only low-HP signal is the HP bar
+    // itself), and the pulsing border tinted every parity frame-dump's
+    // margins, muddying side-by-side comparisons. Flip WebParity::kEnabled
+    // off and the effect returns with the rest of the native flavor.
+    if (!CatGame::WebParity::kEnabled && m_lowHealthWarning) {
         const float pulse = (std::sin(m_lowHealthPulse * 6.0F) * 0.5F) + 0.5F;
         const ImU32 vignette = IM_COL32(180, 30, 30, static_cast<int>(60 + pulse * 80));
         draw->AddRect(ImVec2(0.0F, 0.0F), ImVec2(width, height), vignette, 0.0F, 0, 40.0F);
@@ -400,6 +417,10 @@ void HUD::setXpProgress(float progress) {
     // Clamp on ingest as well as on render so a stray >1 (e.g. a level-up frame
     // before recalculation) can never overflow the bar fill.
     m_xpProgress = std::clamp(progress, 0.0F, 1.0F);
+}
+
+void HUD::setAbilityLine(const std::string& line) {
+    m_abilityLine = line;
 }
 
 // ============================================================================
