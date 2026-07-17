@@ -28,7 +28,18 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 - ✅ **Weapon-skill loop** (2nd pass) — +10 weapon XP per player hit (sword/arrow/spell impacts; DOT ticks excluded) via HitSource-tagged HitInfo; +15 kill bonus to the killing weapon (per-enemy last-weapon map = the web's lastDamageSource); sword damage 40 + 10·(level-1) refreshed on weapon level-up; **shield bash** (35 dmg, 600ms, 3.0 knockback, 8 sword XP — the audit had missed that the web shield attacks); weapon XP curve = web calculateXPForLevel diffs (L1→2 = 132, max 99).
 - ✅ **Regeneration (L5) / Agility (L10) — verified ALREADY AT PARITY, nothing to port**: in the live web build both are dead config (unlock flags + CatStats icons; REGENERATION_RATE/AGILITY_MULTIPLIER have zero consumers, abilities.regeneration/agility are never read), and the native regen path is equally inert (HealthComponent regenerationRate never set for the player). 1:1 means NOT adding effects the web lacks.
 
+- ✅ **GPU skinning ON by default** — characters play their Animator clips at full fps (gate green, fpsMin 58 with 6+ skinned 120-150k-vert entities; dynamic-UBO palette ring, `--enable-cpu-skinning`/`--disable-gpu-skinning` for A/B). The "designs are not animated" era is over engine-side.
+- ✅ **Meshy iteration tooling** — `scripts/inspect_models.ts` (GLB auditor with the loader's exact constraints) + `scripts/verify_rig.ts` (headless clip/skin oracle) + `rig_quadruped.py` now authoring idle/walk/run/attack gaits. All 5 shipped characters re-rigged from raw and oracle-green (attack clip still absent on dog_regular/fast/big — fallback set).
+- ✅ **Web pre-game menu + fur customization live**, HUD ability strip, parity vignette gating (see commits).
+
 ### Open (next iterations)
+
+- 🐞 **Transient startup crash under MULTI-INSTANCE runs** (0xc0000005 then 0xc000041d, seconds after "Entering main loop"): reproduced only when two game processes overlapped (double-launch / gate + user window); 6/6 single-instance runs + a 60s soak are clean, `--validation` clean. Not root-caused — evidence points at instance concurrency (device/file contention), NOT the GPU-skinning flag (early small-sample bisect was misleading). Fix-shape: a named-mutex single-instance guard in main.cpp (or prove the real mechanism first); avoid running the gate while a play window is open.
+- 🟡 **fable-characters generated set** (in flight): purpose-built procedural cat/dog GLBs (clean topology, deterministic weights, authored gaits) replacing the Meshy sculpts that tear when rigged; engine switch behind kUseGeneratedCharacters with Meshy fallback.
+- 🟡 dog_big Meshy fallback is 447k tris (over the ~300k loader budget) — decimation step or Meshy re-export (owner call; moot if the generated set ships).
+- 🟡 Magic KILL bonus (+15 per element) skipped — the native kill record doesn't carry the element (hit XP per element does land).
+- 🟡 Idle Y-bob still applied atop real animation clips (bind-pose-era cue) — remove once animated characters are confirmed good.
+- 🟡 Story mode (P3, deferred until survival is 1:1).
 
 - 🟡 Menus: game-mode selection screen + pre-game cat-customization screen (web shows "Customize Your Cat" with fur/eye color pickers before survival; native has the customization SYSTEM loaded — 25 accessories/15 presets — but no pre-game UI), pause menu parity, game-over stats parity.
 - 🟡 Spell/arrow projectile speeds (web 15/25) need per-call speed plumbing in CombatSystem/ElementalMagic; magic KILL bonus (+15 per element) skipped — the native kill record doesn't carry the element (hit XP per element does land).
