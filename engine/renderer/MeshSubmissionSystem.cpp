@@ -47,117 +47,14 @@ constexpr float kAttackLungeMaxAngleRadians = 0.244F;
 // emergent visual that single-pulse systems can't produce.
 constexpr float kHitFlinchMaxAngleRadians = -0.157F;
 
-// ---- Idle Y-bob (procedural bind-pose breathing) -------------------
-//
-// Peak vertical displacement applied to a rigged entity's modelMatrix
-// translation each frame, in metres. 2.5 cm peak (5 cm peak-to-peak) at
-// the entity's local Y-scale. Sized for "barely-noticeable but
-// dispositively-not-frozen": a real housecat's chest expansion when
-// breathing is ~1-2 cm, and a rig's overall vertical sway when shifting
-// weight is a few cm more than that — 2.5 cm sits in the breathing-vs-
-// weight-shift band. At a third-person camera framing of ~10-30 m
-// (where the cat reads ~1-2 cm tall on screen at 1080p), the bob
-// resolves to a sub-pixel oscillation that the eye reads as "alive"
-// without registering as a glitch — exactly the perceptual band we
-// want. Larger amplitudes (5+ cm) start to read as a hover/levitate
-// bug; smaller amplitudes (1 cm or less) are invisible at portfolio-
-// review distances.
-//
-// Why scale by transform.scale.y rather than a flat constant: dogs
-// spawn with non-uniform scale (BigDog uses 1.5x, FastDog uses 0.85x);
-// scaling the bob keeps the visual proportion consistent across
-// entities — a 1.5x BigDog reads with a 3.75 cm bob (matching its
-// proportionally-larger frame), a 0.85x FastDog reads with a 2.1 cm
-// bob (matching its smaller silhouette). A flat constant would make
-// the BigDog's bob look anaemic and the FastDog's look like a
-// pneumatic-jack stutter.
-//
-// 2026-04-26 SHIP-THE-CAT directive evidence: the prior-iter handoff
-// (ENGINE_PROGRESS entry ~10:50 UTC) explicitly named procedural bob
-// as the smallest-scope visible-progress win available with CPU
-// skinning gated off. Without bob, every cat / dog / NPC reads as
-// frozen in T-pose / bind-pose at the playable frame rate the OOB
-// fix recovered — frame-dump evidence #18 has 23,817 distinct colours
-// (well above the 50-distinct gate) but every entity is photometrically
-// static between frames. Bob adds inter-frame variation to entity
-// pixels so a frame-dump video (when the renderer eventually wires
-// frame-grab capture) reads as motion rather than a still image.
-constexpr float kIdleBobAmplitudeMetres = 0.025F;
-
-// Idle-bob frequency in Hz. 0.7 Hz (one cycle every ~1.4 s) is a
-// natural breathing-cadence read for a small mammal — too slow for the
-// cycle to register as a stutter, too fast for it to register as
-// camera drift. The user-perception window for "this thing is alive
-// and breathing" is roughly 0.4-1.5 Hz; below 0.4 Hz reads as the
-// world tilting under the entity, above 1.5 Hz reads as a panicked
-// hyperventilation or a per-frame numerical bug. 0.7 Hz sits at the
-// midpoint of the readable band and matches the resting respiratory
-// rate of a housecat (~25-40 breaths/min, i.e. 0.42-0.67 Hz at the
-// upper end) — close enough to read as "this is the cat breathing"
-// to a viewer who isn't actively counting.
-constexpr float kIdleBobFrequencyHz = 0.7F;
-
-// Knuth multiplicative-hash constant (golden-ratio prime, see TAOCP
-// vol 3 §6.4) used to scramble entity IDs into a near-uniform 64-bit
-// hash before extracting the per-entity bob phase. We need entities to
-// be visually de-synced — without it, every NPC spawned in the same
-// ECS bulk-create call would inherit consecutive IDs and bob in
-// near-lock-step (a Mexican-wave-of-cats effect), which the user
-// would IMMEDIATELY clock as a procedural artifact. Knuth's golden
-// ratio makes adjacent IDs map to phases roughly π apart (the worst
-// case for visual lockstep is sequential IDs differing by 1, which
-// after the multiply differ by ~2.65 G in the high bits, i.e. a wide
-// phase rotation in the [0, 2π) phase space). The result is a herd
-// of cats that bob independently — exactly what we want.
-constexpr std::uint64_t kKnuthMultiplicativeHash = 2654435761ULL;
-
-// Compute a per-entity phase in [0, 2π) from the entity's 64-bit ID by
-// multiplicative-hashing then folding the high 16 bits into a unit
-// fraction. Keeping the multiply + bitfield extract in a single inline
-// helper makes the call site readable and lets the compiler inline the
-// whole thing (the entire body is constexpr-eligible at the type level
-// even though we don't mark it constexpr — the cost is one imul + one
-// shift + one float convert + one float multiply per visible entity).
-inline float ComputeIdleBobPhase(CatEngine::Entity entity) {
-    const std::uint64_t hashed =
-        static_cast<std::uint64_t>(entity.id) * kKnuthMultiplicativeHash;
-    // High 16 bits of the hash hold the most-mixed bits (the multiply
-    // smears the input across the upper word in classic multiplicative
-    // hashing). Extracting bits [48,64) gives us the cleanest available
-    // phase signal for entities with low-magnitude IDs (e.g. early ECS
-    // allocations get IDs 1, 2, 3, ... — the low bits of the hash for
-    // those are nearly unchanged from the input, so we read the top).
-    const std::uint16_t phaseBits =
-        static_cast<std::uint16_t>((hashed >> 48) & 0xFFFFU);
-    const float unitFraction =
-        static_cast<float>(phaseBits) / static_cast<float>(0xFFFFU);
-    return unitFraction * (2.0F * Engine::Math::PI);
-}
-
-// Compute the idle-bob Y offset (in metres) for an entity at a given
-// wall-clock time. Returns 0 for entities that should not bob (no
-// animator means a static prop / terrain piece, not a rigged organism;
-// deathPosed means the entity is in its death-pose latch and should
-// stay flat on the ground rather than continuing to "breathe"). All
-// other animator-bearing entities get the procedural bob — the cat is
-// alive even when the animator clip itself isn't playing because CPU
-// skinning is gated off.
-inline float ComputeIdleBobOffsetMetres(
-    const CatGame::MeshComponent& mesh,
-    CatEngine::Entity entity,
-    float scaleY,
-    float timeSeconds) {
-    if (mesh.animator == nullptr) {
-        return 0.0F;  // Static prop / terrain — should not breathe.
-    }
-    if (mesh.deathPosed) {
-        return 0.0F;  // Corpse — should not continue to bob after death.
-    }
-    const float phase = ComputeIdleBobPhase(entity);
-    const float angularVelocity = 2.0F * Engine::Math::PI * kIdleBobFrequencyHz;
-    return kIdleBobAmplitudeMetres * std::abs(scaleY) *
-           std::sin(angularVelocity * timeSeconds + phase);
-}
+// The procedural idle Y-bob that lived here (2026-04-26 SHIP-THE-CAT era:
+// a sine bob + Knuth-hashed per-entity phase that made bind-pose entities
+// read as breathing while skinning was gated off) was REMOVED 2026-07-16:
+// GPU skinning now plays every entity's authored idle/walk/run/attack
+// clips by default, and stacking a synthetic world-space bob on top of a
+// real breathing idle double-moved the silhouette. Bind-pose is now only
+// a triage state (--disable-gpu-skinning), where a static pose is the
+// honest render.
 } // namespace
 
 namespace CatEngine::Renderer {
@@ -479,11 +376,11 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             // entities (the 99% steady state — terrain, props, idle
             // NPCs) skip the work after a single float compare.
             // ---- Pose composition ------------------------------------
-            // We build one `pose` Transform per entity that bakes in
-            // (a) the procedural idle Y-bob (renderer-only, animator-
-            //     gated, deathPosed-suppressed; see ComputeIdleBobOffsetMetres)
-            // (b) the combined attack-lunge + hit-flinch pitch
-            //     (renderer-only, gated on either pulse > 0).
+            // We build one `pose` Transform per entity that bakes in the
+            // combined attack-lunge + hit-flinch pitch (renderer-only,
+            // gated on either pulse > 0). The procedural idle Y-bob that
+            // used to compose here was removed when GPU skinning made the
+            // authored idle clips the real breathing motion.
             //
             // Both contributions are visual-only — we mutate a COPY of
             // the entity's Transform, never the live one. The AI /
@@ -555,14 +452,6 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             constexpr float kRiggedMeshFeetOffsetMetres = 0.75F;
             pose.position.y += kRiggedMeshFeetOffsetMetres;
 
-            // (a) Idle bob — applied first so any subsequent rotation
-            // operates on the bobbed position. This produces the desired
-            // visual: the entity bobs up/down in world space; the lunge
-            // pitch tilts the entire bobbed silhouette around its local
-            // +X axis (no surprise — pose.rotation is what
-            // Transform::toMatrix consumes for the rotation block).
-            pose.position.y += ComputeIdleBobOffsetMetres(
-                *meshComponent, entity, transform->scale.y, currentTimeSeconds);
 
             // (b) Combined attack-lunge + hit-flinch contribution. Both
             // pulses share the same `sin(pi * (1 - p))` cosine-bell

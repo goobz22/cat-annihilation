@@ -56,6 +56,13 @@
 #include <string>
 #include <thread>
 #include <cstdlib>
+
+#ifdef _WIN32
+// For the single-instance mutex in main() — kept lean (no gdi/user macros).
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 #include <cctype>
 
 // Command line argument parsing
@@ -569,6 +576,30 @@ int main(int argc, char* argv[]) {
         printHelp();
         return 0;
     }
+
+#ifdef _WIN32
+    // Single-instance guard. Two concurrent game processes on one GPU
+    // produced startup crashes that read as heisenbugs (0xc0000005 within
+    // seconds of "Entering main loop", observed 2026-07-16 whenever a
+    // playtest window overlapped a freshly-launched second instance;
+    // single-instance runs were 100% stable across soaks). Rather than
+    // chase the exact device/file contention, refuse the overlap loudly:
+    // the second instance names the conflict and exits with a distinct
+    // code so a wrapper (cat-test-gate / cat-verify) reports "instance
+    // already running" instead of a mystery crash. The mutex handle is
+    // deliberately leaked — the OS releases it at process exit, which is
+    // exactly the lifetime we want (RAII would add a wrapper class for
+    // zero behavioral difference).
+    HANDLE singleInstanceMutex =
+        CreateMutexA(nullptr, TRUE, "Local\\CatAnnihilationSingleInstance");
+    if (singleInstanceMutex == nullptr ||
+        GetLastError() == ERROR_ALREADY_EXISTS) {
+        std::cerr << "[startup] Another Cat Annihilation instance is already "
+                     "running — close it first (concurrent instances are "
+                     "refused; they destabilize the GPU/device state).\n";
+        return 3;
+    }
+#endif
 
     // Attach a file sink BEFORE the startup banner so the first three header
     // lines (and every subsequent log message, including the Vulkan init
