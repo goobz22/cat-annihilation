@@ -75,3 +75,6 @@ imgui.ini
 # Probe/debris outputs from launch diagnostics
 *.err
 scripts/__pycache__/
+
+# Web production build output (bun run build) — capture target only, never source
+dist/
