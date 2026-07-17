@@ -245,18 +245,25 @@ inline constexpr const char* kStoryCardSubtitle = "Quest-driven clan adventure";
 inline constexpr const char* kCustomizeHeading = "Customize Your Cat";
 inline constexpr const char* kCustomizeSubheading = "Survival Warrior";
 
-// GameModeSelection.tsx:162 (colors.fur) — the 10 fur swatches, in the
-// web's exact order, as the exact 0-255 sRGB ints of the web hex
-// literals. The names are native-only labels (the web renders unlabeled
-// swatch buttons): the first six hexes ARE the CSS named colors listed,
-// the last four are the Tailwind gray ramp (800/700/600/300).
-struct FurSwatch {
+// A single named sRGB palette entry. Both the fur picker (colors.fur) and
+// the eye picker (colors.eyes) below are flat lists of web hex literals, so
+// they share ONE swatch type rather than two identical structs — the field
+// layout (0-255 sRGB bytes exactly matching the web hex) is what the picker
+// UI and the srgbChannelToLinear decode both consume, regardless of which
+// palette a swatch came from.
+struct ColorSwatch {
     const char* name;
     int red;   // sRGB 0-255, exactly the web hex literal
     int green;
     int blue;
 };
-inline constexpr FurSwatch kFurSwatches[] = {
+
+// GameModeSelection.tsx:162 (colors.fur) — the 10 fur swatches, in the
+// web's exact order, as the exact 0-255 sRGB ints of the web hex
+// literals. The names are native-only labels (the web renders unlabeled
+// swatch buttons): the first six hexes ARE the CSS named colors listed,
+// the last four are the Tailwind gray ramp (800/700/600/300).
+inline constexpr ColorSwatch kFurSwatches[] = {
     {"Brown",        0x96, 0x4B, 0x00}, // #964B00
     {"Saddle Brown", 0x8B, 0x45, 0x13}, // #8B4513
     {"Chocolate",    0xD2, 0x69, 0x1E}, // #D2691E
@@ -275,6 +282,31 @@ inline constexpr int kFurSwatchCount =
 // i.e. colors.fur[0]: the web opens the customize screen with the first
 // swatch already highlighted.
 inline constexpr int kDefaultFurSwatchIndex = 0;
+
+// GameModeSelection.tsx:163 (colors.eyes) — the 8 eye swatches, in the
+// web's exact order, as the exact 0-255 sRGB ints of the web hex literals.
+// These are the Material Design 500-level accent colors; the names are
+// native-only labels (the web renders unlabeled swatch buttons, exactly
+// like the fur grid). The customize screen renders this picker immediately
+// after the fur picker (GameModeSelection.tsx:211-224), so the native
+// customize page mirrors that order: FUR COLOR grid, then EYE COLOR grid.
+inline constexpr ColorSwatch kEyeSwatches[] = {
+    {"Green",  0x4C, 0xAF, 0x50}, // #4CAF50
+    {"Blue",   0x21, 0x96, 0xF3}, // #2196F3
+    {"Orange", 0xFF, 0x98, 0x00}, // #FF9800
+    {"Purple", 0x9C, 0x27, 0xB0}, // #9C27B0
+    {"Red",    0xF4, 0x43, 0x36}, // #F44336
+    {"Cyan",   0x00, 0xBC, 0xD4}, // #00BCD4
+    {"Yellow", 0xFF, 0xEB, 0x3B}, // #FFEB3B
+    {"Brown",  0x79, 0x55, 0x48}, // #795548
+};
+inline constexpr int kEyeSwatchCount =
+    static_cast<int>(sizeof(kEyeSwatches) / sizeof(kEyeSwatches[0]));
+
+// GameModeSelection.tsx:20 — the initial eyeColor is '#4CAF50', i.e.
+// colors.eyes[0]: the web opens the customize screen with the first eye
+// swatch already highlighted (same convention as the fur default above).
+inline constexpr int kDefaultEyeSwatchIndex = 0;
 
 // sRGB -> linear decode for one 0-255 channel (the exact IEC 61966-2-1
 // piecewise curve). Same rationale as kSkyLinear* above: the fur tint is
