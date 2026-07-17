@@ -1,5 +1,14 @@
 # Cat Annihilation — threejs → native parity matrix
 
+> **How to read this document:** it accumulates chronologically and NEWER
+> sections supersede older ones. Precedence: (1) the dated 2026-07-17
+> sections at the top (correction + sweeps + breadth/endurance/combat
+> entries) are the current truth; (2) the "Fix log" and "Deliberate
+> divergences" hold settled policy; (3) the "P1 gaps" section and the
+> per-domain audit tables below them are the ORIGINAL audit, kept as
+> history — many of their rows were later proven stale or fixed; do not
+> work from them without checking the top sections first.
+
 ## ⛔ 2026-07-17 CORRECTION: presentation parity was NEVER verified until now
 
 The sweeps below verified gameplay CONSTANTS at the source level and declared
