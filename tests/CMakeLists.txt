@@ -807,6 +807,10 @@ set(UNIT_TEST_SOURCES
     # formulas, enemy profile, spawn ring, pacing, player/camera rig,
     # progression rewards). Header-only + STL, no engine linkage.
     unit/test_web_parity_config.cpp
+    # test_web_parity_environment.cpp pins the environment-parity contract
+    # (tree sway helpers, ambient/sun lighting targets, shadow + tree-collision
+    # policy) added by the 2026-07-17 verify-fix sweep. Header-only + STL.
+    unit/test_web_parity_environment.cpp
 )
 
 # Collect integration test sources.

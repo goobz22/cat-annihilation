@@ -91,8 +91,8 @@ layout(push_constant) uniform EntityFragPC {
     layout(offset = 80) vec4 fogParams;
 } pcf;
 
-const vec3 SUN_DIR   = normalize(vec3(0.35, 0.85, 0.4));
-const vec3 SUN_COLOR = vec3(1.0, 0.96, 0.88);
+const vec3 SUN_DIR   = normalize(vec3(10.0, 10.0, 5.0)); // web BasicScene.tsx:196 directionalLight position [10,10,5] = (2/3, 2/3, 1/3)
+const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);              // web directional light is pure white, intensity 1
 
 // FOG_COLOR — must stay in lockstep with scene.frag's FOG_COLOR: both
 // are the LINEAR decode of the web reference's #4c6156 forest haze
@@ -132,16 +132,17 @@ void main() {
     vec3 albedo = baseColorTexel.rgb * vColor;
 
     // ---- Lambert sun + ambient -------------------------------------
-    // Two-term diffuse: a soft ambient floor at 35 % of the un-lit albedo
-    // so cats in the shadow-side of the sun direction don't go pitch
-    // black, plus a directional Lambert term keyed off the same SUN_DIR
-    // the terrain shader uses. SUN_COLOR is a warm tungsten-y white so
-    // the lit side reads slightly warmer than the ambient side, which
-    // matches the day-cycle lighting cue more naturally than a pure white
-    // sun would.
+    // Two-term diffuse: an ambient floor at 50 % of the un-lit albedo
+    // (web ambientLight intensity 0.5) so cats in the shadow-side of the
+    // sun direction don't go pitch black, plus a directional Lambert term
+    // keyed off the same SUN_DIR the terrain shader uses. SUN_DIR/COLOR
+    // match the web's single white directionalLight at [10,10,5] — the
+    // earlier warm-tungsten sun was a native-only look, replaced for
+    // 1:1 parity (native Lambert vs three.js PBR still differ slightly
+    // in falloff; the constants are the closest numeric match).
     vec3 n = normalize(vNormal);
     float lambert = max(dot(n, SUN_DIR), 0.0);
-    vec3 ambient = albedo * 0.35;
+    vec3 ambient = albedo * 0.5; // web BasicScene.tsx:195 ambientLight intensity 0.5 (WebParity::kAmbientLightIntensity)
     vec3 diffuse = albedo * SUN_COLOR * lambert;
     vec3 litColor = ambient + diffuse;
 

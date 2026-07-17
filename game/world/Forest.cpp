@@ -1,5 +1,6 @@
 #include "Forest.hpp"
 #include "../../engine/math/Math.hpp"
+#include "../config/WebParityConfig.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -347,6 +348,25 @@ int Forest::findNearestTree(const Engine::vec3& position, float maxDistance) con
 }
 
 std::vector<int> Forest::findTreesInRadius(const Engine::vec3& position, float radius) const {
+    // Web-parity pass-through. The web SURVIVAL scene registers NO tree
+    // colliders — SurvivalScene (BasicScene.tsx:181-211) mounts neither
+    // TerrainCollisionSystem nor the SimpleTerrainSystem that populates its
+    // staticObjects list, so the cat walks straight through every tree
+    // (full trace in WebParity::kForestPlayerCollision). This method's sole
+    // caller is PlayerControlSystem::pushOutOfTrees — the per-frame player
+    // push — so returning no candidates under parity makes native trees
+    // pass-through to match web WITHOUT disturbing rendering (which uses the
+    // separate GetWebParityForest scatter) or GameWorld's static tree
+    // RigidBodies (which never blocked the non-physics-body player anyway).
+    // Flipping WebParity::kEnabled off restores the pre-parity solid trees
+    // the owner asked for ("make sure i cant walk through"). The whole guard
+    // folds away at compile time, so the parity build pays nothing for it.
+    if constexpr (WebParity::kEnabled) {
+        if constexpr (!WebParity::kForestPlayerCollision) {
+            return {};
+        }
+    }
+
     std::vector<int> result;
     float radiusSq = radius * radius;
 

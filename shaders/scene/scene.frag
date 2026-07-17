@@ -53,8 +53,8 @@ layout(push_constant) uniform TerrainFragPC {
 // SUN_DIR / SUN_COLOR — directional light shared with the rest of the
 // scene's lit surfaces. Values match the existing engine convention
 // (warm late-morning yellow, ~30deg above horizon biased forward).
-const vec3 SUN_DIR   = normalize(vec3(0.35, 0.85, 0.4));
-const vec3 SUN_COLOR = vec3(1.0, 0.96, 0.88);
+const vec3 SUN_DIR   = normalize(vec3(10.0, 10.0, 5.0)); // web BasicScene.tsx:196 directionalLight position [10,10,5] = (2/3, 2/3, 1/3)
+const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);              // web directional light is pure white, intensity 1
 
 // SKY_COLOR — kept here for the existing swapchain-clear-lockstep
 // invariant only. The terrain fragment shader no longer blends TO
@@ -104,7 +104,7 @@ void main() {
     vec3 n = normalize(vNormal);
     float lambert = max(dot(n, SUN_DIR), 0.0);
 
-    vec3 ambient = albedo * 0.28;
+    vec3 ambient = albedo * 0.5; // web BasicScene.tsx:195 ambientLight intensity 0.5 (WebParity::kAmbientLightIntensity)
     vec3 diffuse = albedo * SUN_COLOR * lambert;
     vec3 litColor = ambient + diffuse;
 

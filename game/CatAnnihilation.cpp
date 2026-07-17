@@ -1684,6 +1684,12 @@ struct WebForestInstance {
     float rotationY = 0.0F;
     float scale = 1.0F;
     enum class Kind { Pine, Oak, Bush, Rock } kind = Kind::Pine;
+    // Per-tree wind-sway phase (web ForestEnvironment.tsx:139 animOffset =
+    // random * PI * 2). Trees only — bushes/rocks keep 0 and never sway,
+    // matching the web where the sway loop iterates tree meshes alone.
+    // Randomizing the phase is what keeps the forest from waving in
+    // lockstep like a stadium crowd.
+    float animOffset = 0.0F;
 };
 
 const std::vector<WebForestInstance>& GetWebParityForest() {
@@ -1704,6 +1710,7 @@ const std::vector<WebForestInstance>& GetWebParityForest() {
             tree.kind = unit(rng) > 0.3F ? WebForestInstance::Kind::Pine
                                          : WebForestInstance::Kind::Oak;
             tree.scale = 0.5F + unit(rng) * 0.5F;
+            tree.animOffset = unit(rng) * WebParity::kTreeSwayPhaseMaxRadians;
             built.push_back(tree);
         }
 
@@ -1723,6 +1730,7 @@ const std::vector<WebForestInstance>& GetWebParityForest() {
                 tree.kind = unit(rng) > 0.4F ? WebForestInstance::Kind::Pine
                                              : WebForestInstance::Kind::Oak;
                 tree.scale = 0.4F + unit(rng) * 0.6F;
+                tree.animOffset = unit(rng) * WebParity::kTreeSwayPhaseMaxRadians;
                 built.push_back(tree);
             }
         }
@@ -2105,8 +2113,25 @@ void CatAnnihilation::render() {
                             continue;
                         }
 
+                        // Wind sway (web ForestEnvironment.tsx:142-153): a
+                        // gentle per-frame X/Z tilt around the BASE pivot,
+                        // applied before the yaw so the tree leans as one
+                        // rigid piece. Bushes/rocks carry animOffset==0 AND
+                        // are excluded here — the web sway loop only touches
+                        // tree meshes. Amplitude is ±0.01 rad, so the sphere
+                        // culling bound above is unaffected.
+                        const bool isSwayingTree =
+                            prop.kind == WebForestInstance::Kind::Pine ||
+                            prop.kind == WebForestInstance::Kind::Oak;
+                        const Engine::mat4 swayMatrix = isSwayingTree
+                            ? Engine::mat4::rotateX(WebParity::treeSwayRotationX(
+                                  prop.animOffset, gameTime_)) *
+                              Engine::mat4::rotateZ(WebParity::treeSwayRotationZ(
+                                  prop.animOffset, gameTime_))
+                            : Engine::mat4::identity();
                         const Engine::mat4 modelMatrix =
                             Engine::mat4::translate(prop.position) *
+                            swayMatrix *
                             Engine::mat4::rotateY(prop.rotationY) *
                             Engine::mat4::scale(Engine::vec3(prop.scale));
 
