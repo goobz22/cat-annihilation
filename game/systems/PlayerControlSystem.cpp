@@ -253,7 +253,14 @@ void PlayerControlSystem::processMovementInput(float dt) {
             movement->applyDeceleration(dt);
         }
 
-        movement->applyGravity(GRAVITY, dt);
+        // REGRESSION GUARD (2026-07-16, pinned by the cat-test-gate menu-flow
+        // stage's `expect:playerZ<=-4`): this branch used to applyGravity and
+        // return WITHOUT the velocity→position integration — W/A/S/D wrote
+        // velocity every frame and the cat never moved a millimetre. Autoplay
+        // has its own call to the physics tail, so every autoplay demo moved
+        // fine while human keyboard control was silently inert. Any input
+        // branch MUST end in applyPlayerPhysicsTail; never a bare return.
+        applyPlayerPhysicsTail(dt, movement, transform);
         return;
     }
 
@@ -305,11 +312,31 @@ void PlayerControlSystem::processMovementInput(float dt) {
         movement->applyDeceleration(dt);
     }
 
-    // Apply gravity
-    movement->applyGravity(GRAVITY, dt);
+    applyPlayerPhysicsTail(dt, movement, transform);
+}
 
-    // Update position based on velocity
+// The ONE velocity→position physics tail, shared by every steering path
+// (web-parity keyboard, legacy keyboard, autoplay AI). Extracted 2026-07-16
+// after the three paths drifted: the web-parity branch returned before its
+// copy of the tail existed at all (keyboard movement was completely inert —
+// velocity written, never integrated), and the human paths lacked the tree
+// push-out the autoplay copy had grown. A single named method makes the
+// drift shape impossible: new steering branches call this or visibly move
+// nothing.
+//
+// Order matters: gravity feeds the integration; push-out resolves XZ
+// overlaps the integration just created; ground stick clamps Y last (the
+// push-out is XZ-only by design so it can never fight the clamp).
+void PlayerControlSystem::applyPlayerPhysicsTail(float dt,
+                                                 MovementComponent* movement,
+                                                 Engine::Transform* transform) {
+    movement->applyGravity(GRAVITY, dt);
     transform->position += movement->velocity * dt;
+
+    // Tree collision (web TerrainCollisionSystem.tsx:84-96 applies to the
+    // player unconditionally — parity requires it on the keyboard paths,
+    // not just autoplay where it first landed).
+    pushOutOfTrees();
 
     // Ground stick — survival-mode rule: the cat is always on the ground.
     //
@@ -336,6 +363,29 @@ void PlayerControlSystem::processMovementInput(float dt) {
     } else if (transform->position.y < 0.0F) {
         transform->position.y = 0.0F;
         movement->land(0.0F);
+    }
+
+    // 2026-04-26 SURVIVAL-PORT diag — log player position + groundY at
+    // frames 60/300/600 so cat-verify logs prove where the cat physically
+    // is in world space. User feedback "the cat is under the map" is
+    // ambiguous without a Y trace — without these prints the only clue
+    // is the rendered PPM, which doesn't separate "cat below terrain Y"
+    // from "cat occluded by tree" or "cat off-screen due to camera angle".
+    static int diagFrameCount = 0;
+    ++diagFrameCount;
+    if (diagFrameCount == 60 || diagFrameCount == 300 || diagFrameCount == 600) {
+        const float groundYDiag = terrain_ != nullptr
+            ? terrain_->getHeightAt(transform->position.x, transform->position.z)
+            : 0.0F;
+        Engine::Logger::info(
+            std::string("[PlayerCtrl-DIAG] frame=") + std::to_string(diagFrameCount) +
+            " pos=(" + std::to_string(transform->position.x) +
+            "," + std::to_string(transform->position.y) +
+            "," + std::to_string(transform->position.z) + ")" +
+            " groundY=" + std::to_string(groundYDiag) +
+            " vel=(" + std::to_string(movement->velocity.x) +
+            "," + std::to_string(movement->velocity.y) +
+            "," + std::to_string(movement->velocity.z) + ")");
     }
 
     // Update health component invincibility
@@ -1050,72 +1100,10 @@ void PlayerControlSystem::updateAutoplay(float dt) {
         movement->applyDeceleration(dt);
     }
 
-    // --- Physics tail (shared with processMovementInput) --------------------
-    // Gravity + ground follow + invincibility tick. These must run every frame
-    // regardless of the AI's steering choice above — a missed applyGravity
-    // would leave the cat floating if WaveSystem spawns it above the terrain,
-    // and a missed updateInvincibility would let i-frames from the last hit
-    // linger forever.
-    //
-    // Combat cooldown is intentionally NOT ticked here; CombatSystem owns that
-    // tick. See the note in processAttackInput() for the sub-frame race that
-    // motivated moving the decrement to CombatSystem::update.
-    movement->applyGravity(GRAVITY, dt);
-    transform->position += movement->velocity * dt;
-
-    // 2026-04-26 SURVIVAL-PORT — push player out of any tree the new
-    // velocity-integrated position now overlaps. Mirrors the web port's
-    // TerrainCollisionSystem.tsx:84-96 static-object push-out. Forest
-    // already added 18,931 RigidBody colliders to PhysicsWorld, but the
-    // player isn't wired into PhysicsWorld so those colliders did
-    // nothing — this XZ-only post-step push-out is the cheap fix that
-    // makes the user's "really hone in" demand actually hold (they
-    // can't walk through trees anymore). Runs on every frame in both
-    // human-driven and autoplay paths because they share this Physics
-    // tail.
-    pushOutOfTrees();
-
-    // Ground stick — see processMovementInput's matching block for the full
-    // rationale. Survival mode: the cat is always on the ground, no jump
-    // yet, so an unconditional clamp to the heightmap is correct and gives
-    // a much better visual than the old conditional snap (which let the
-    // cat float during the gravity fall after spawn).
-    if (terrain_ != nullptr) {
-        const float groundY = terrain_->getHeightAt(transform->position.x,
-                                                    transform->position.z);
-        transform->position.y = groundY;
-        movement->land(groundY);
-    } else if (transform->position.y < 0.0F) {
-        transform->position.y = 0.0F;
-        movement->land(0.0F);
-    }
-
-    // 2026-04-26 SURVIVAL-PORT diag — log player position + groundY at
-    // frames 60/300/600 so cat-verify logs prove where the cat physically
-    // is in world space. User feedback "the cat is under the map" is
-    // ambiguous without a Y trace — without these prints the only clue
-    // is the rendered PPM, which doesn't separate "cat below terrain Y"
-    // from "cat occluded by tree" or "cat off-screen due to camera angle".
-    static int diagFrameCount = 0;
-    ++diagFrameCount;
-    if (diagFrameCount == 60 || diagFrameCount == 300 || diagFrameCount == 600) {
-        const float groundYDiag = terrain_ != nullptr
-            ? terrain_->getHeightAt(transform->position.x, transform->position.z)
-            : 0.0F;
-        Engine::Logger::info(
-            std::string("[PlayerCtrl-DIAG] frame=") + std::to_string(diagFrameCount) +
-            " pos=(" + std::to_string(transform->position.x) +
-            "," + std::to_string(transform->position.y) +
-            "," + std::to_string(transform->position.z) + ")" +
-            " groundY=" + std::to_string(groundYDiag) +
-            " vel=(" + std::to_string(movement->velocity.x) +
-            "," + std::to_string(movement->velocity.y) +
-            "," + std::to_string(movement->velocity.z) + ")");
-    }
-
-    if (health) {
-        health->updateInvincibility(dt);
-    }
+    // Shared physics tail — see applyPlayerPhysicsTail for gravity,
+    // integration, tree push-out, ground stick, DIAG trace, and the
+    // invincibility tick (and why CombatSystem owns the cooldown tick).
+    applyPlayerPhysicsTail(dt, movement, transform);
 }
 
 // Tree-collision push-out — runs every frame from the Physics tail.
