@@ -214,6 +214,20 @@ inline int getWeaponSkillXPToNextLevel(int currentLevel) {
  * @return XP required to level up, or -1 if max level
  */
 inline int getElementalXPToNextLevel(int currentLevel) {
+    // Web parity: the web has ONE skill curve for everything — magic skills
+    // use the same calculateXPForLevel as sword/bow (gameStore.ts:340-347
+    // initialises magic.water with calculateXPForLevel(2) = 132, and
+    // addWeaponXP levels every skill through the same table). The native
+    // ELEMENTAL_XP_TABLE (50-start) is the parity-off flavor. Without this
+    // branch the HUD weapon-skill card showed "0/50 XP" where the web
+    // shows "0/132" (caught by the 2026-07-17 side-by-side captures).
+    if constexpr (WebParity::kEnabled) {
+        if (currentLevel >= 99) {
+            return -1;
+        }
+        return static_cast<int>(WebParity::weaponXpForLevel(currentLevel + 1) -
+                                WebParity::weaponXpForLevel(currentLevel));
+    }
     auto it = ELEMENTAL_XP_TABLE.find(currentLevel);
     if (it != ELEMENTAL_XP_TABLE.end()) {
         return it->second;

@@ -91,30 +91,6 @@ public:
     }
 
     // ========================================================================
-    // End-game stats (fed by the game layer at death / victory)
-    // ========================================================================
-
-    /**
-     * @brief Total survival time of the finished run, in seconds.
-     *
-     * Drives the death screen's "Survival Time: {m}m {s}s" line, matching
-     * the web GameOverScreen (GameOverScreen.tsx:62). The game layer sets
-     * this on the transition into GameOver; until it does the screen reads a
-     * truthful 0 rather than stale data.
-     */
-    void setSurvivalTime(float seconds) { m_survivalTime = seconds; }
-
-    /**
-     * @brief Number of enemies still alive when the player died.
-     *
-     * Drives the death screen's "Enemies Remaining: N" line. The web reads
-     * enemies.length at death (GameOverScreen.tsx:63) — the count of dogs
-     * still on the field, NOT a kill tally — so the game layer must feed the
-     * LIVE enemy count here, not enemiesKilled.
-     */
-    void setEnemiesRemaining(uint32_t count) { m_enemiesRemaining = count; }
-
-    // ========================================================================
     // Screen Access
     // ========================================================================
 
@@ -189,16 +165,6 @@ private:
      */
     void renderTransitionOverlay(CatEngine::Renderer::UIPass& uiPass);
 
-    /**
-     * @brief Render game over screen
-     */
-    void renderGameOver(CatEngine::Renderer::UIPass& uiPass);
-
-    /**
-     * @brief Render victory screen
-     */
-    void renderVictory(CatEngine::Renderer::UIPass& uiPass);
-
     Engine::Input& m_input;
     GameAudio& m_audio;
 
@@ -218,19 +184,16 @@ private:
     float m_transitionDuration = 0.3F;
     float m_transitionTimer = 0.0F;
 
-    // Game over / victory state
-    float m_endGameTimer = 0.0F;
-    // Final score — shown on the native Victory screen (a story-mode superset
-    // the web survival build has no equivalent for). The death screen no
-    // longer shows a score: the web death screen (GameOverScreen.tsx) has no
-    // score line, so parity dropped it (and with it the former m_finalWave,
-    // which had no reader left and would have tripped -Wunused-private-field).
-    uint32_t m_finalScore = 0;
-    float m_survivalTime = 0.0F;
-    // Enemies still alive at the moment of death — the web death screen's
-    // "Enemies Remaining" stat (GameOverScreen.tsx:63). Fed via
-    // setEnemiesRemaining(); 0 until the game layer wires it.
-    uint32_t m_enemiesRemaining = 0;
+    // NOTE: the death / victory END-SCREEN is NOT owned here. It is rendered
+    // by CatAnnihilation::renderEndScreenOverlay as a Dear ImGui modal (the
+    // web-parity YOU DIED card), which reads the run's elapsed time and the
+    // live enemy count straight from the game layer. GameUI's old UIPass
+    // renderGameOver/renderVictory + their survivalTime/enemiesRemaining/
+    // finalScore/endGameTimer members were a SECOND, never-wired end screen
+    // that drew a conflicting red overlay behind that modal; they were removed
+    // in the 2026-07-17 presentation rebuild so there is exactly one end
+    // screen. GameUI still renders the HUD in those states (dimmed under the
+    // modal) and mirrors the state the game layer drives.
 
     // Screen dimensions (cached during render)
     uint32_t m_screenWidth = 1920;

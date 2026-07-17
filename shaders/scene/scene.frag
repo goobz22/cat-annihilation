@@ -214,14 +214,16 @@ void main() {
     // down by 0.4 * n.y to keep upward-facing ridge tops crisp, but the
     // survival terrain is a FLAT plane whose every normal is (0,1,0) —
     // the falloff silently capped ground fog at 60% and the horizon
-    // never saturated to the web reference's #4c6156 (three.js linear
-    // fog has no such term; ForestEnvironment.tsx fog is pure distance).
+    // never saturated to the fog colour (three.js linear fog has no such
+    // term; the web SurvivalScene fog is pure distance).
     float fogFactor = clamp((horizDist - FOG_NEAR) / (FOG_FAR - FOG_NEAR), 0.0, 1.0);
 
-    // Blend toward FOG_COLOR (forest haze, NOT sky). The web port's
-    // sky and fog are different colors; mirroring that keeps the
-    // distant ridge silhouettes legible as "deep forest" rather than
-    // "thin air."
+    // Blend toward FOG_COLOR — which is the SKY colour #87CEEB (see the
+    // FOG_COLOR block above for why the web scene.fog is the sky colour,
+    // not the inert #4c6156 literal). At the horizon fogFactor→1 so the
+    // ground lands exactly on the pinned sky colour, meeting the sky with
+    // no seam — the web reference's bright blue-green horizon haze — rather
+    // than the hard dark-green edge the pre-parity #4c6156 fog produced.
     vec3 finalColor = mix(litColor, FOG_COLOR, fogFactor);
 
     outColor = vec4(finalColor, 1.0);

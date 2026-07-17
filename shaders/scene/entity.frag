@@ -114,15 +114,27 @@ layout(push_constant) uniform EntityFragPC {
 const vec3 SUN_DIR   = normalize(vec3(10.0, 10.0, 5.0)); // web BasicScene.tsx:196 directionalLight position [10,10,5] = (2/3, 2/3, 1/3)
 const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);              // web directional light is pure white, intensity 1
 
-// FOG_COLOR — must stay in lockstep with scene.frag's FOG_COLOR: both
-// are the LINEAR decode of the web reference's #4c6156 forest haze
-// (ForestEnvironment.tsx <fog args={['#4c6156', 30, 150]}>). Entities
-// must fade into the SAME haze as the terrain behind them — the old
-// value here was a pale sky blue, which put a ghostly blue halo around
-// distant dogs while the ground behind them fogged to green-grey.
-// Keeping the literal in two shaders is the unfortunate cost of not yet
-// having a shared GLSL header system.
-const vec3 FOG_COLOR = vec3(0.0723, 0.1193, 0.0929);
+// FOG_COLOR — must stay in lockstep with scene.frag's FOG_COLOR: both are
+// the LINEAR decode of the web's ACTUAL rendering fog, sky-blue #87CEEB
+// (SurvivalScene <fog args={['#87CEEB',30,150]}>, BasicScene.tsx:192 — a
+// direct Canvas child, so it lands on scene.fog). The #4c6156 forest-haze
+// <fog> in ForestEnvironment.tsx is INERT in the web build: it attaches to
+// a <group>, and three.js never reads group.fog (diagnosed 2026-07-17 via
+// live scene.fog readout + horizon pixel sampling). Entities must fade
+// into the same sky-blue haze as the ground so distant dogs melt into the
+// horizon instead of ringing dark against it. The literal equals the
+// pinned kSkyLinear values for a byte-identical sky/fog/entity join.
+const vec3 FOG_COLOR = vec3(0.2418, 0.6174, 0.8315);
+
+// WEB_ENTITY_EXPOSURE — reconciles this shader's non-physical Lambert (no
+// 1/pi, no tone map) against three.js's physical BRDF + ACES so entities
+// sit in the same exposure world as the ground (scene.frag's
+// WEB_GROUND_EXPOSURE = 0.21). The ground constant additionally absorbs
+// the web ground's color*map DOUBLE multiply; entities have a single
+// albedo source, so their factor is the plain Lambert/ACES midtone
+// reconciliation ~= 1/pi. Without this, cats/dogs/trees render ~3x
+// brighter than every other surface the web shows.
+const float WEB_ENTITY_EXPOSURE = 0.32;
 
 // Sun shadow occlusion for a world-space receiver point (0 = lit, 1 = shadowed).
 // Identical semantics to scene.frag's sunShadowOcclusion — kept as a local copy
@@ -200,7 +212,11 @@ void main() {
     // matching three.js shadow semantics — same rule as scene.frag.
     float occlusion = sunShadowOcclusion(reconstructWorldPos(), n);
     vec3 diffuse = albedo * SUN_COLOR * lambert * (1.0 - occlusion);
-    vec3 litColor = ambient + diffuse;
+    // WEB_ENTITY_EXPOSURE scales the WHOLE lit result (ambient + direct)
+    // because the web's ACES tone map compresses both terms alike — scaling
+    // only the direct term would tint shadowed entities relatively brighter
+    // than the web renders them.
+    vec3 litColor = (ambient + diffuse) * WEB_ENTITY_EXPOSURE;
 
     // ---- Distance fog -----------------------------------------------
     // Blend lit albedo toward sky color using the CPU-precomputed

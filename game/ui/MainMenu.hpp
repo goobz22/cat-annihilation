@@ -240,12 +240,20 @@ public:
 
 private:
     /**
-     * @brief Menu button structure
+     * @brief Menu button structure.
      *
-     * position/size are written back from the real ImGui item rect every
-     * frame render() draws the button, so updateButtons()'s hover
-     * detection always hit-tests the geometry actually on screen (the
-     * same sync PauseMenu::render does).
+     * Post-presentation-rebuild (2026-07-17) this is a CALLBACK REGISTRY, not
+     * a drawn widget: the web menu (GameModeSelection.tsx) is a card layout,
+     * not a vertical button stack, so renderModeSelectPage draws the two mode
+     * CARDS + a footer directly (ImGui InvisibleButton hit-testing) rather
+     * than iterating this list for geometry. The list is still built in
+     * initialize() because the game layer wires callbacks through it
+     * (setContinueCallback/setQuitCallback), and holding those lambdas here
+     * keeps the Continue/Settings entries — which parity HIDES from the menu
+     * (they have no web analog) — wired for a future non-parity build without
+     * a second storage path. text/subtitle/hint feed the cards; the geometry
+     * fields are vestigial for the plain-button era and left at their
+     * defaults.
      */
     struct MenuButton {
         std::string text;
@@ -259,18 +267,15 @@ private:
     };
 
     /**
-     * @brief Update button states (hover detection + hover sound edge)
-     */
-    void updateButtons();
-
-    /**
-     * @brief Render background
+     * @brief Render background (the web's deep-navy backdrop, no stars).
      */
     void renderBackground(CatEngine::Renderer::UIPass& uiPass);
 
     /**
-     * @brief ImGui body of the mode-select page (headings + m_buttons).
-     * Emits into the already-begun full-screen overlay window.
+     * @brief ImGui body of the mode-select page — the web's dark card on a
+     * navy backdrop: header, two side-by-side mode cards, development-status
+     * banner, and a Reset/Quit footer. Emits into the already-begun
+     * full-screen overlay window.
      */
     void renderModeSelectPage(float width, float height);
 
@@ -289,10 +294,8 @@ private:
     Engine::Input& m_input;
     GameAudio& m_audio;
 
-    // Buttons
+    // Button callback registry (see MenuButton doc — not a drawn widget list).
     std::vector<MenuButton> m_buttons;
-    int32_t m_selectedButtonIndex = 0;
-    int32_t m_hoveredButtonIndex = -1;
 
     // Callbacks
     ButtonCallback m_startGameCallback;

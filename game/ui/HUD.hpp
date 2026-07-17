@@ -3,8 +3,10 @@
 
 #include "../../engine/core/Input.hpp"
 #include "../../engine/renderer/passes/UIPass.hpp"
+#include "../../engine/math/Transform.hpp"  // Engine::Transform + Engine::vec3 for enemy-bar projection
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Engine { class ImGuiLayer; }
 
@@ -125,6 +127,77 @@ public:
      * @param line Composed text; empty hides the row.
      */
     void setAbilityLine(const std::string& line);
+
+    /**
+     * @brief Set the ACTIVE weapon's skill progression for the top-right
+     *        weapon-skill card (web WeaponSkills.tsx / ui.css
+     *        `.weapon-skills-container`).
+     *
+     * The card shows only the currently-selected weapon's skill: title
+     * "<Weapon> Level N", a progress bar, "cur / need XP", and "X XP to
+     * level N+1". The HUD derives the title text + theme colour from the
+     * active-weapon name already fed via setActiveWeapon() (a spell maps to
+     * "<Element> Magic" in that element's colour, e.g. Water Magic blue
+     * #3b82f6; a shield has no skill and hides the card), so this setter only
+     * carries the raw numbers the HUD cannot know — read straight off
+     * LevelingSystem for the active weapon/element (WeaponSkill::level/xp/
+     * xpToNextLevel).
+     *
+     * INTEGRATION: call once per frame from the game layer (it owns
+     * LevelingSystem + the active hotbar slot), right beside the existing
+     * setActiveWeapon() call. Pass level <= 0 to hide the card (e.g. when the
+     * active item is the shield, which the web excludes).
+     *
+     * @param level         Active weapon/element skill level (>= 1), or <= 0 to hide.
+     * @param currentXp     Absolute skill XP (web shows `skill.xp`).
+     * @param xpToNextLevel Absolute XP total for the next level (web `skill.xpToNextLevel`).
+     */
+    void setActiveWeaponSkill(int level, int currentXp, int xpToNextLevel);
+
+    // ========================================================================
+    // Enemy overhead health bars (web LocalEnemySystem.tsx:483-494)
+    // ========================================================================
+
+    /**
+     * @brief Provide the live camera for projecting enemy world positions to
+     *        screen for the floating health bars.
+     *
+     * Kept self-contained in the HUD (the task contract): the HUD rebuilds the
+     * view-projection from the camera transform + projection params exactly as
+     * the scene camera does (Camera::UpdateViewMatrix = rotation^T * translate
+     * (-pos); mat4::perspective for the projection), so the bars land on the
+     * dogs the same frame the scene renders them.
+     *
+     * INTEGRATION: feed PlayerControlSystem::getCameraTransform() and the
+     * scene camera's fov/aspect/near/far each frame before addEnemyBar().
+     *
+     * @param cameraTransform World-space camera transform (position + rotation).
+     * @param fovYRadians      Vertical field of view (native scene camera; web fov=75deg).
+     * @param aspect           Viewport aspect ratio (width / height).
+     * @param nearPlane        Camera near plane.
+     * @param farPlane         Camera far plane.
+     */
+    void setEnemyBarCamera(const Engine::Transform& cameraTransform,
+                           float fovYRadians, float aspect,
+                           float nearPlane, float farPlane);
+
+    /**
+     * @brief Clear the per-frame enemy-bar list. Call at the start of each
+     *        frame's enemy sweep before re-adding the living enemies.
+     */
+    void clearEnemyBars();
+
+    /**
+     * @brief Queue one living enemy's floating health bar for this frame.
+     *
+     * Mirrors the web bar, drawn for EVERY living dog (not only when damaged):
+     * a #333 track with a health-tiered fill, billboarded 1.5 world-units above
+     * the enemy origin.
+     *
+     * @param worldPosition Enemy world position (ground origin; the +1.5 lift is applied here).
+     * @param healthRatio   current / max health, clamped to [0,1] on render.
+     */
+    void addEnemyBar(const Engine::vec3& worldPosition, float healthRatio);
 
     // ========================================================================
     // Visual Effects
@@ -289,6 +362,29 @@ private:
     // Ability strip under the XP bar (web CatStats ability icons + next-unlock
     // hint). Composed by the game layer; empty = row hidden.
     std::string m_abilityLine;
+
+    // Active-weapon skill card (web WeaponSkills.tsx). Level <= 0 means "not
+    // fed / no skill" and hides the card (also hidden when the active item is
+    // the shield, which the web has no skill for). XP values are the absolute
+    // totals the web card prints (skill.xp / skill.xpToNextLevel).
+    int m_weaponSkillLevel = 0;
+    int m_weaponSkillCurrentXp = 0;
+    int m_weaponSkillXpToNext = 0;
+
+    // Enemy overhead health bars (web LocalEnemySystem.tsx:483-494). Rebuilt
+    // each frame by the game layer (clearEnemyBars + addEnemyBar per living
+    // dog); projected to screen with the fed camera. Empty = nothing drawn.
+    struct EnemyBar {
+        Engine::vec3 worldPosition;
+        float healthRatio;
+    };
+    std::vector<EnemyBar> m_enemyBars;
+    Engine::Transform m_enemyBarCamera;
+    float m_enemyBarFovY = 1.309f;     // 75 deg (web PerspectiveCamera fov=75) until fed
+    float m_enemyBarAspect = 16.0f / 9.0f;
+    float m_enemyBarNear = 0.1f;
+    float m_enemyBarFar = 1000.0f;
+    bool m_enemyBarCameraValid = false;
 
     // Visual options
     bool m_showCrosshair = true;

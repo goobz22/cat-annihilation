@@ -1,5 +1,6 @@
 #include "WavePopup.hpp"
 #include "../audio/GameAudio.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../../engine/core/Logger.hpp"
 #include "../../engine/ui/ImGuiLayer.hpp"
 
@@ -118,7 +119,12 @@ void WavePopup::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
         if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
             ImGui::PushFont(titleFont);
         }
-        const std::string title = "WAVE " + std::to_string(m_completedWave) + " COMPLETE!";
+        // Web wording parity (WaveDisplay.tsx / .wave-counter-title): the web
+        // calls a wave a "ROUND". Under parity the popup matches; the native
+        // "WAVE" wording is kept on the !kEnabled branch.
+        const char* waveWord = CatGame::WebParity::kEnabled ? "ROUND" : "WAVE";
+        const std::string title =
+            std::string(waveWord) + " " + std::to_string(m_completedWave) + " COMPLETE!";
         const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
         const float titleY = height * 0.36F;
         ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
@@ -162,7 +168,10 @@ void WavePopup::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
         if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
             ImGui::PushFont(titleFont);
         }
-        const std::string title = "WAVE " + std::to_string(m_startingWave);
+        // Web wording parity: a wave is a "ROUND" in the web build (see the
+        // WaveComplete title above for the rationale).
+        const char* waveWord = CatGame::WebParity::kEnabled ? "ROUND" : "WAVE";
+        const std::string title = std::string(waveWord) + " " + std::to_string(m_startingWave);
         const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
         const float titleY = height * 0.36F;
         ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));

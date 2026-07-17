@@ -484,25 +484,33 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
                 skillTitle = "Bow"; skillColor = WP::kHudWeaponBowColor;
             }
 
-            if (skillTitle != nullptr && m_weaponSkillLevel > 0) {
+            if (skillTitle != nullptr) {
+                // Live skill numbers come from setActiveWeaponSkill (INTEGRATION:
+                // fed from LevelingSystem for the active weapon/element). When
+                // not yet fed (level <= 0), fall back to the web fresh-run start
+                // state — level 1, 0 XP, next-level at weaponXpForLevel(2) = 132 —
+                // so a new run's card reads exactly like web_03 ("Water Magic
+                // Level 1", "0 / 132 XP", "132 XP to level 2") out of the box.
+                const int wLevel = (m_weaponSkillLevel > 0) ? m_weaponSkillLevel : 1;
+                const int wCur = (m_weaponSkillLevel > 0) ? m_weaponSkillCurrentXp : 0;
+                const int wNext = (m_weaponSkillLevel > 0)
+                    ? m_weaponSkillXpToNext : static_cast<int>(WP::weaponXpForLevel(2));
+
                 // Progress fraction, web-exact (WeaponSkills.tsx:33-36): the bar
                 // spans only the CURRENT level's XP window, so subtract the
                 // level's cumulative floor via weaponXpForLevel.
-                const float curLevelXp = (m_weaponSkillLevel <= 1)
-                    ? 0.0F : WP::weaponXpForLevel(m_weaponSkillLevel);
-                const float need = static_cast<float>(m_weaponSkillXpToNext) - curLevelXp;
-                const float into = static_cast<float>(m_weaponSkillCurrentXp) - curLevelXp;
+                const float curLevelXp = (wLevel <= 1) ? 0.0F : WP::weaponXpForLevel(wLevel);
+                const float need = static_cast<float>(wNext) - curLevelXp;
+                const float into = static_cast<float>(wCur) - curLevelXp;
                 const float pct = (need > 0.0F) ? std::clamp(into / need, 0.0F, 1.0F) : 0.0F;
 
                 char titleText[64];
-                std::snprintf(titleText, sizeof(titleText), "%s Level %d", skillTitle, m_weaponSkillLevel);
+                std::snprintf(titleText, sizeof(titleText), "%s Level %d", skillTitle, wLevel);
                 char xpLine[64];
-                std::snprintf(xpLine, sizeof(xpLine), "%d / %d XP",
-                              m_weaponSkillCurrentXp, m_weaponSkillXpToNext);
+                std::snprintf(xpLine, sizeof(xpLine), "%d / %d XP", wCur, wNext);
                 char nextLine[64];
                 std::snprintf(nextLine, sizeof(nextLine), "%d XP to level %d",
-                              std::max(0, m_weaponSkillXpToNext - m_weaponSkillCurrentXp),
-                              m_weaponSkillLevel + 1);
+                              std::max(0, wNext - wCur), wLevel + 1);
 
                 if (bold != nullptr) { ImGui::PushFont(bold); }
                 const ImVec2 titleSize = ImGui::CalcTextSize(titleText);

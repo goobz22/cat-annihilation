@@ -389,6 +389,51 @@ TEST_CASE("environment (sway, lighting, shadows, tree collision) matches the web
     CHECK(WebParity::kForestPlayerCollision == false);
 }
 
+TEST_CASE("world-render ground + fog colours match the web survival scene",
+          "[web-parity][environment][render]") {
+    // The 2026-07-17 WORLD-RENDER parity pins — the gap the constants-only
+    // sweep missed: the RENDERED ground/fog, which diverged hard (native was
+    // a bright yellow-green ground under a flat sky with a hard-edged horizon;
+    // the web is a deep green ground fading into a bright blue-green horizon
+    // haze — build-ninja/webref/web_03_gameplay_early.png). scene.frag holds
+    // the matching GLSL literals; these pins keep them honest to the decode.
+
+    // (1) Ground .color = decode(#7fb069) (ForestEnvironment.tsx:308-314). The
+    // web ground albedo is THIS * the grass map (also #7fb069) = decode^2, so
+    // each stored channel must equal srgbChannelToLinear of the web hex byte —
+    // this is what keeps scene.frag's GROUND_COLOR_LINEAR literal from drifting
+    // off the reference decode.
+    CHECK(std::abs(WebParity::kGroundColorLinearR -
+                   WebParity::srgbChannelToLinear(0x7F)) < 1e-3f);
+    CHECK(std::abs(WebParity::kGroundColorLinearG -
+                   WebParity::srgbChannelToLinear(0xB0)) < 1e-3f);
+    CHECK(std::abs(WebParity::kGroundColorLinearB -
+                   WebParity::srgbChannelToLinear(0x69)) < 1e-3f);
+    // #7fb069 is a deep green: green-dominant, then red, then blue (G>R>B).
+    CHECK(WebParity::kGroundColorLinearG > WebParity::kGroundColorLinearR);
+    CHECK(WebParity::kGroundColorLinearR > WebParity::kGroundColorLinearB);
+
+    // (2) The fog that renders is SurvivalScene's #87CEEB (BasicScene.tsx:192,
+    // scene.fog); ForestEnvironment's #4c6156 <fog> attaches to a <group> and
+    // is inert. So the fog colour MUST equal the pinned SKY colour — that
+    // identity is exactly what makes the fogged horizon meet the sky with no
+    // seam (scene.frag stores kSkyLinear as its FOG_COLOR). Guard both the
+    // near/far ordering and that kSkyLinear really is decode(#87CEEB).
+    CHECK(WebParity::kGroundFogNear == 30.0f);
+    CHECK(WebParity::kGroundFogFar == 150.0f);
+    CHECK(WebParity::kGroundFogFar > WebParity::kGroundFogNear);
+    CHECK(std::abs(WebParity::kSkyLinearR - WebParity::srgbChannelToLinear(0x87)) < 1e-3f);
+    CHECK(std::abs(WebParity::kSkyLinearG - WebParity::srgbChannelToLinear(0xCE)) < 1e-3f);
+    CHECK(std::abs(WebParity::kSkyLinearB - WebParity::srgbChannelToLinear(0xEB)) < 1e-3f);
+
+    // (3) The lighting reconciliation must DARKEN (the native ground was too
+    // bright, not too dark), so the bridge factor is a positive sub-unity
+    // exposure. A regression to >= 1 would re-brighten the ground back toward
+    // the yellow-green that failed the comparison.
+    CHECK(WebParity::kWebGroundExposure > 0.0f);
+    CHECK(WebParity::kWebGroundExposure < 1.0f);
+}
+
 TEST_CASE("eye palette is its own table and decodes sanely", "[web-parity]") {
     // Guards the invariants MainMenu::getSelectedEyeLinear relies on, beyond
     // the exact-bytes pin above.

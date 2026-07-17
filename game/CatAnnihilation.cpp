@@ -1532,6 +1532,14 @@ void CatAnnihilation::updateUI(float dt) {
         gameUI_->update(dt);
     }
 
+    // Enemy overhead bars are a per-frame list that ONLY the Playing branch
+    // below refills. Clear it in every other state too, or the last Playing
+    // frame's bars keep drawing over the death modal / pause / menus (seen
+    // floating across the YOU DIED card, 2026-07-17 capture).
+    if (currentState_ != GameState::Playing && gameUI_ != nullptr) {
+        gameUI_->getHUD().clearEnemyBars();
+    }
+
     // Update HUD during Playing. The visible HUD lives inside GameUI — the
     // free-standing `hud_` member is a legacy duplicate that isn't rendered.
     if (currentState_ == GameState::Playing && gameUI_ != nullptr) {
@@ -1651,6 +1659,9 @@ void CatAnnihilation::updateUI(float dt) {
             // enemy tag is needed. Camera params mirror the scene render
             // exactly (render(): makeVulkanPerspective(60deg, aspect, 0.1,
             // 2000)) so the projected bars land on the dogs the same frame.
+            // NOTE: the matching non-Playing clear lives just above the
+            // state dispatch — without it the last Playing frame's bars
+            // kept drawing over the death modal.
             activeHud.clearEnemyBars();
             if (playerControlSystem_ != nullptr && window_ != nullptr) {
                 const float aspect = window_->getHeight() > 0

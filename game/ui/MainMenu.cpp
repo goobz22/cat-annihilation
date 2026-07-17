@@ -182,16 +182,17 @@ bool MainMenu::initialize() {
         return true;
     }
 
-    // Create the mode-select page's button list. The two web mode cards
-    // come first, in the web's order (GameModeSelection.tsx:316-354), then
-    // the native-desktop extras (Continue / Settings / Quit) the web has
-    // no equivalent for. Reusing the MenuButton list for the cards —
-    // rather than drawing the page ad hoc — keeps ONE model that the
-    // keyboard navigation (m_selectedButtonIndex in handleInput) and the
-    // hover hit-testing (updateButtons) already operate on; the cards
-    // only differ visually, which render handles via the subtitle/hint
-    // fields. Geometry is intentionally not set here: render() writes the
-    // real on-screen ImGui rect back into each button every frame.
+    // Build the button CALLBACK REGISTRY (see MenuButton doc in the header).
+    // The two web mode cards come first, in the web's order
+    // (GameModeSelection.tsx:316-354), then the native-desktop extras
+    // (Continue / Settings / Quit) the web has no equivalent for. Since the
+    // 2026-07-17 presentation rebuild the mode-select page draws the two mode
+    // CARDS + a footer directly (renderModeSelectPage), so this list is no
+    // longer iterated for geometry — it exists to hold the wired callbacks:
+    // the Survival entry's lambda flips to the customize page, and the
+    // Continue/Settings/Quit lambdas keep m_continueCallback / m_settingsCallback
+    // / m_quitCallback referenced (the game layer wires them via the public
+    // setters) even though parity HIDES Continue/Settings from the drawn menu.
     m_buttons.clear();
 
     // Survival Mode card — web parity: clicking it opens the customize
@@ -474,7 +475,7 @@ ImU32 midFill(const WebParity::UiColor& top, const WebParity::UiColor& bottom,
 // only LEFT-aligns; splitting into lines here lets the caller centre each
 // one, matching the web. A single word longer than maxWidth is kept whole on
 // its own line rather than dropped.
-std::vector<std::string> wrapToWidth(const ImFont* font, float size,
+std::vector<std::string> wrapToWidth(ImFont* font, float size,
                                      const std::string& text, float maxWidth) {
     std::vector<std::string> lines;
     std::string current;
@@ -551,14 +552,14 @@ void MainMenu::renderModeSelectPage(float width, float height) {
     // Local text helpers (DrawList AddText with an explicit font SIZE lets us
     // hit the web's px scale — the atlas fonts are 80/30/20 px, downscaled
     // here for crisp glyphs). measure() centres; drawText() left-aligns.
-    auto measure = [](const ImFont* font, float size, const char* text) -> ImVec2 {
+    auto measure = [](ImFont* font, float size, const char* text) -> ImVec2 {
         return font->CalcTextSizeA(size, FLT_MAX, 0.0F, text);
     };
-    auto drawText = [&](const ImFont* font, float size, float x, float y,
+    auto drawText = [&](ImFont* font, float size, float x, float y,
                         ImU32 col, const char* text) {
         drawList->AddText(font, size, ImVec2(x, y), col, text);
     };
-    auto drawCentered = [&](const ImFont* font, float size, float centerX, float y,
+    auto drawCentered = [&](ImFont* font, float size, float centerX, float y,
                             ImU32 col, const char* text) {
         const float textWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
         drawList->AddText(font, size, ImVec2(centerX - textWidth * 0.5F, y), col, text);
@@ -913,14 +914,14 @@ void MainMenu::renderCustomizePage(float width, float height) {
     if (boldFont == nullptr) { boldFont = ImGui::GetFont(); }
     if (regularFont == nullptr) { regularFont = ImGui::GetFont(); }
 
-    auto measure = [](const ImFont* font, float size, const char* text) -> ImVec2 {
+    auto measure = [](ImFont* font, float size, const char* text) -> ImVec2 {
         return font->CalcTextSizeA(size, FLT_MAX, 0.0F, text);
     };
-    auto drawText = [&](const ImFont* font, float size, float x, float y,
+    auto drawText = [&](ImFont* font, float size, float x, float y,
                         ImU32 col, const char* text) {
         drawList->AddText(font, size, ImVec2(x, y), col, text);
     };
-    auto drawCentered = [&](const ImFont* font, float size, float centerX, float y,
+    auto drawCentered = [&](ImFont* font, float size, float centerX, float y,
                             ImU32 col, const char* text) {
         const float textWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
         drawList->AddText(font, size, ImVec2(centerX - textWidth * 0.5F, y), col, text);

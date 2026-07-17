@@ -228,9 +228,13 @@ if (!quick && stages[stages.length - 1]!.ok) {
   // autoplay's separate physics tail moved, masking it in every autoplay
   // gate). Spawn faces -Z; 2 s of walk at web speed 6 ≈ -12, so -4 has
   // ample headroom for the acceleration ramp and dog contact.
+  // Click coords track the 2026-07-17 web-parity menu rebuild: the Survival
+  // MODE CARD centers at ~(0.39, 0.48) on the side-by-side card layout, and
+  // the customize page's teal START GAME sits at ~(0.654, 0.664). If a click
+  // stops landing, screenshot first and re-derive (HEADLESS_HARNESS.md).
   const menuFlowScript = [
-    'wait:3', 'expect:state=MainMenu', 'click:0.5,0.364', 'wait:1',
-    'click:0.55,0.605', 'wait:2', 'expect:state=Playing', 'expect:wave>=1',
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:2', 'expect:state=Playing', 'expect:wave>=1',
     'hold:w,2', 'expect:playerZ<=-4', 'wait:20', 'expect:state=GameOver',
     'expect:playerAlive=false', 'quit',
   ].join(';')

@@ -683,6 +683,60 @@ inline constexpr float kShadowOrthoFar        = 250.0f; // light-space far plane
 inline constexpr bool kForestPlayerCollision = false;
 
 // ---------------------------------------------------------------------
+// World-render colours — reference: the SURVIVAL ground + fog in
+// ForestEnvironment.tsx / BasicScene.tsx. These are the WEB TARGETS the
+// scene.frag ground/fog owner matches its GLSL literals against (GLSL can't
+// include this header — the same authored-here / consumed-by-the-shader-path
+// arrangement as kSkyLinear* and the lighting constants above), pinned by the
+// test so the ground can never silently drift back to the pre-parity bright
+// yellow-green.
+//
+// WHY THIS BLOCK EXISTS: a constants-only sweep matched the gameplay NUMBERS
+// but never compared the RENDERED WORLD, and it diverged hard — the native
+// ground was a bright yellow-green over a flat sky with a hard-edged horizon,
+// while the web ground is a deep rich green fading into a bright blue-green
+// horizon haze (build-ninja/webref/web_03_gameplay_early.png). The two fixes
+// captured here are (1) the omitted ground material .color and (2) the fog
+// colour correction, both traced to the live web on 2026-07-17.
+
+// Ground diffuse .color — ForestEnvironment.tsx:308-314
+// `<meshStandardMaterial color="#7fb069" map={grassTexture} .../>`. three
+// multiplies diffuseColor = color * mapTexel; the grass texture base fill is
+// ALSO #7fb069 (GrassTexture.cpp), so the web ground albedo is
+// decode(#7fb069)^2. The native ground sampled only the map and omitted this
+// .color multiply — scene.frag now applies it. Stored as the srgb_to_linear
+// decode of #7fb069 (127,176,105); the pinning test cross-checks each channel
+// against srgbChannelToLinear so the GLSL literal can't drift from the decode.
+inline constexpr float kGroundColorLinearR = 0.2121f; // srgb_to_linear(0x7F)
+inline constexpr float kGroundColorLinearG = 0.4340f; // srgb_to_linear(0xB0)
+inline constexpr float kGroundColorLinearB = 0.1413f; // srgb_to_linear(0x69)
+
+// Ground/scene distance fog — the fog that ACTUALLY renders in web survival
+// is SurvivalScene's `<fog args={['#87CEEB', 30, 150]}>` (BasicScene.tsx:192,
+// a direct Canvas child → scene.fog). ForestEnvironment.tsx:485's
+// `<fog args={['#4c6156', ...]}>` is a child of a <group>, so R3F attaches it
+// to group.fog, which three.js NEVER reads — it is INERT. So the ground fades
+// toward the SKY colour #87CEEB, giving the reference its seamless bright
+// horizon haze; the pre-parity #4c6156 fog made a hard dark-green edge. The
+// fog colour is therefore IDENTICAL to the sky colour, so scene.frag stores
+// kSkyLinear as its FOG_COLOR (the test asserts that identity). Linear
+// falloff (THREE.Fog), near 30 / far 150 — matching SurvivalScene's args.
+inline constexpr float kGroundFogNear = 30.0f;  // BasicScene.tsx:192 THREE.Fog near
+inline constexpr float kGroundFogFar  = 150.0f; // BasicScene.tsx:192 THREE.Fog far
+
+// Ground lighting reconciliation (NOT a web literal — a shader-model bridge,
+// the same class as the LIGHTING-MODEL CAVEAT above). three shades the ground
+// through a physical Lambert BRDF (diffuse * 1/PI) plus the R3F default ACES
+// tone map; the native ground uses non-physical Lambert with no tone map, so
+// with the same 0.5 ambient + intensity-1 sun it rendered ~3x too bright.
+// scene.frag folds this factor into the ground albedo (the shading is linear
+// in albedo, so it is equivalent to scaling the lit colour). It is calibrated
+// so the near-camera ground matches the measured web reference pixels — deep
+// green ~(27,60,15) sRGB (sampled 2026-07-17 from web_03_gameplay_early.png
+// and the live localhost:4173 capture). See scene.frag WEB_GROUND_EXPOSURE.
+inline constexpr float kWebGroundExposure = 0.21f;
+
+// ---------------------------------------------------------------------
 // In-game HUD — reference: the survival HUD React components in
 // src/components/ui/ (CatStats, InventoryHotbar, WeaponSkills, WaveDisplay)
 // and their CSS in src/styles/components/{ui,inventory}.css, plus the
