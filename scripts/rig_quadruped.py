@@ -1839,7 +1839,7 @@ def bake_animation_clips(arm_obj, fps=24):
 
     # -----------------------------------------------------------------
     # attack: ~0.8 s one-shot lunge (spec: weight shift back then a forward
-    # lunge with head strike + forepaw swipe).
+    # lunge with head strike + ONE forepaw swipe).
     #
     # Normalised timeline: 0.0 rest -> 0.30 weight-shift BACK (anticipation
     # coil) -> 0.58 forward LUNGE with head strike + forepaw swipe -> 0.80
@@ -1848,6 +1848,18 @@ def bake_animation_clips(arm_obj, fps=24):
     # idle. The root translates only HORIZONTALLY (forward_axis, z = 0) so
     # the lunge never drives paws through the ground; the lean/crouch is
     # done with spine ROTATION instead of a downward drop.
+    #
+    # Silhouette contract (owner review 2026-07-16 — the first authoring
+    # face-planted: ~36deg of stacked spine dip plus ~84deg of neck/head dip
+    # buried the muzzle in the ground at the strike apex):
+    #   - the strike's forward energy comes from the ROOT lunge translation,
+    #     NOT from pitching the body down; total spine dip stays <= ~16deg
+    #     (inside the <=20deg body-pitch bound).
+    #   - the neck/head COUNTER-rotate slightly UP against the body dip, so
+    #     the muzzle strikes forward-and-slightly-up and never drops below
+    #     the chest line.
+    #   - only ONE forepaw (the right) swipes; the left forelimb braces with
+    #     a small counter-rotation, matching how a real quadruped strikes.
     # -----------------------------------------------------------------
     attack = new_action('attack')
     attack_dur_f = int(0.8 * fps)
@@ -1867,28 +1879,31 @@ def bake_animation_clips(arm_obj, fps=24):
     lunge_dist = 0.55 * torso_span
     back_dist  = 0.16 * torso_span
 
-    # Spine: lean back on the coil, dip forward on the lunge.
-    attack_bone('chest',         [(side_axis,  rad(12.0))], [(side_axis, -rad(16.0))])
-    attack_bone('spine_01',      [(side_axis,  rad(8.0))],  [(side_axis, -rad(12.0))])
-    attack_bone('upper_back_02', [(side_axis,  rad(6.0))],  [(side_axis, -rad(8.0))])
-    # Head strike: pull back/up on the coil, whip forward-down on the hit.
-    attack_bone('neck_01', [(side_axis,  rad(10.0))], [(side_axis, -rad(22.0))])
-    attack_bone('neck_02', [(side_axis,  rad(10.0))], [(side_axis, -rad(28.0))])
-    attack_bone('head',    [(side_axis,  rad(8.0))],  [(side_axis, -rad(34.0))])
-    # Forepaw swipe: both forelimbs coil up, then swipe forward-down; the
-    # elbow (lower_arm) extends into the strike.
-    for shoulder_bone, upper_bone, lower_bone in (
-        ('shoulder_L', 'upper_arm_L', 'lower_arm_L'),
-        ('shoulder_R', 'upper_arm_R', 'lower_arm_R'),
-    ):
-        attack_bone(shoulder_bone, [(side_axis,  rad(20.0))], [(side_axis, -rad(42.0))])
-        attack_bone(upper_bone,    [(side_axis,  rad(14.0))], [(side_axis, -rad(20.0))])
-        attack_bone(lower_bone,    [(side_axis,  rad(24.0))], [(side_axis,  rad(10.0))])
+    # Spine: lean back on the coil, then a SHALLOW forward dip on the lunge.
+    # Total strike dip = 8+5+3 = 16deg — the lunge reads from the root
+    # translation, and the body stays inside the <=20deg pitch bound.
+    attack_bone('chest',         [(side_axis,  rad(10.0))], [(side_axis, -rad(8.0))])
+    attack_bone('spine_01',      [(side_axis,  rad(6.0))],  [(side_axis, -rad(5.0))])
+    attack_bone('upper_back_02', [(side_axis,  rad(4.0))],  [(side_axis, -rad(3.0))])
+    # Head strike: pull back/up on the coil, then punch FORWARD-AND-SLIGHTLY-
+    # UP. The +17deg of neck/head counter-rotation cancels the -16deg body
+    # dip, so the muzzle finishes level-to-up and never crosses below the
+    # chest line (the face-plant this authoring replaces).
+    attack_bone('neck_01', [(side_axis,  rad(8.0))], [(side_axis,  rad(4.0))])
+    attack_bone('neck_02', [(side_axis,  rad(8.0))], [(side_axis,  rad(5.0))])
+    attack_bone('head',    [(side_axis,  rad(6.0))], [(side_axis,  rad(8.0))])
+    # ONE forepaw swipe (the right): coil up, then swipe forward-down with
+    # the elbow (lower_arm) extending into the strike. The left forelimb
+    # only braces — a small counter-rotation that keeps it planted.
+    attack_bone('shoulder_R',  [(side_axis,  rad(22.0))], [(side_axis, -rad(38.0))])
+    attack_bone('upper_arm_R', [(side_axis,  rad(14.0))], [(side_axis, -rad(18.0))])
+    attack_bone('lower_arm_R', [(side_axis,  rad(24.0))], [(side_axis,  rad(10.0))])
+    attack_bone('shoulder_L',  [(side_axis,  rad(6.0))],  [(side_axis, -rad(6.0))])
     # Back legs load under the body on the coil, then drive to power the
     # lunge.
     for thigh_bone, shin_bone in (('thigh_L', 'shin_L'), ('thigh_R', 'shin_R')):
-        attack_bone(thigh_bone, [(side_axis,  rad(16.0))], [(side_axis, -rad(18.0))])
-        attack_bone(shin_bone,  [(side_axis, -rad(20.0))], [(side_axis,  -rad(6.0))])
+        attack_bone(thigh_bone, [(side_axis,  rad(14.0))], [(side_axis, -rad(16.0))])
+        attack_bone(shin_bone,  [(side_axis, -rad(18.0))], [(side_axis,  -rad(6.0))])
     # Tail flicks up for balance on the strike.
     attack_bone('tail_01', [(side_axis, -rad(8.0))], [(side_axis, rad(14.0))])
     attack_bone('tail_02', [(side_axis, -rad(6.0))], [(side_axis, rad(10.0))])

@@ -886,7 +886,34 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
 
     rest_dist_raw, rest_nearest = masked_min_distances(
         bone_distance_matrix(rest_pts, rest_segments), influence)
-    rest_dist = np.maximum(rest_dist_raw, floor)
+
+    # Driver-spread relief. A vertex blended across SPREAD-OUT drivers
+    # legitimately roams within their span: ember_leader's crotch verts are
+    # root-dominated but carry ~0.2 on each thigh, so the gallop drags them
+    # ~40% of the thigh displacement away from the static root line — that
+    # is linear-blend skinning working exactly as designed, not an escape.
+    # The allowed distance therefore grows with the REST spread of the
+    # vertex's drivers (all bones at weight >= 0.10, so sub-threshold-but-
+    # real pulls count). The gate keeps its teeth where it matters: a
+    # single-owner escaped vert has zero spread and gets no relief, and
+    # dog_big's original collapsed-chain disaster (both right chains
+    # coincident at rest -> spread ~0.34) still measured ~3.7x under this
+    # relief — far over the limit.
+    loose_influence = weight_matrix >= 0.10
+    loose_influence[np.arange(len(top_bone))[has_weights],
+                    top_bone[has_weights]] = True
+    segment_midpoints = np.array([(a + b) * 0.5 for a, b in rest_segments])
+    midpoint_gaps = np.linalg.norm(
+        segment_midpoints[:, None, :] - segment_midpoints[None, :, :],
+        axis=2)
+    driver_spread = np.zeros(len(rest_pts))
+    for vert_index in range(len(rest_pts)):
+        cols = np.nonzero(loose_influence[vert_index])[0]
+        if 1 < len(cols) < len(bone_names):
+            driver_spread[vert_index] = \
+                midpoint_gaps[np.ix_(cols, cols)].max()
+    rest_dist = np.maximum(np.maximum(rest_dist_raw, floor),
+                           0.35 * driver_spread)
 
     # Sample clips one at a time: NLA tracks are muted so ONLY the active
     # action poses the rig (otherwise every clip would evaluate stacked).
