@@ -145,6 +145,24 @@ TEST_CASE("pre-game menu strings and fur swatches match the web", "[web-parity]"
     }
     CHECK(WebParity::kDefaultFurSwatchIndex == 0);  // tsx:19 primaryColor '#964B00'
 
+    // GameModeSelection.tsx:163 (colors.eyes) — the eight eye hexes in web
+    // order, and :20 the default eyeColor '#4CAF50' (index 0). The eye
+    // picker renders immediately after the fur picker on the customize
+    // screen (tsx:211-224), so the native menu must carry the same palette
+    // for a side-by-side comparison to match.
+    constexpr int kExpectedEyeSwatches[][3] = {
+        {0x4C, 0xAF, 0x50}, {0x21, 0x96, 0xF3}, {0xFF, 0x98, 0x00},
+        {0x9C, 0x27, 0xB0}, {0xF4, 0x43, 0x36}, {0x00, 0xBC, 0xD4},
+        {0xFF, 0xEB, 0x3B}, {0x79, 0x55, 0x48},
+    };
+    REQUIRE(WebParity::kEyeSwatchCount == 8);
+    for (int i = 0; i < 8; ++i) {
+        CHECK(WebParity::kEyeSwatches[i].red == kExpectedEyeSwatches[i][0]);
+        CHECK(WebParity::kEyeSwatches[i].green == kExpectedEyeSwatches[i][1]);
+        CHECK(WebParity::kEyeSwatches[i].blue == kExpectedEyeSwatches[i][2]);
+    }
+    CHECK(WebParity::kDefaultEyeSwatchIndex == 0);  // tsx:20 eyeColor '#4CAF50'
+
     // The linear decode used for the tint push constant: spot-check the
     // exact srgb_to_linear at both ends of the ramp.
     CHECK(WebParity::srgbChannelToLinear(0) == 0.0f);
