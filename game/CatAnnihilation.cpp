@@ -1858,7 +1858,15 @@ void CatAnnihilation::render() {
     // Runs first so ImGui/UI composites on top. We drive a slow orbital camera
     // for the initial revision — there's no player-follow camera component yet.
     // Terrain is uploaded once, lazily, the first time it's available.
-    if (currentState_ == GameState::Playing) {
+    //
+    // Paused and GameOver render the WORLD too (frozen — updates stop, the
+    // draw keeps running) so their overlays dim a live scene exactly like
+    // the web: its PAUSED card and YOU DIED modal both sit over the darkened
+    // battlefield, while native used to drop to a flat clear color the
+    // moment the state left Playing (2026-07-17 pause side-by-side).
+    if (currentState_ == GameState::Playing ||
+        currentState_ == GameState::Paused ||
+        currentState_ == GameState::GameOver) {
         auto* scenePass = renderer_->GetScenePass();
         if (scenePass != nullptr && gameWorld_ != nullptr) {
             if (!terrainUploadedToScenePass_) {
