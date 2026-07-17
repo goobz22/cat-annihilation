@@ -513,11 +513,17 @@ def segment_distances(points, seg_a, seg_b):
 
 
 def min_bone_distances(points, segments):
-    """Distance from every point to its NEAREST bone segment."""
+    """Distance from every point to its NEAREST bone segment, plus WHICH
+    segment won — the index is what turns a bare "ratio 1.7" failure into an
+    actionable "the escaping verts live around shin_L" diagnosis."""
     result = np.full(len(points), np.inf, dtype=np.float64)
-    for seg_a, seg_b in segments:
-        np.minimum(result, segment_distances(points, seg_a, seg_b), out=result)
-    return result
+    nearest = np.zeros(len(points), dtype=np.int32)
+    for idx, (seg_a, seg_b) in enumerate(segments):
+        dists = segment_distances(points, seg_a, seg_b)
+        closer = dists < result
+        nearest[closer] = idx
+        np.minimum(result, dists, out=result)
+    return result, nearest
 
 
 DEFORM_RATIO_LIMIT = 1.5
@@ -552,12 +558,14 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
     rest_pts = rest_pts @ rot.T + loc
 
     arm_mat = arm_obj.matrix_world
+    bone_names = [bone.name for bone in arm_obj.data.bones]
     rest_segments = []
     for bone in arm_obj.data.bones:
         head = np.array(arm_mat @ bone.head_local, dtype=np.float64)
         tail = np.array(arm_mat @ bone.tail_local, dtype=np.float64)
         rest_segments.append((head, tail))
-    rest_dist = np.maximum(min_bone_distances(rest_pts, rest_segments), floor)
+    rest_dist_raw, rest_nearest = min_bone_distances(rest_pts, rest_segments)
+    rest_dist = np.maximum(rest_dist_raw, floor)
 
     # Sample clips one at a time: NLA tracks are muted so ONLY the active
     # action poses the rig (otherwise every clip would evaluate stacked).
@@ -567,6 +575,7 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
         track.mute = True
 
     worst = (0.0, 'none', 0)
+    worst_detail = None
     for clip_name in CORE_CLIPS:
         action = bpy.data.actions.get(clip_name)
         if action is None:
@@ -588,16 +597,41 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
                 + np.array(emat.translation, dtype=np.float64)
             eval_obj.to_mesh_clear()
 
+            # Iterate by data-bone name so posed segment order matches the
+            # rest-segment / bone_names order exactly.
             posed_segments = []
-            for pose_bone in arm_obj.pose.bones:
+            for name in bone_names:
+                pose_bone = arm_obj.pose.bones[name]
                 head = np.array(arm_mat @ pose_bone.head, dtype=np.float64)
                 tail = np.array(arm_mat @ pose_bone.tail, dtype=np.float64)
                 posed_segments.append((head, tail))
-            posed_dist = min_bone_distances(pts, posed_segments)
+            posed_dist, posed_nearest = min_bone_distances(pts, posed_segments)
 
-            ratio = float(np.max(posed_dist / rest_dist))
+            ratios = posed_dist / rest_dist
+            ratio = float(np.max(ratios))
             if ratio > worst[0]:
                 worst = (ratio, clip_name, int(frame))
+                # Offender diagnostics: which bones do the escaping verts
+                # live around? The histogram localizes the weight problem to
+                # a body region without any manual weight-paint inspection.
+                offender_indices = np.nonzero(ratios > DEFORM_RATIO_LIMIT)[0]
+                histogram = {}
+                for vert_idx in offender_indices:
+                    key = bone_names[posed_nearest[vert_idx]]
+                    histogram[key] = histogram.get(key, 0) + 1
+                worst_idx = int(np.argmax(ratios))
+                worst_detail = {
+                    "offenders": int(len(offender_indices)),
+                    "offender_bone_histogram": dict(sorted(
+                        histogram.items(), key=lambda kv: -kv[1])[:8]),
+                    "worst_vert": worst_idx,
+                    "rest_co": [round(float(v), 3) for v in rest_pts[worst_idx]],
+                    "posed_co": [round(float(v), 3) for v in pts[worst_idx]],
+                    "d_rest_raw": round(float(rest_dist_raw[worst_idx]), 4),
+                    "d_pose": round(float(posed_dist[worst_idx]), 4),
+                    "nearest_rest_bone": bone_names[rest_nearest[worst_idx]],
+                    "nearest_posed_bone": bone_names[posed_nearest[worst_idx]],
+                }
 
     # Restore the exact post-bake_animation_clips state (action cleared, NLA
     # unmuted) so the exporter sees the clips the way rig_quadruped left them.
@@ -610,6 +644,9 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
     print(f"[retopo_rig] deformation sanity: worst ratio={worst[0]:.3f} "
           f"(clip={worst[1]} frame={worst[2]}, limit {DEFORM_RATIO_LIMIT}) "
           f"-> {'PASS' if passed else 'FAIL'}")
+    if worst_detail is not None:
+        print("[retopo_rig] deform diagnostics: "
+              + json.dumps(worst_detail))
     return worst[0], worst[1], worst[2], passed
 
 
@@ -785,6 +822,28 @@ def main():
                                           base_name)
     preview_paths['original'] = os.path.join(previews_dir,
                                              f"{base_name}_original.png")
+
+    if not deform_ok and worst_clip in bpy.data.actions:
+        # Render the exact failing pose so the deform-sanity number can be
+        # judged visually: a genuinely exploded vertex is obvious, a benign
+        # knee-fold artifact equally so.
+        anim = arm_obj.animation_data
+        for track in anim.nla_tracks:
+            track.mute = True
+        anim.action = bpy.data.actions[worst_clip]
+        bpy.context.scene.frame_set(worst_frame)
+        lo, hi = mesh_world_extents(retopo_obj)
+        center = Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2,
+                         (lo[2] + hi[2]) / 2))
+        setup_preview_scene(center, float(np.max(hi - lo)))
+        debug_path = os.path.join(previews_dir,
+                                  f"{base_name}_deform_worst.png")
+        render_to(debug_path)
+        preview_paths['deform_worst'] = debug_path
+        anim.action = None
+        for track in anim.nla_tracks:
+            track.mute = False
+        clear_preview_rig()
 
     summary = {
         "output": output_path,
