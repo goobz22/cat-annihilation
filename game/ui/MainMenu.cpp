@@ -529,143 +529,371 @@ void MainMenu::renderBackground(CatEngine::Renderer::UIPass& uiPass) {
 }
 
 void MainMenu::renderModeSelectPage(float width, float height) {
-    // ------------------------------------------------------------------ Title
-    // Web parity: the web's menu heads itself "Cat Warriors" / "Choose
-    // your adventure" (GameModeSelection.tsx:312-313) — deliberately NOT
-    // the app name; the strings live in the parity table.
-    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
-        ImGui::PushFont(titleFont);
-    }
-    const char* titleText = WebParity::kMenuHeading;
-    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
-    const float titleY = height * 0.13F;
-    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
-    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
-    if (m_imguiLayer->GetTitleFont() != nullptr) {
-        ImGui::PopFont();
-    }
+    // The web mode-select screen (GameModeSelection.tsx:308-364 +
+    // menus.css) is a dark rounded CARD centred on the navy backdrop:
+    // a header ("🐱 Cat Warriors" / "Choose your adventure" + rule), two
+    // side-by-side mode cards (Survival red-edged / Story teal-edged), a
+    // "Development Status" banner, and a footer. We rebuild that whole box
+    // with the ImGui DrawList — real card, not a stack of buttons — so a
+    // side-by-side screenshot reads as the same layout. Emoji glyphs (🐱 ⚔️
+    // 📜 🚧) have no font atlas coverage, so each is approximated with drawn
+    // shapes (documented at each draw site) rather than a missing-glyph box.
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* titleFont = m_imguiLayer->GetTitleFont();
+    ImFont* boldFont = m_imguiLayer->GetBoldFont();
+    ImFont* regularFont = m_imguiLayer->GetRegularFont();
+    // Fonts are non-null after ImGuiLayer init (it falls back title→bold→
+    // regular→default), but guard so an AddText never dereferences null.
+    if (titleFont == nullptr) { titleFont = ImGui::GetFont(); }
+    if (boldFont == nullptr) { boldFont = ImGui::GetFont(); }
+    if (regularFont == nullptr) { regularFont = ImGui::GetFont(); }
 
-    // --------------------------------------------------------------- Subtitle
-    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
-        ImGui::PushFont(regularFont);
+    // Local text helpers (DrawList AddText with an explicit font SIZE lets us
+    // hit the web's px scale — the atlas fonts are 80/30/20 px, downscaled
+    // here for crisp glyphs). measure() centres; drawText() left-aligns.
+    auto measure = [](const ImFont* font, float size, const char* text) -> ImVec2 {
+        return font->CalcTextSizeA(size, FLT_MAX, 0.0F, text);
+    };
+    auto drawText = [&](const ImFont* font, float size, float x, float y,
+                        ImU32 col, const char* text) {
+        drawList->AddText(font, size, ImVec2(x, y), col, text);
+    };
+    auto drawCentered = [&](const ImFont* font, float size, float centerX, float y,
+                            ImU32 col, const char* text) {
+        const float textWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
+        drawList->AddText(font, size, ImVec2(centerX - textWidth * 0.5F, y), col, text);
+    };
+
+    // -------------------------------------------------------------- Card box
+    // Card sized to content and centred. The height is the SUM of every band
+    // below (header + body pad + mode cards + notice + footer), so the card
+    // always fits its content instead of guessing a fraction of the screen.
+    const float cardWidth = std::min(880.0F, width * 0.92F);
+    const float headerHeight = 96.0F;
+    const float bodyPadX = 28.0F;
+    const float bodyPadY = 26.0F;
+    const float columnGap = 20.0F;
+    const float modeCardHeight = 344.0F;
+    const float afterCardsGap = 18.0F;
+    const float noticeHeight = 66.0F;
+    const float afterNoticeGap = 16.0F;
+    const float footerHeight = 52.0F;
+    const float bottomPad = 20.0F;
+    const float cardHeight = headerHeight + bodyPadY + modeCardHeight + afterCardsGap +
+                             noticeHeight + afterNoticeGap + footerHeight + bottomPad;
+    const float cardX = (width - cardWidth) * 0.5F;
+    const float cardY = std::max(20.0F, (height - cardHeight) * 0.5F);
+    const ImVec2 cardMin(cardX, cardY);
+    const ImVec2 cardMax(cardX + cardWidth, cardY + cardHeight);
+
+    // Card body (rounded solid mid-tone of the #2d2d2d→#1a1a1a gradient) +
+    // 3px #444 border — menus.css:1177-1180.
+    drawList->AddRectFilled(cardMin, cardMax,
+                            midFill(WebParity::kCardTop, WebParity::kCardBottom), 20.0F);
+    drawList->AddRect(cardMin, cardMax, toImCol(WebParity::kCardBorder),
+                      20.0F, 0, 3.0F);
+
+    // ----------------------------------------------------------------- Header
+    // Rounded-top band (#444→#333) with a 3px #555 bottom rule — menus.css:
+    // 1201-1202. Solid mid-tone for the same round-vs-gradient reason as the
+    // card body.
+    const float headerBottom = cardY + headerHeight;
+    drawList->AddRectFilled(cardMin, ImVec2(cardMax.x, headerBottom),
+                            midFill(WebParity::kHeaderTop, WebParity::kHeaderBottom),
+                            20.0F, ImDrawFlags_RoundCornersTop);
+    drawList->AddRectFilled(ImVec2(cardX, headerBottom - 3.0F),
+                            ImVec2(cardMax.x, headerBottom),
+                            toImCol(WebParity::kHeaderRule));
+
+    // Header content: a cat-face glyph approximation + "Cat Warriors" as one
+    // centred group, then the subheading. Title size 46 ≈ the web's clamp
+    // 42px header (menus.css:1207), downscaled from the 80px atlas → crisp.
+    const float titleSize = 46.0F;
+    const ImVec2 titleDim = measure(titleFont, titleSize, WebParity::kMenuHeading);
+    const float catIconSize = 40.0F;
+    const float catIconGap = 14.0F;
+    const float groupWidth = catIconSize + catIconGap + titleDim.x;
+    const float groupX = cardX + (cardWidth - groupWidth) * 0.5F;
+    const float titleTop = cardY + 18.0F;
+    // Cat-face icon (🐱 stand-in): warm-orange head circle + two triangle
+    // ears + dark eyes + pink nose. Not the emoji — the atlas has none — but
+    // an unmistakable cat silhouette that reads at header scale.
+    {
+        const ImU32 fur = IM_COL32(0xF0, 0x9A, 0x3E, 255);
+        const ImU32 dark = IM_COL32(0x33, 0x24, 0x10, 255);
+        const float iconX = groupX;
+        const float iconY = titleTop + (titleDim.y - catIconSize) * 0.5F;
+        const ImVec2 center(iconX + catIconSize * 0.5F, iconY + catIconSize * 0.58F);
+        const float radius = catIconSize * 0.34F;
+        drawList->AddTriangleFilled(
+            ImVec2(center.x - radius * 0.95F, center.y - radius * 0.45F),
+            ImVec2(center.x - radius * 0.15F, center.y - radius * 1.2F),
+            ImVec2(center.x - radius * 0.05F, center.y - radius * 0.25F), fur);
+        drawList->AddTriangleFilled(
+            ImVec2(center.x + radius * 0.95F, center.y - radius * 0.45F),
+            ImVec2(center.x + radius * 0.15F, center.y - radius * 1.2F),
+            ImVec2(center.x + radius * 0.05F, center.y - radius * 0.25F), fur);
+        drawList->AddCircleFilled(center, radius, fur, 28);
+        drawList->AddCircleFilled(ImVec2(center.x - radius * 0.4F, center.y - radius * 0.05F),
+                                  radius * 0.13F, dark, 12);
+        drawList->AddCircleFilled(ImVec2(center.x + radius * 0.4F, center.y - radius * 0.05F),
+                                  radius * 0.13F, dark, 12);
+        drawList->AddTriangleFilled(
+            ImVec2(center.x - radius * 0.13F, center.y + radius * 0.22F),
+            ImVec2(center.x + radius * 0.13F, center.y + radius * 0.22F),
+            ImVec2(center.x, center.y + radius * 0.42F), IM_COL32(0xE0, 0x6A, 0x8A, 255));
     }
-    const char* subtitleText = WebParity::kMenuSubheading;
-    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
-    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
-    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
-    if (m_imguiLayer->GetRegularFont() != nullptr) {
-        ImGui::PopFont();
-    }
+    // Title in WHITE (menus.css:1206) — the exact regression the pre-audit
+    // gold title violated — and the grey subheading below.
+    drawText(titleFont, titleSize, groupX + catIconSize + catIconGap, titleTop,
+             toImCol(WebParity::kMenuTitleColor), WebParity::kMenuHeading);
+    drawCentered(regularFont, 18.0F, cardX + cardWidth * 0.5F,
+                 titleTop + titleDim.y + 8.0F, toImCol(WebParity::kMenuSubtitleColor),
+                 WebParity::kMenuSubheading);
 
-    // ----------------------------------------------------------------- Buttons
-    // One MenuButton model, two visual treatments: the mode cards
-    // (subtitle set) draw a taller ID-only button with title / subtitle /
-    // hint overlaid, the native-desktop extras keep ImGui's own centered
-    // label — exactly the split between the web's .game-mode-option cards
-    // and plain buttons.
-    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
-        ImGui::PushFont(boldFont);
-    }
-    const float buttonWidth = 360.0F;
-    const float plainButtonHeight = 60.0F;
-    const float cardButtonHeight = 96.0F;
-    const float buttonSpacing = 16.0F;
-    float cursorY = height * 0.32F;
-    const float buttonX = (width - buttonWidth) * 0.5F;
+    // ------------------------------------------------------------- Mode cards
+    // Two equal columns, gap 20 (menus.css:1223-1225). Survival is clickable
+    // → customize; Story is coming-soon and does nothing on click.
+    const float bodyTop = headerBottom + bodyPadY;
+    const float modeCardWidth = (cardWidth - 2.0F * bodyPadX - columnGap) * 0.5F;
+    const float leftCardX = cardX + bodyPadX;
+    const float rightCardX = leftCardX + modeCardWidth + columnGap;
 
-    for (size_t i = 0; i < m_buttons.size(); ++i) {
-        auto& button = m_buttons[i];
-        const bool isCard = !button.subtitle.empty();
-        const float buttonHeight = isCard ? cardButtonHeight : plainButtonHeight;
+    // drawModeCard renders one card and returns whether it was clicked this
+    // frame. Enabled cards hit-test via an InvisibleButton (ImGui owns the
+    // click/hover, so no double-activation); a disabled card skips the button
+    // so its clicks are inert — the web's coming-soon Story behaviour.
+    auto drawModeCard = [&](float cardLeft, const char* titleStr, const char* subtitleStr,
+                            const char* description, const char* const* features,
+                            int featureCount, const WebParity::UiColor& accent,
+                            bool enabled, bool isSurvival) -> bool {
+        const ImVec2 topLeft(cardLeft, bodyTop);
+        const ImVec2 bottomRight(cardLeft + modeCardWidth, bodyTop + modeCardHeight);
 
-        ImGui::SetCursorPos(ImVec2(buttonX, cursorY));
-        ImGui::PushID(static_cast<int>(i));
-        ImGui::BeginDisabled(!button.enabled);
-        // Cards use an ID-only label so the overlay text below fully
-        // controls the typography (two fonts on one button is beyond
-        // ImGui::Button's single label).
-        const bool clicked = ImGui::Button(isCard ? "##card" : button.text.c_str(),
-                                           ImVec2(buttonWidth, buttonHeight));
-        const bool hovered = ImGui::IsItemHovered();
-        const ImVec2 rectMin = ImGui::GetItemRectMin();
-        const ImVec2 rectMax = ImGui::GetItemRectMax();
-        ImGui::EndDisabled();
-        ImGui::PopID();
+        bool clicked = false;
+        bool hovered = false;
+        if (enabled) {
+            ImGui::SetCursorPos(topLeft);
+            ImGui::PushID(cardLeft < rightCardX - 1.0F ? "##survivalCard" : "##card2");
+            clicked = ImGui::InvisibleButton(isSurvival ? "##survival" : "##mode",
+                                             ImVec2(modeCardWidth, modeCardHeight));
+            hovered = ImGui::IsItemHovered();
+            ImGui::PopID();
+        }
 
-        if (clicked) {
-            m_audio.playMenuClick();
-            if (button.callback) {
-                button.callback();
+        // Card fill + border. The border is #555 at rest and the accent
+        // (survival red / story teal) on hover — menus.css:1246-1254.
+        drawList->AddRectFilled(topLeft, bottomRight,
+                                midFill(WebParity::kModeCardTop, WebParity::kModeCardBottom),
+                                15.0F);
+        drawList->AddRect(topLeft, bottomRight,
+                          hovered ? toImCol(accent) : toImCol(WebParity::kModeCardBorder),
+                          15.0F, 0, 2.0F);
+
+        const float centerX = cardLeft + modeCardWidth * 0.5F;
+        const float innerPad = 18.0F;
+        // Greyed text for the disabled (coming-soon) card so it reads as
+        // inactive, matching the web's dimmed story card.
+        const float textAlpha = enabled ? 1.0F : 0.55F;
+
+        // Icon (⚔️ crossed swords / 📜 scroll approximations).
+        const float iconCenterY = bodyTop + 40.0F;
+        if (isSurvival) {
+            const ImU32 blade = IM_COL32(0xC8, 0xCE, 0xD8,
+                                         static_cast<int>(textAlpha * 255.0F));
+            const ImU32 hilt = IM_COL32(0x8A, 0x6A, 0x3A,
+                                        static_cast<int>(textAlpha * 255.0F));
+            const float halfLen = 17.0F;
+            drawList->AddLine(ImVec2(centerX - halfLen, iconCenterY - halfLen),
+                              ImVec2(centerX + halfLen, iconCenterY + halfLen), blade, 4.0F);
+            drawList->AddLine(ImVec2(centerX + halfLen, iconCenterY - halfLen),
+                              ImVec2(centerX - halfLen, iconCenterY + halfLen), blade, 4.0F);
+            drawList->AddCircleFilled(ImVec2(centerX - halfLen, iconCenterY + halfLen), 4.0F, hilt);
+            drawList->AddCircleFilled(ImVec2(centerX + halfLen, iconCenterY + halfLen), 4.0F, hilt);
+        } else {
+            const ImU32 parchment = IM_COL32(0xE8, 0xC9, 0x7A,
+                                             static_cast<int>(textAlpha * 255.0F));
+            const ImU32 lineCol = IM_COL32(0xB8, 0x94, 0x4A,
+                                           static_cast<int>(textAlpha * 255.0F));
+            const float halfW = 14.0F;
+            const float halfH = 18.0F;
+            drawList->AddRectFilled(ImVec2(centerX - halfW, iconCenterY - halfH),
+                                    ImVec2(centerX + halfW, iconCenterY + halfH), parchment, 3.0F);
+            drawList->AddRectFilled(ImVec2(centerX - halfW - 3.0F, iconCenterY - halfH - 4.0F),
+                                    ImVec2(centerX + halfW + 3.0F, iconCenterY - halfH + 3.0F),
+                                    lineCol, 2.0F);
+            drawList->AddRectFilled(ImVec2(centerX - halfW - 3.0F, iconCenterY + halfH - 3.0F),
+                                    ImVec2(centerX + halfW + 3.0F, iconCenterY + halfH + 4.0F),
+                                    lineCol, 2.0F);
+            for (int k = 0; k < 3; ++k) {
+                const float lineY = iconCenterY - 8.0F + static_cast<float>(k) * 8.0F;
+                drawList->AddLine(ImVec2(centerX - halfW * 0.6F, lineY),
+                                  ImVec2(centerX + halfW * 0.6F, lineY), lineCol, 1.5F);
             }
         }
 
-        // Write the real drawn geometry back into the model so
-        // updateButtons() hover-tests what is actually on screen (the same
-        // sync PauseMenu::render does). Item-rect coords are absolute
-        // screen coords, which match Engine::Input's window-relative mouse
-        // because this overlay window fills the screen from (0,0).
-        button.position = {rectMin.x, rectMin.y};
-        button.size = {rectMax.x - rectMin.x, rectMax.y - rectMin.y};
+        // Title (bold 24, white), subtitle (regular 15, #bbb) — menus.css:
+        // 1263/1271.
+        drawCentered(boldFont, 24.0F, centerX, bodyTop + 62.0F,
+                     toImCol(WebParity::kModeTitleColor, textAlpha), titleStr);
+        drawCentered(regularFont, 15.0F, centerX, bodyTop + 96.0F,
+                     toImCol(WebParity::kModeSubtitleColor, textAlpha), subtitleStr);
 
-        button.hovered = hovered;
-        if (hovered) {
-            m_hoveredButtonIndex = static_cast<int32_t>(i);
+        // Description paragraph — centred + word-wrapped inside the card
+        // (menus.css:1277-1283, text-align:center). Each line centred.
+        const float descTop = bodyTop + 122.0F;
+        const float descLineHeight = 19.0F;
+        const std::vector<std::string> descLines =
+            wrapToWidth(regularFont, 14.0F, description, modeCardWidth - 2.0F * innerPad);
+        for (size_t line = 0; line < descLines.size(); ++line) {
+            drawCentered(regularFont, 14.0F, centerX,
+                         descTop + static_cast<float>(line) * descLineHeight,
+                         toImCol(WebParity::kModeDescColor, textAlpha),
+                         descLines[line].c_str());
         }
 
-        // Keyboard-selection ring: handleInput moves m_selectedButtonIndex
-        // with Up/Down, and without a visual that path is unusable. Gold
-        // matches the selection border this menu used pre-ImGui.
-        if (static_cast<int32_t>(i) == m_selectedButtonIndex && button.enabled) {
-            ImGui::GetWindowDrawList()->AddRect(
-                ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
-                ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
-                IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
+        // Feature panel — inset black@0.3 box with a 3px accent LEFT edge and
+        // a bulleted list (menus.css:1285-1302). The web "•" glyph is absent
+        // from the atlas, so each bullet is a small filled dot.
+        const float panelBottom = bodyTop + modeCardHeight - innerPad;
+        const float panelHeight = 108.0F;
+        const float panelTop = panelBottom - panelHeight;
+        const ImVec2 panelMin(cardLeft + innerPad, panelTop);
+        const ImVec2 panelMax(cardLeft + modeCardWidth - innerPad, panelBottom);
+        drawList->AddRectFilled(panelMin, panelMax,
+                                toImCol(WebParity::kFeaturePanelFill, 0.3F), 8.0F);
+        drawList->AddRectFilled(panelMin, ImVec2(panelMin.x + 3.0F, panelMax.y),
+                                toImCol(accent, textAlpha), 2.0F);
+        for (int feature = 0; feature < featureCount; ++feature) {
+            const float rowY = panelTop + 12.0F + static_cast<float>(feature) * 21.0F;
+            drawList->AddCircleFilled(ImVec2(panelMin.x + 14.0F, rowY + 8.0F), 2.0F,
+                                      toImCol(WebParity::kModeFeatureColor, textAlpha));
+            drawText(regularFont, 13.0F, panelMin.x + 22.0F, rowY,
+                     toImCol(WebParity::kModeFeatureColor, textAlpha), features[feature]);
         }
 
-        // Card overlay text, drawn after the button so it layers on top;
-        // Text items carry no ID so they never steal the button's hover.
-        // Colors are explicit rather than BeginDisabled-driven so the
-        // disabled story card greys its text to match its button face.
-        if (isCard) {
-            const ImVec4 titleColor = button.enabled
-                ? ImVec4(1.00F, 1.00F, 1.00F, 1.00F)
-                : ImVec4(0.55F, 0.55F, 0.60F, 0.85F);
-            const ImVec4 subtitleColor = button.enabled
-                ? ImVec4(0.80F, 0.80F, 0.90F, 0.90F)
-                : ImVec4(0.50F, 0.50F, 0.55F, 0.80F);
-
-            const ImVec2 cardTitleSize = ImGui::CalcTextSize(button.text.c_str());
-            ImGui::SetCursorPos(ImVec2(buttonX + (buttonWidth - cardTitleSize.x) * 0.5F,
-                                       cursorY + 14.0F));
-            ImGui::TextColored(titleColor, "%s", button.text.c_str());
-
-            if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
-                ImGui::PushFont(regularFont);
-            }
-            const ImVec2 cardSubSize = ImGui::CalcTextSize(button.subtitle.c_str());
-            ImGui::SetCursorPos(ImVec2(buttonX + (buttonWidth - cardSubSize.x) * 0.5F,
-                                       cursorY + 14.0F + cardTitleSize.y + 4.0F));
-            ImGui::TextColored(subtitleColor, "%s", button.subtitle.c_str());
-
-            if (!button.hint.empty()) {
-                // Amber so "Coming soon" reads as a status tag, not body copy.
-                const ImVec2 hintSize = ImGui::CalcTextSize(button.hint.c_str());
-                ImGui::SetCursorPos(
-                    ImVec2(buttonX + (buttonWidth - hintSize.x) * 0.5F,
-                           cursorY + buttonHeight - hintSize.y - 8.0F));
-                ImGui::TextColored(ImVec4(0.85F, 0.70F, 0.30F, 0.90F), "%s",
-                                   button.hint.c_str());
-            }
-            if (m_imguiLayer->GetRegularFont() != nullptr) {
-                ImGui::PopFont();
-            }
+        // Coming-soon tag for the disabled card (amber, over the icon area).
+        if (!enabled) {
+            drawCentered(regularFont, 13.0F, centerX, bodyTop + modeCardHeight * 0.5F - 6.0F,
+                         IM_COL32(0xE0, 0xB4, 0x4C, 230), WebParity::kStoryComingSoon);
         }
+        return clicked;
+    };
 
-        cursorY += buttonHeight + buttonSpacing;
+    const bool survivalClicked = drawModeCard(
+        leftCardX, WebParity::kSurvivalCardTitle, WebParity::kSurvivalCardSubtitle,
+        WebParity::kSurvivalCardDescription, WebParity::kSurvivalFeatures,
+        WebParity::kSurvivalFeatureCount, WebParity::kSurvivalAccent, true, true);
+    // Story card: drawn for the two-card parity layout but non-functional
+    // (P3-deferred). Its return is intentionally ignored — no callback fires.
+    (void)drawModeCard(
+        rightCardX, WebParity::kStoryCardTitle, WebParity::kStoryCardSubtitle,
+        WebParity::kStoryCardDescription, WebParity::kStoryFeatures,
+        WebParity::kStoryFeatureCount, WebParity::kStoryAccent, false, false);
+
+    if (survivalClicked) {
+        m_audio.playMenuClick();
+        m_currentPage = MenuPage::Customize;
     }
-    if (m_imguiLayer->GetBoldFont() != nullptr) {
-        ImGui::PopFont();
+
+    // ------------------------------------------------------- Development note
+    // Subtle grey banner (menus.css:1305-1315): faint fill, #999@0.3 border,
+    // a 🚧 barricade approximation, and two copy lines with a bold lead word.
+    const float noticeTop = bodyTop + modeCardHeight + afterCardsGap;
+    const ImVec2 noticeMin(cardX + bodyPadX, noticeTop);
+    const ImVec2 noticeMax(cardX + cardWidth - bodyPadX, noticeTop + noticeHeight);
+    drawList->AddRectFilled(noticeMin, noticeMax, IM_COL32(0x66, 0x66, 0x66, 36), 10.0F);
+    drawList->AddRect(noticeMin, noticeMax, toImCol(WebParity::kDevNoticeBorder, 0.3F),
+                      10.0F, 0, 1.0F);
+    {
+        // 🚧 barricade stand-in: an amber rounded bar with black hazard slashes.
+        const float barX = noticeMin.x + 14.0F;
+        const float barCenterY = noticeTop + noticeHeight * 0.5F;
+        const float barW = 26.0F;
+        const float barH = 16.0F;
+        drawList->AddRectFilled(ImVec2(barX, barCenterY - barH * 0.5F),
+                                ImVec2(barX + barW, barCenterY + barH * 0.5F),
+                                IM_COL32(0xE4, 0xB4, 0x3A, 255), 2.0F);
+        for (int slash = 0; slash < 3; ++slash) {
+            const float sx = barX + 3.0F + static_cast<float>(slash) * 8.0F;
+            drawList->AddLine(ImVec2(sx, barCenterY + barH * 0.4F),
+                              ImVec2(sx + 6.0F, barCenterY - barH * 0.4F),
+                              IM_COL32(0x22, 0x22, 0x22, 255), 2.5F);
+        }
     }
+    const float noticeTextX = noticeMin.x + 14.0F + 26.0F + 14.0F;
+    const float noticeRow1Y = noticeTop + 12.0F;
+    const ImVec2 headingDim = measure(boldFont, 14.0F, WebParity::kDevStatusHeading);
+    drawText(boldFont, 14.0F, noticeTextX, noticeRow1Y,
+             toImCol(WebParity::kDevNoticeStrong), WebParity::kDevStatusHeading);
+    drawText(regularFont, 13.0F, noticeTextX + headingDim.x + 6.0F, noticeRow1Y + 1.0F,
+             toImCol(WebParity::kDevNoticeText), WebParity::kDevStatusLine1);
+    drawText(regularFont, 13.0F, noticeTextX, noticeRow1Y + 24.0F,
+             toImCol(WebParity::kDevNoticeText), WebParity::kDevStatusLine2);
+
+    // ----------------------------------------------------------------- Footer
+    // A top rule, then the "Reset Progress" control (menus.css:2140-2189, the
+    // web's two-click confirm) centred, plus the ONE deliberate desktop-exit
+    // divergence: a small Quit affordance the web has no equivalent for.
+    const float footerTop = noticeTop + noticeHeight + afterNoticeGap;
+    drawList->AddLine(ImVec2(cardX + bodyPadX, footerTop),
+                      ImVec2(cardX + cardWidth - bodyPadX, footerTop),
+                      IM_COL32(255, 255, 255, 26), 1.0F);
+
+    ImGui::PushFont(regularFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0F);
+
+    // Reset Progress — grey normally, red once armed. The label swaps to the
+    // confirm copy while armed (matching the web's "⚠️ Click again to
+    // confirm", emoji dropped). A second click while armed fires the wired
+    // reset callback if present; with none wired it is INERT (there is no
+    // persisted native leveling save to clear today — documented seam).
+    const float resetWidth = 210.0F;
+    const float buttonHeight = 40.0F;
+    const float footerButtonsY = footerTop + (footerHeight - buttonHeight) * 0.5F + 4.0F;
+    const WebParity::UiColor resetTop =
+        m_resetConfirmPending ? WebParity::kDeathAccent : WebParity::kResetButtonTop;
+    const WebParity::UiColor resetBottom =
+        m_resetConfirmPending ? WebParity::kDeathAccentDark : WebParity::kResetButtonBottom;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImColor(toImCol(resetTop)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImColor(toImCol(WebParity::kDeathAccent, 0.9F)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImColor(toImCol(resetBottom)).Value);
+    ImGui::SetCursorPos(ImVec2(cardX + (cardWidth - resetWidth) * 0.5F, footerButtonsY));
+    const char* resetLabel =
+        m_resetConfirmPending ? WebParity::kResetConfirmLabel : WebParity::kResetProgressLabel;
+    if (ImGui::Button(resetLabel, ImVec2(resetWidth, buttonHeight))) {
+        m_audio.playMenuClick();
+        if (m_resetConfirmPending) {
+            m_resetConfirmPending = false;
+            if (m_resetProgressCallback) {
+                m_resetProgressCallback();
+            }
+        } else {
+            m_resetConfirmPending = true;
+            m_resetConfirmTimer = 3.0F;
+        }
+    }
+    ImGui::PopStyleColor(3);
+
+    // Small Quit — the deliberate desktop-exit divergence (web has none).
+    const float quitWidth = 90.0F;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImColor(toImCol(WebParity::kBackButtonTop)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImColor(toImCol(WebParity::kBackButtonTop, 0.85F)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          ImColor(toImCol(WebParity::kBackButtonBottom)).Value);
+    ImGui::SetCursorPos(ImVec2(cardX + cardWidth - bodyPadX - quitWidth, footerButtonsY));
+    if (ImGui::Button(WebParity::kQuitLabel, ImVec2(quitWidth, buttonHeight))) {
+        m_audio.playMenuClick();
+        if (m_quitCallback) {
+            m_quitCallback();
+        }
+    }
+    ImGui::PopStyleColor(3);
+
+    ImGui::PopStyleVar();
+    ImGui::PopFont();
 }
 
 void MainMenu::renderCustomizePage(float width, float height) {
