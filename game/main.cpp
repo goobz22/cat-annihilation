@@ -710,7 +710,8 @@ static std::string inputScriptQueryValue(const std::string& query,
         const auto* leveling = game->getLevelingSystem();
         return leveling ? std::to_string(leveling->getLevel()) : "<no-leveling>";
     }
-    if (query == "playerHealth" || query == "playerAlive") {
+    if (query == "playerHealth" || query == "playerMaxHealth" ||
+        query == "playerAlive") {
         // ECS lookup, never a cached pointer — the player entity is
         // re-created on restart and a cached HealthComponent would dangle.
         const auto* health = game->getECS().getComponent<CatGame::HealthComponent>(
