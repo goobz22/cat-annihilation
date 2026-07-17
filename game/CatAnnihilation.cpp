@@ -959,7 +959,24 @@ void CatAnnihilation::connectSystemEvents() {
                         } else {
                             levelingSystem_->addWeaponXP(weapon, hitXp);
                         }
-                        lastPlayerWeaponHit_[hitInfo.target.id] = weapon;
+                        // Magic records carry the element ("magic:<int>")
+                        // so the kill bonus can credit the right elemental
+                        // skill — the web's lastDamageSource stores
+                        // {weapon, element} the same way.
+                        if (weapon == "magic") {
+                            ElementType element = ElementType::None;
+                            switch (hitInfo.damageType) {
+                                case DamageType::Ice:    element = ElementType::Water; break;
+                                case DamageType::Magic:  element = ElementType::Air;   break;
+                                case DamageType::Poison: element = ElementType::Earth; break;
+                                case DamageType::Fire:   element = ElementType::Fire;  break;
+                                default: break;
+                            }
+                            lastPlayerWeaponHit_[hitInfo.target.id] =
+                                "magic:" + std::to_string(static_cast<int>(element));
+                        } else {
+                            lastPlayerWeaponHit_[hitInfo.target.id] = weapon;
+                        }
                     }
                 }
             }
@@ -3733,18 +3750,22 @@ void CatAnnihilation::onEnemyKilled(const EnemyKilledEvent& event) {
         if constexpr (WebParity::kEnabled) {
             auto lastWeapon = lastPlayerWeaponHit_.find(event.enemy.id);
             if (lastWeapon != lastPlayerWeaponHit_.end()) {
-                if (lastWeapon->second != "magic") {
-                    levelingSystem_->addWeaponXP(lastWeapon->second,
+                const std::string& record = lastWeapon->second;
+                if (record.rfind("magic:", 0) == 0) {
+                    // Spell kill: the record carries the element as
+                    // "magic:<int>" (written by the hit callback) — credit
+                    // the matching elemental skill, the same routing the
+                    // web's lastDamageSource {weapon, element} performs.
+                    const int elementValue = std::stoi(record.substr(6));
+                    const auto element = static_cast<ElementType>(elementValue);
+                    if (element != ElementType::None) {
+                        levelingSystem_->addElementalXP(element,
+                                                        WebParity::kWeaponXpPerKill);
+                    }
+                } else {
+                    levelingSystem_->addWeaponXP(record,
                                                  WebParity::kWeaponXpPerKill);
                 }
-                // Magic kill bonuses need the element, which the hit
-                // record doesn't carry; the web awards them via the same
-                // lastDamageSource element. The elemental hit XP above
-                // already credits the element per impact — the kill bonus
-                // for spells goes to the generic staff skill's nearest
-                // native equivalent, which does not exist, so it is
-                // intentionally skipped and recorded as a delta in
-                // docs/parity/PARITY_MATRIX.md.
                 lastPlayerWeaponHit_.erase(lastWeapon);
             }
         }
