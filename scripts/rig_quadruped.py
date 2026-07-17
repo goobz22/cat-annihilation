@@ -1547,8 +1547,26 @@ def bake_animation_clips(arm_obj, fps=24):
 
     actions_to_push = []
 
+    # Purge any actions carried in by the imported GLB. A previously-rigged
+    # dog re-imports with its own actions already named idle / walk / run /
+    # sitDown / ... in bpy.data.actions. Left in place, bpy.data.actions.new
+    # ('idle') would collide and hand back 'idle.001', and the exporter would
+    # write the clip under that suffixed name — which silently breaks the
+    # engine's EXACT-name lookups (Cat/DogEntity `clip.name == "idle"`,
+    # LocomotionStateMachine `hasState("idle")`, CatAnnihilation
+    # `play("sitDown")`). Removing the stale actions first lets new_action
+    # claim the exact clip names the game contract requires.
+    for stale in list(bpy.data.actions):
+        bpy.data.actions.remove(stale)
+
     def new_action(name):
-        # Fresh action per clip; detach any previous assignment.
+        # Fresh action per clip. Defensive: if an action of this exact name
+        # somehow still exists, remove it so `new(name)` returns `name` and
+        # not a '.001'-suffixed variant (see the purge note above for why the
+        # exact name is load-bearing).
+        existing = bpy.data.actions.get(name)
+        if existing is not None:
+            bpy.data.actions.remove(existing)
         a = bpy.data.actions.new(name)
         a.use_fake_user = True
         arm_obj.animation_data.action = a
@@ -2015,12 +2033,69 @@ def verify_export(glb_path):
 # Main
 # ---------------------------------------------------------------------------
 
+def disable_import_breaking_addons():
+    """Neutralise user-installed Blender add-ons that corrupt glTF import.
+
+    This machine has the MakeHuman `mpfb` community add-on installed, and on
+    Blender 4.4 its register() dies partway with a SyntaxError. A
+    half-registered add-on is not merely noisy (rig_batch.ps1 already filters
+    the stderr traceback): it leaves Blender's bundled glTF importer in a
+    broken state, so bpy.ops.import_scene.gltf silently yields a degenerate
+    42-vertex stand-in instead of the real 100k-250k-vertex dog mesh. Every
+    downstream stage (bbox, anatomy, heat weighting) then runs on garbage and
+    the export aborts with an unrigged, un-skinned file — which is exactly the
+    "looks rigged but is dead" failure this pipeline exists to prevent.
+
+    `blender --background --factory-startup` sidesteps the add-on entirely,
+    but the batch runner and manual invocations don't always pass it, so the
+    tool self-heals here: disable any add-on that is enabled yet failed to
+    load, plus anything matching the known mpfb / MakeHuman modules by name.
+    Doing this BEFORE the first import restores correct geometry (verified:
+    121,131 verts on dog_regular vs 42 without the guard). Best-effort and
+    fully guarded so a differing add-on API can never take down the re-rig.
+    """
+    try:
+        import addon_utils
+    except Exception as err:
+        print(f"[rig_quadruped] addon guard skipped ({err})", file=sys.stderr)
+        return
+
+    disabled = []
+    for module in list(addon_utils.modules()):
+        name = getattr(module, "__name__", "")
+        if not name:
+            continue
+        lname = name.lower()
+        try:
+            enabled, loaded = addon_utils.check(name)
+        except Exception:
+            # check() itself throwing is a strong signal the add-on is broken.
+            enabled, loaded = (True, False)
+        is_known_bad = ("mpfb" in lname) or ("makehuman" in lname)
+        # The bundled glTF importer (io_scene_gltf2) is a core add-on that
+        # loads cleanly, so `loaded` is True and it is never touched here.
+        if enabled and (is_known_bad or not loaded):
+            try:
+                addon_utils.disable(name, default_set=False)
+                disabled.append(name)
+            except Exception as err:
+                print(f"[rig_quadruped] could not disable add-on {name}: {err}",
+                      file=sys.stderr)
+    if disabled:
+        print(f"[rig_quadruped] disabled import-breaking add-on(s): "
+              f"{', '.join(disabled)}")
+
+
 def main():
     opts = parse_args()
     print(f"[rig_quadruped] input = {opts['input']}")
     print(f"[rig_quadruped] output = {opts['output']}")
     print(f"[rig_quadruped] species = {opts['species']}, "
           f"flip_forward = {opts['flip_forward']}")
+
+    # Must run before any import: a broken user add-on (mpfb/MakeHuman on this
+    # box) corrupts bpy.ops.import_scene.gltf into a 42-vertex stand-in.
+    disable_import_breaking_addons()
 
     reset_scene()
     import_glb(opts["input"])
