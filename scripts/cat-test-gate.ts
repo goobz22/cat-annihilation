@@ -7,8 +7,8 @@
  * 0=green probe, not a verbal teach-me-from-the-side.
  *
  * Usage:
- *   bun scripts/cat-test-gate.ts              # full gate (build → verify)
- *   bun scripts/cat-test-gate.ts --quick      # skip cat-verify (build only)
+ *   bun scripts/cat-test-gate.ts              # full gate (build → verify → menu-flow)
+ *   bun scripts/cat-test-gate.ts --quick      # build only (skip cat-verify + menu-flow)
  *   bun scripts/cat-test-gate.ts --json       # machine-readable verdict on stdout
  *
  * Exit codes:
@@ -208,6 +208,34 @@ if (!quick && stages[stages.length - 1]!.ok) {
       }),
     )
   }
+}
+
+// Stage 4 — menu-flow scenario (only if everything above is green and not
+// --quick). The ONLY coverage in the whole gate that exercises menus: a
+// scripted headless run (hidden window, in-engine input injection — nothing
+// appears on the operator's screen) walks MainMenu → Survival click →
+// Customize → START GAME → Playing → unattended death → GameOver, with
+// expect: assertions at each state. Catches the class of bug the
+// 2026-07-16 zombie-Playing death regression belonged to (state machine
+// wedged; autoplay-only gates never noticed because autoplay skips both the
+// menus AND the mode-select path). The death expectation has ~2.5×
+// headroom: an idle/lightly-moved wave-1 cat dies ~8s into gameplay across
+// observed runs; the script allows ~20s.
+if (!quick && stages[stages.length - 1]!.ok) {
+  const menuFlowScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.5,0.364', 'wait:1',
+    'click:0.55,0.605', 'wait:2', 'expect:state=Playing', 'expect:wave>=1',
+    'hold:w,1', 'wait:20', 'expect:state=GameOver', 'expect:playerAlive=false',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('menu-flow', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', menuFlowScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-menuflow'),
+      '--timeout', '90',
+    ], { timeoutMs: 3 * 60_000 }),
+  )
 }
 
 const overallOk = stages.every((s) => s.ok)
