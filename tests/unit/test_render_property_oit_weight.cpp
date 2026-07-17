@@ -76,7 +76,11 @@ namespace {
 // recipe; the seed is a clearly-marked sentinel so a future contributor
 // who needs to widen coverage can change it intentionally rather than
 // stumble into "different runs see different bugs".
-constexpr uint32_t kPropertySeed = 0xAA55A55Au;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property oit_weight"));
 
 // We deliberately span depths from near-the-eye (where the clamp upper bound
 // fires) all the way out to 10 km (where the clamp lower bound fires) so the
