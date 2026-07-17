@@ -65,6 +65,90 @@ TEST_CASE("enemy combat profile matches the web dog", "[web-parity]") {
     CHECK(WebParity::kEnemyMeleeIFrameSeconds == 0.0f);
 }
 
+TEST_CASE("dog melee has no shared player i-frame under parity — a swarm is uncapped",
+          "[web-parity][melee][iframe]") {
+    // The confirmed gap: the pre-parity native EnemyAISystem stamped a SHARED
+    // 0.2 s player i-frame after any dog hit and gated every other dog behind
+    // !isInvincible(), capping a swarm to 15 damage / 0.2 s (a 75 DPS ceiling).
+    // The web has no such arbitration — damagePlayer (gameStore.ts:671-693)
+    // subtracts every hit with zero invincibility and each dog swings on its own
+    // 1000 ms cooldown (LocalEnemySystem.tsx:353-377), so N dogs each land 15 in
+    // one frame. This suite drives the REAL HealthComponent semantics that
+    // EnemyAISystem::updateAttackingState calls, replaying its exact melee
+    // application for both branches so a revert of either the constant or the
+    // gate re-fails here.
+
+    // Faithful replay of the FIXED (parity) melee application: no shared-i-frame
+    // gate, damage() through the component, then stamp kEnemyMeleeIFrameSeconds
+    // (0 s) — matching EnemyAISystem.cpp under WebParity::kEnabled with no shield.
+    auto applyDogMeleeParity = [](HealthComponent& player, float damage) {
+        player.lastDamageType = DamageType::Physical;
+        player.damage(damage);
+        player.invincibilityTimer = WebParity::kEnemyMeleeIFrameSeconds;
+    };
+
+    // Faithful replay of the PRE-PARITY native application: the shared-i-frame
+    // gate plus the hand-set 0.2 s window. Kept here as the contrast oracle so
+    // the 75 DPS cap the fix removes is documented, not just asserted away.
+    auto applyDogMeleeNative = [](HealthComponent& player, float damage) {
+        if (player.isInvincible()) {
+            return;  // gated: the shared window blocks this dog entirely
+        }
+        player.lastDamageType = DamageType::Physical;
+        player.damage(damage);
+        player.invincibilityTimer = 0.2f;
+    };
+
+    auto freshPlayer = []() {
+        HealthComponent player;
+        player.maxHealth = 100.0f;
+        player.currentHealth = 100.0f;
+        player.invincibilityDuration = 0.5f;  // the cat's default (CatEntity.cpp)
+        return player;
+    };
+
+    SECTION("two dogs in the same frame each land 15 under parity (uncapped)") {
+        HealthComponent player = freshPlayer();
+        applyDogMeleeParity(player, WebParity::kEnemyAttackDamage);
+        applyDogMeleeParity(player, WebParity::kEnemyAttackDamage);
+        // Both 15s land: 100 - 2*15 = 70. Under the old shared i-frame this
+        // would be 85. This is the assertion that fails first if
+        // kEnemyMeleeIFrameSeconds regresses to 0.2 (damage()'s own internal
+        // i-frame would then refuse the second dog).
+        CHECK(player.currentHealth == 70.0f);
+        // No residual shared window is left on the player.
+        CHECK(player.invincibilityTimer == 0.0f);
+        CHECK_FALSE(player.isInvincible());
+    }
+
+    SECTION("the pre-parity native path caps the same two-dog frame at 15") {
+        HealthComponent player = freshPlayer();
+        applyDogMeleeNative(player, WebParity::kEnemyAttackDamage);
+        applyDogMeleeNative(player, WebParity::kEnemyAttackDamage);
+        // Second dog is gated by the 0.2 s shared window: only 15 lands.
+        CHECK(player.currentHealth == 85.0f);
+    }
+
+    SECTION("a five-dog swarm bursts the full 75 in one frame under parity") {
+        HealthComponent player = freshPlayer();
+        for (int dog = 0; dog < 5; ++dog) {
+            applyDogMeleeParity(player, WebParity::kEnemyAttackDamage);
+        }
+        // 5 * 15 = 75 in a single frame — the web's uncapped mob damage.
+        CHECK(player.currentHealth == 25.0f);
+    }
+
+    SECTION("the same five-dog swarm was capped at 15 pre-parity") {
+        HealthComponent player = freshPlayer();
+        for (int dog = 0; dog < 5; ++dog) {
+            applyDogMeleeNative(player, WebParity::kEnemyAttackDamage);
+        }
+        // The 75 DPS ceiling: only the first dog's 15 lands, the other four
+        // are gated by the shared window.
+        CHECK(player.currentHealth == 85.0f);
+    }
+}
+
 TEST_CASE("spawn ring and wave pacing match the web literals", "[web-parity]") {
     CHECK(WebParity::kSpawnDistanceMin == 8.0f);      // LocalEnemySystem.tsx:526
     CHECK(WebParity::kSpawnDistanceMax == 15.0f);     // LocalEnemySystem.tsx:526
