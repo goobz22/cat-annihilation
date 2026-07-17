@@ -302,3 +302,97 @@ TEST_CASE("leveling thresholds consume the web curve under parity", "[web-parity
     CHECK(getCatXPToNextLevel(98) > 0);
     CHECK(getCatXPToNextLevel(99) == -1);
 }
+
+TEST_CASE("environment (sway, lighting, shadows, tree collision) matches the web survival scene",
+          "[web-parity][environment]") {
+    // Reference: SurvivalScene (BasicScene.tsx:181-211) + the forest props
+    // in ForestEnvironment.tsx. Deeper behavioural regression tests for the
+    // sway math and the Forest pass-through live in
+    // test_web_parity_environment.cpp; this block is the constant PIN that
+    // fails the build the moment a value drifts from the reference.
+
+    // Tree sway — ForestEnvironment.tsx:145-148 / :130.
+    CHECK(WebParity::kTreeSwayAmplitudeRadians == 0.01f);   // tsx:146
+    CHECK(WebParity::kTreeSwayTimeScale == 0.5f);           // tsx:145
+    CHECK(WebParity::kTreeSwayZFrequencyFactor == 0.7f);    // tsx:148
+    // tsx:130 — animOffset range is [0, 2π): pin the max to 2π.
+    CHECK(std::abs(WebParity::kTreeSwayPhaseMaxRadians -
+                   2.0f * 3.14159265358979323846f) < 1e-6f);
+    // Two exactly-representable evaluations of the sway helpers (sin(0)=0,
+    // cos(0)=1): at t=0 with zero phase the X sway is 0 and the Z sway is at
+    // its +amplitude peak. This catches an axis swap or a dropped amplitude.
+    CHECK(WebParity::treeSwayRotationX(0.0f, 0.0f) == 0.0f);
+    CHECK(WebParity::treeSwayRotationZ(0.0f, 0.0f) == 0.01f);
+
+    // Ambient — BasicScene.tsx:195 <ambientLight intensity={0.5} />.
+    CHECK(WebParity::kAmbientLightIntensity == 0.5f);
+
+    // Directional sun — BasicScene.tsx:196 position [10,10,5], intensity 1,
+    // default white. The unit direction is normalize(10,10,5) = (2/3,2/3,1/3)
+    // over a length of exactly 15 — NOT the stale audit's non-unit
+    // (0.766,0.766,0.383).
+    CHECK(WebParity::kSunDirectionX == 10.0f);
+    CHECK(WebParity::kSunDirectionY == 10.0f);
+    CHECK(WebParity::kSunDirectionZ == 5.0f);
+    CHECK(WebParity::kSunIntensity == 1.0f);
+    CHECK(WebParity::kSunColorR == 1.0f);
+    CHECK(WebParity::kSunColorG == 1.0f);
+    CHECK(WebParity::kSunColorB == 1.0f);
+    CHECK(WebParity::sunDirectionLength() == 15.0f);
+    CHECK(std::abs(WebParity::sunDirectionNormalizedX() - 2.0f / 3.0f) < 1e-6f);
+    CHECK(std::abs(WebParity::sunDirectionNormalizedY() - 2.0f / 3.0f) < 1e-6f);
+    CHECK(std::abs(WebParity::sunDirectionNormalizedZ() - 1.0f / 3.0f) < 1e-6f);
+
+    // Shadows — BasicScene.tsx:190 <Canvas shadows> + :196 castShadow.
+    CHECK(WebParity::kShadowsEnabled == true);
+
+    // Tree collision — web survival has none (SurvivalScene mounts no
+    // TerrainCollisionSystem); the cat walks through trees.
+    CHECK(WebParity::kForestPlayerCollision == false);
+}
+
+TEST_CASE("eye palette is its own table and decodes sanely", "[web-parity]") {
+    // Guards the invariants MainMenu::getSelectedEyeLinear relies on, beyond
+    // the exact-bytes pin above.
+
+    // (1) The eye palette is a DISTINCT table from the fur palette — a future
+    // copy-paste that aliased kEyeSwatches back onto the fur hexes would
+    // silently break the eye picker while every byte-pin still passed on the
+    // fur side. Different lengths, and a different colour at index 0.
+    CHECK(WebParity::kEyeSwatchCount == 8);
+    CHECK(WebParity::kFurSwatchCount == 10);
+    const bool sameIndex0 =
+        WebParity::kEyeSwatches[0].red == WebParity::kFurSwatches[0].red &&
+        WebParity::kEyeSwatches[0].green == WebParity::kFurSwatches[0].green &&
+        WebParity::kEyeSwatches[0].blue == WebParity::kFurSwatches[0].blue;
+    CHECK_FALSE(sameIndex0);
+
+    // (2) Every eye swatch must sit in the valid sRGB byte range so the
+    // linear decode below stays in [0,1] — a stray >255 or <0 would push the
+    // tint push constant out of range.
+    for (int i = 0; i < WebParity::kEyeSwatchCount; ++i) {
+        const auto& swatch = WebParity::kEyeSwatches[i];
+        CHECK(swatch.red >= 0);   CHECK(swatch.red <= 255);
+        CHECK(swatch.green >= 0); CHECK(swatch.green <= 255);
+        CHECK(swatch.blue >= 0);  CHECK(swatch.blue <= 255);
+        const float lr = WebParity::srgbChannelToLinear(swatch.red);
+        const float lg = WebParity::srgbChannelToLinear(swatch.green);
+        const float lb = WebParity::srgbChannelToLinear(swatch.blue);
+        CHECK(lr >= 0.0f); CHECK(lr <= 1.0f);
+        CHECK(lg >= 0.0f); CHECK(lg <= 1.0f);
+        CHECK(lb >= 0.0f); CHECK(lb <= 1.0f);
+    }
+
+    // (3) The default eye swatch is web green '#4CAF50' (0x4C,0xAF,0x50), so
+    // its linear decode must stay green-DOMINANT (G > R and G > B). This is
+    // exactly what getSelectedEyeLinear returns for the default selection,
+    // and it verifies srgbChannelToLinear preserves channel ordering (a
+    // monotonic decode) — the property that makes the eye tint read as green
+    // rather than washing toward grey.
+    const auto& def = WebParity::kEyeSwatches[WebParity::kDefaultEyeSwatchIndex];
+    const float dr = WebParity::srgbChannelToLinear(def.red);
+    const float dg = WebParity::srgbChannelToLinear(def.green);
+    const float db = WebParity::srgbChannelToLinear(def.blue);
+    CHECK(dg > dr);
+    CHECK(dg > db);
+}
