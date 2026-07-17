@@ -91,6 +91,30 @@ public:
     }
 
     // ========================================================================
+    // End-game stats (fed by the game layer at death / victory)
+    // ========================================================================
+
+    /**
+     * @brief Total survival time of the finished run, in seconds.
+     *
+     * Drives the death screen's "Survival Time: {m}m {s}s" line, matching
+     * the web GameOverScreen (GameOverScreen.tsx:62). The game layer sets
+     * this on the transition into GameOver; until it does the screen reads a
+     * truthful 0 rather than stale data.
+     */
+    void setSurvivalTime(float seconds) { m_survivalTime = seconds; }
+
+    /**
+     * @brief Number of enemies still alive when the player died.
+     *
+     * Drives the death screen's "Enemies Remaining: N" line. The web reads
+     * enemies.length at death (GameOverScreen.tsx:63) — the count of dogs
+     * still on the field, NOT a kill tally — so the game layer must feed the
+     * LIVE enemy count here, not enemiesKilled.
+     */
+    void setEnemiesRemaining(uint32_t count) { m_enemiesRemaining = count; }
+
+    // ========================================================================
     // Screen Access
     // ========================================================================
 
@@ -199,6 +223,10 @@ private:
     uint32_t m_finalScore = 0;
     uint32_t m_finalWave = 0;
     float m_survivalTime = 0.0F;
+    // Enemies still alive at the moment of death — the web death screen's
+    // "Enemies Remaining" stat (GameOverScreen.tsx:63). Fed via
+    // setEnemiesRemaining(); 0 until the game layer wires it.
+    uint32_t m_enemiesRemaining = 0;
 
     // Screen dimensions (cached during render)
     uint32_t m_screenWidth = 1920;
