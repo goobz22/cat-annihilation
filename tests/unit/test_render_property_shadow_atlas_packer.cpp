@@ -62,7 +62,11 @@ using Engine::Renderer::PackedRect;
 
 namespace {
 
-constexpr uint32_t kPropertySeed = 0xA710A510u;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property shadow_atlas_packer"));
 constexpr uint32_t kAtlasSize = 8192; // 8K — large enough for shadow workloads
 
 // Pairwise overlap check. O(N²) — fine for the small N we generate
