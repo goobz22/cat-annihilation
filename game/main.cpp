@@ -637,7 +637,8 @@ void printHelp() {
 //   expect:<q><op><val>   assert live game state; op is = >= <= ; any FAIL
 //                         makes the process exit 4 (queries: state, wave,
 //                         enemiesRemaining, enemiesKilled, playerHealth,
-//                         playerAlive, level)
+//                         playerMaxHealth, playerAlive, level,
+//                         playerX/Y/Z, cameraX/Y/Z)
 //   quit                  end the run cleanly
 // Example:
 //   --input-script "wait:3;screenshot:menu;click:0.5,0.364;wait:1;
@@ -718,6 +719,9 @@ static std::string inputScriptQueryValue(const std::string& query,
         if (query == "playerAlive") {
             return (health->currentHealth > 0.0F && !health->isDead) ? "true"
                                                                      : "false";
+        }
+        if (query == "playerMaxHealth") {
+            return std::to_string(static_cast<int>(health->maxHealth));
         }
         return std::to_string(static_cast<int>(health->currentHealth));
     }
