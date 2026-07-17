@@ -159,7 +159,7 @@ TEST_CASE("ECS stress: 10k entities × 10 components × 100 frames of churn",
           "[ecs][stress][churn]") {
     ECS ecs;
     Oracle oracle;
-    std::mt19937 rng(0x5713551Du);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_stress_churn:0x5713551D")));
     std::vector<Entity> liveEntities;
     liveEntities.reserve(10'000);
 
