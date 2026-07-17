@@ -43,20 +43,26 @@ Semicolon-separated, executed in order:
 | `screenshot:<name>` | capture the last-presented frame to `<dump-dir>/<name>.ppm` |
 | `log:<message>` | marker line in the engine log |
 | `expect:<query><op><value>` | assert live state; ops `=` `>=` `<=`; any FAIL → process exit 4 |
+| `spendrevive` | test-support: grant the Level-15 Nine Lives ability + mark its revive SPENT (so a restart's re-arm is testable without grinding to level 15) |
 | `quit` | end the run cleanly |
 
 `expect:` queries: `state` (MainMenu/Playing/Paused/GameOver/Victory),
 `wave`, `enemiesRemaining`, `enemiesKilled`, `playerHealth`,
-`playerMaxHealth`, `playerAlive`, `level`, `playerX`/`playerY`/`playerZ`
+`playerMaxHealth`, `playerAlive`, `level`, `reviveArmed` (Nine Lives
+`canRevive()` — true/false), `playerX`/`playerY`/`playerZ`
 (world position — movement/walk-speed oracles), `cameraX`/`cameraY`/`cameraZ`
 (camera rig geometry). Unknown queries return a sentinel that never matches —
 typos fail loudly.
 
 Proven probe patterns (all in `build-ninja/headless/`): movement/turn parity
 (`hold:w,2` → `expect:playerZ<=-4`), camera rig (`expect:cameraY>=7.9`),
-progression e2e (250 s `--autoplay` soak → `expect:level>=2` +
-`expect:playerMaxHealth>=120`), restart semantics, wind-sway pixel-diff on
-two `screenshot:` frames 1.2 s apart.
+**camera-behind-after-turn** (`hold:a,0.37;hold:w,2` → `expect:playerX<=-8`
++ `expect:cameraX>=-5` — catches a follow-cam that mirrors to the FRONT of
+travel; a straight walk at spawn heading cannot see it), **Nine Lives re-arm**
+(`spendrevive` → `expect:reviveArmed=false` → die → GameOver → `key:r` →
+`expect:reviveArmed=true`), progression e2e (250 s `--autoplay` soak →
+`expect:level>=2` + `expect:playerMaxHealth>=120`), restart semantics,
+wind-sway pixel-diff on two `screenshot:` frames 1.2 s apart.
 
 Clicks inject at BOTH layers the game reads: `Engine::Input`'s post-poll
 override queues (gameplay) and ImGui's event queue (menus), with a
