@@ -38,6 +38,19 @@ fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
 not the source constants** — the capture pipeline is
 `scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
+**Endurance + guards 2026-07-17:**
+- 10-minute hidden autoplay soak: median ~59 fps EVERY minute, no
+  degradation trend (no leak signature), clean progression (30 kills, level
+  2, maxHP 120 at death, wave 4), stable GameOver idle. Wave-5 stress
+  (--starting-wave 5, 19 dogs + shadows + bars + skinning): median 58.6 fps.
+- Customization verified END-TO-END: a picked non-default fur (navy-grey)
+  visibly tints the in-game cat (`build-ninja/headless/tintprobe/`).
+- `scripts/wavescan_guard.ts`: machine-checkable RENDERED proof of the
+  transition panel (pure-green headline pixels scanned inside the popup
+  window of a hidden autoplay run) — guards the dead-gate class where the
+  popup state fires but nothing draws. Nightly-able; first run PASS
+  (1,353 green pixels).
+
 **Breadth pass 2026-07-17 (pause / wave-transition / level-up):**
 - Pause menu rebuilt to the web modal (sliders wired into the parity movement
   math, controls grid, RESUME/QUIT, ESC-or-P) over the now-rendered frozen
