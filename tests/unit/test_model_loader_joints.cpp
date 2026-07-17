@@ -96,6 +96,11 @@ struct GlbSpec {
     // array (nodes are 0..3, so 5 is OOB). Exercises the ExtractNodes child-
     // index bounds guard — without it, this is a controlled OOB heap write.
     int oobChildIndex = -1;
+
+    // When >= 0, override the POSITION accessor's `count`. A value far larger
+    // than the 3 vertices actually in the buffer makes ExtractBufferData read
+    // past the buffer — exercises its OOB-read bounds guard.
+    int positionAccessorCountOverride = -1;
 };
 
 void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
@@ -202,7 +207,10 @@ void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
                : "")
         + "],"
         + "\"accessors\":["
-        + "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
+        + "{\"bufferView\":0,\"componentType\":5126,\"count\":"
+        + std::to_string(spec.positionAccessorCountOverride >= 0
+                             ? spec.positionAccessorCountOverride : 3)
+        + ",\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
         + "{\"bufferView\":1,\"componentType\":" + jointsType + ",\"count\":3,\"type\":\"VEC4\"},"
         + "{\"bufferView\":2,\"componentType\":" + weightsType + ",\"count\":3,\"type\":\"VEC4\"" + weightsNormalized + "},"
         + "{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}"
@@ -442,4 +450,23 @@ TEST_CASE("ExtractNodes rejects an out-of-range child index instead of an OOB wr
         CatEngine::ModelLoader::Load(glb.path.string()),
         Catch::Matchers::Contains("child index") &&
             Catch::Matchers::Contains("5"));
+}
+
+TEST_CASE("ExtractBufferData rejects an accessor that reads past the buffer",
+          "[model-loader][bounds][oob-read]") {
+    // THE BUG THIS PINS (2026-07-17 correctness audit): ExtractBufferData
+    // memcpy'd count*componentSize bytes from buffer+offset with NO check
+    // that the accessor extent fit inside the buffer. A malformed/third-
+    // party glTF with an oversized `count` (or offset/stride) was a raw
+    // out-of-bounds READ — a crash or silently garbage vertices that
+    // bypassed the entities' load-failure try/catch. The fix bounds-checks
+    // the extent and throws (degrading to a proxy cube) like the loader's
+    // other asset guards.
+    GlbSpec spec;
+    spec.positionAccessorCountOverride = 100000;  // buffer holds only 3 vec3
+    TempGlb glb("cat_test_accessor_oob_read.glb", spec);
+
+    REQUIRE_THROWS_WITH(
+        CatEngine::ModelLoader::Load(glb.path.string()),
+        Catch::Matchers::Contains("buffer is only"));
 }

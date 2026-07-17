@@ -873,10 +873,33 @@ std::vector<glm::vec4> NormalizeWeightLanes(const uint8_t* src, size_t count, si
     return result;
 }
 
-std::vector<glm::vec4> ExtractWeights(const uint8_t* bufferData, size_t offset,
+std::vector<glm::vec4> ExtractWeights(const std::vector<uint8_t>& buffer, size_t offset,
                                       size_t count, size_t stride, int componentType,
                                       const std::string& meshName) {
-    const uint8_t* src = bufferData + offset;
+    // Element size from the declared component type (4 lanes). Bounds-check
+    // the read extent before any memcpy — same OOB-read hardening as
+    // ExtractBufferData / ExtractJointIndices (2026-07-17 audit).
+    size_t laneSize = 0;
+    switch (componentType) {
+        case kGltfFloat:         laneSize = sizeof(float);    break;
+        case kGltfUnsignedByte:  laneSize = sizeof(uint8_t);  break;
+        case kGltfUnsignedShort: laneSize = sizeof(uint16_t); break;
+        default: break;
+    }
+    if (laneSize != 0 && count != 0) {
+        const size_t elementSize = 4 * laneSize;
+        const size_t effectiveStride = (stride == 0) ? elementSize : stride;
+        const size_t requiredBytes =
+            offset + (count - 1) * effectiveStride + elementSize;
+        if (requiredBytes > buffer.size() || requiredBytes < offset) {
+            throw std::runtime_error(
+                "mesh '" + meshName + "': WEIGHTS_0 reads " +
+                std::to_string(requiredBytes) + " bytes but the buffer is only " +
+                std::to_string(buffer.size()) + " (corrupt glTF accessor)");
+        }
+    }
+
+    const uint8_t* src = buffer.data() + offset;
     switch (componentType) {
         case kGltfFloat: {
             // Already the in-memory format — copy honoring the stride.

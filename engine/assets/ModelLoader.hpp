@@ -180,10 +180,16 @@ private:
     static void GenerateTangents(Mesh& mesh);
     static void CalculateBounds(Mesh& mesh);
 
-    // Data extraction from buffers
+    // Data extraction from buffers.
+    // Takes the whole backing buffer (not a raw pointer) so it can bounds-
+    // check the accessor's extent against the buffer size before the memcpy
+    // — a malformed glTF with an offset/count/stride that runs past the
+    // buffer was an out-of-bounds READ (crash / garbage vertices) that
+    // bypassed the entities' load-failure try/catch (2026-07-17 audit).
+    // Throws std::runtime_error on an out-of-range accessor.
     template<typename T>
     static std::vector<T> ExtractBufferData(
-        const uint8_t* bufferData,
+        const std::vector<uint8_t>& buffer,
         size_t offset,
         size_t count,
         size_t stride,
