@@ -12,6 +12,119 @@
 
 namespace Game {
 
+// ============================================================================
+// HUD drawing helpers (file-local)
+//
+// The native HUD reproduces the web survival HUD (src/components/ui/*) with
+// Dear ImGui draw-list primitives. The OpenSans font atlas carries NO emoji
+// glyphs, so every web emoji icon (🐱 cat, ❤️ heart, 💧 water drop, ⚔️ swords,
+// 🏹 bow, 🛡️ shield) is APPROXIMATED here with hand-drawn shapes tinted to the
+// web item colour. Each helper documents what it approximates; the shapes are
+// intentionally minimal (a few primitives) so they stay legible at the 64px
+// slot / pill scale rather than trying to be faithful glyphs.
+// ============================================================================
+namespace {
+
+namespace WebParity = CatGame::WebParity;
+
+// A web ColorSwatch (sRGB bytes) -> an ImGui packed colour. ImGui composites
+// in swapchain space, so the web hex bytes are used raw (no srgb->linear).
+inline ImU32 swatchColor(const WebParity::ColorSwatch& swatch, int alpha = 255) {
+    return IM_COL32(swatch.red, swatch.green, swatch.blue, alpha);
+}
+
+// 🐱 — a cat head: a round face plus two triangular ears. Stands in for the
+// web CatStats "🐱 Lv.N" glyph.
+void drawCatIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    const float earHalf = size * 0.45F;
+    // Ears (drawn first so the face circle overlaps their base).
+    draw->AddTriangleFilled(ImVec2(center.x - size * 0.75F, center.y - size * 0.2F),
+                            ImVec2(center.x - size * 0.15F, center.y - size * 0.2F),
+                            ImVec2(center.x - earHalf, center.y - size * 0.95F), color);
+    draw->AddTriangleFilled(ImVec2(center.x + size * 0.75F, center.y - size * 0.2F),
+                            ImVec2(center.x + size * 0.15F, center.y - size * 0.2F),
+                            ImVec2(center.x + earHalf, center.y - size * 0.95F), color);
+    draw->AddCircleFilled(ImVec2(center.x, center.y + size * 0.05F), size * 0.6F, color);
+}
+
+// ❤️ — a heart: two lobes over a downward triangle. Web CatStats health icon.
+void drawHeartIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    draw->AddCircleFilled(ImVec2(center.x - size * 0.28F, center.y - size * 0.12F), size * 0.34F, color);
+    draw->AddCircleFilled(ImVec2(center.x + size * 0.28F, center.y - size * 0.12F), size * 0.34F, color);
+    draw->AddTriangleFilled(ImVec2(center.x - size * 0.58F, center.y + size * 0.02F),
+                            ImVec2(center.x + size * 0.58F, center.y + size * 0.02F),
+                            ImVec2(center.x, center.y + size * 0.7F), color);
+}
+
+// 💧 — a water drop: a rounded body under a pointed apex. Hotbar slot 1.
+void drawDropIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    draw->AddCircleFilled(ImVec2(center.x, center.y + size * 0.25F), size * 0.55F, color);
+    draw->AddTriangleFilled(ImVec2(center.x, center.y - size * 0.85F),
+                            ImVec2(center.x - size * 0.5F, center.y + size * 0.2F),
+                            ImVec2(center.x + size * 0.5F, center.y + size * 0.2F), color);
+}
+
+// ⚔️ — crossed swords: two blades forming an X with short crossguards. Slot 2.
+void drawSwordsIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    draw->AddLine(ImVec2(center.x - size, center.y + size), ImVec2(center.x + size, center.y - size), color, 3.0F);
+    draw->AddLine(ImVec2(center.x - size, center.y - size), ImVec2(center.x + size, center.y + size), color, 3.0F);
+    // Small crossguards near the two lower hilts.
+    draw->AddLine(ImVec2(center.x - size * 1.1F, center.y + size * 0.5F),
+                  ImVec2(center.x - size * 0.4F, center.y + size * 1.05F), color, 2.0F);
+    draw->AddLine(ImVec2(center.x + size * 1.1F, center.y + size * 0.5F),
+                  ImVec2(center.x + size * 0.4F, center.y + size * 1.05F), color, 2.0F);
+}
+
+// 🏹 — a bow: a C-shaped arc, a straight string, and a nocked arrow. Slot 3.
+void drawBowIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    draw->PathArcTo(ImVec2(center.x - size * 0.55F, center.y), size * 1.35F, -0.85F, 0.85F, 16);
+    draw->PathStroke(color, 0, 2.5F);
+    // Bowstring: chord across the arc's open (right) side.
+    draw->AddLine(ImVec2(center.x + size * 0.45F, center.y - size * 0.95F),
+                  ImVec2(center.x + size * 0.45F, center.y + size * 0.95F), color, 1.5F);
+    // Arrow shaft + head pointing right.
+    draw->AddLine(ImVec2(center.x - size * 0.7F, center.y), ImVec2(center.x + size * 1.0F, center.y), color, 1.5F);
+    draw->AddLine(ImVec2(center.x + size * 1.0F, center.y), ImVec2(center.x + size * 0.55F, center.y - size * 0.35F), color, 1.5F);
+    draw->AddLine(ImVec2(center.x + size * 1.0F, center.y), ImVec2(center.x + size * 0.55F, center.y + size * 0.35F), color, 1.5F);
+}
+
+// 🛡️ — a shield: a heater-shield pentagon, filled with a subtle border. Slot 4.
+void drawShieldIcon(ImDrawList* draw, ImVec2 center, float size, ImU32 color) {
+    const ImVec2 points[5] = {
+        ImVec2(center.x - size * 0.7F, center.y - size * 0.8F),
+        ImVec2(center.x + size * 0.7F, center.y - size * 0.8F),
+        ImVec2(center.x + size * 0.7F, center.y + size * 0.2F),
+        ImVec2(center.x, center.y + size * 0.95F),
+        ImVec2(center.x - size * 0.7F, center.y + size * 0.2F),
+    };
+    draw->AddConvexPolyFilled(points, 5, color);
+    draw->AddPolyline(points, 5, IM_COL32(0, 0, 0, 120), ImDrawFlags_Closed, 1.0F);
+}
+
+// Project a world point through a view-projection matrix to ImGui screen
+// pixels. Returns false when the point is at/behind the camera (clip.w <= 0),
+// in which case outScreen is untouched. Kept self-contained so the HUD owns
+// the same projection the scene camera uses (Camera::UpdateViewMatrix +
+// mat4::perspective). NDC->pixel uses the GL/three.js "up is up" mapping
+// (screenY grows downward), which matches the engine's flipped-viewport scene
+// render; outClipW carries the perspective w for distance-scaling the bar.
+bool projectWorldPoint(const Engine::mat4& viewProj, const Engine::vec3& world,
+                       float screenWidth, float screenHeight,
+                       ImVec2& outScreen, float& outClipW) {
+    const Engine::vec4 clip = viewProj * Engine::vec4(world, 1.0F);
+    if (clip.w <= 0.0001F) {
+        return false;  // behind or on the camera plane — not on screen
+    }
+    const float ndcX = clip.x / clip.w;
+    const float ndcY = clip.y / clip.w;
+    outScreen = ImVec2((ndcX + 1.0F) * 0.5F * screenWidth,
+                       (1.0F - ndcY) * 0.5F * screenHeight);
+    outClipW = clip.w;
+    return true;
+}
+
+} // namespace
+
 HUD::HUD(Engine::Input& input, GameAudio& audio)
     : m_input(input)
     , m_audio(audio) {
