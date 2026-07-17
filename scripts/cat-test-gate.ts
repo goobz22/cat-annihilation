@@ -102,6 +102,24 @@ function findExecutable(candidates: string[]): string | null {
 
 const stages: StageResult[] = []
 
+// Stage 0 — source-structural lints (pure text, fastest fail). These enumerate
+// bug CLASSES that a compiler/runtime can't see. lint-pause-parity-guards
+// asserts every legacy PauseMenu interaction entry point short-circuits under
+// WebParity::kEnabled (the 2026-07-17 phantom-hover-SFX class): the pause modal
+// is ImGui-owned under parity, so the legacy m_buttons hover hit-test must not
+// also run. --selftest first so a rotted detector fails loudly before it can
+// green-wash the real check.
+stages.push(
+  runStage('lint-pause-parity-guards:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-pause-parity-guards.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-pause-parity-guards', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-pause-parity-guards.ts'),
+  ], { timeoutMs: 60_000 }),
+)
+
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
 // references, Vulkan API misuse without a full ninja build.

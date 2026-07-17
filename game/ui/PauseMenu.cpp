@@ -304,7 +304,20 @@ void PauseMenu::update(float /*deltaTime*/) {
         return;
     }
 
-    // Update button states
+    // Under web parity the modal is drawn AND hit-tested entirely by
+    // renderWebParityModal (ImGui owns hover/click state), and handleInput()
+    // early-returns for the same reason. But initialize() still fills the
+    // legacy m_buttons vector with the OLD native button rects, so running the
+    // legacy hover hit-test here would fire m_audio.playMenuHover() whenever
+    // the cursor crossed one of those now-invisible rects — a phantom hover
+    // sound with no on-screen button (2026-07-17 audit). Skip the legacy
+    // per-frame path; this matches the kEnabled guards in render() (:335) and
+    // handleInput() (:853). Pinned by scripts/lint-pause-parity-guards.ts.
+    if constexpr (WebParity::kEnabled) {
+        return;
+    }
+
+    // Update button states (legacy native flavor only)
     updateButtons();
 }
 
