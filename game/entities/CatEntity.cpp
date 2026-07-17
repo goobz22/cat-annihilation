@@ -42,7 +42,14 @@ namespace {
 // matrices are non-identity, which is exactly what the rigged path needs.
 // If a future iteration wants to test the raw mesh (e.g. to compare flat-
 // shaded vs skinned output), swap to `assets/models/cats/ember_leader.glb`.
-constexpr const char* kDefaultCatModelPath = "assets/models/cats/rigged/ember_leader.glb";
+// The shipped player cat is the retopo+bake line (scripts/retopo_rig.py):
+// the Meshy tabby's silhouette + baked texture on clean ~20k-tri topology
+// with the hand-designed rig and authored idle/walk/run/attack gaits — the
+// dense raw Meshy rig (cats/rigged/, 260k tris) tore at the joints under
+// real deformation and stays on disk only as the A/B fallback (mirror of
+// DogEntity's kUseGeneratedCharacters switch).
+constexpr const char* kDefaultCatModelPath = "assets/models/generated_v2/ember_leader.glb";
+constexpr const char* kFallbackMeshyCatModelPath = "assets/models/cats/rigged/ember_leader.glb";
 
 } // namespace
 
@@ -144,7 +151,12 @@ CatEngine::Entity CatEntity::createCustom(
     // the game ships with. If the Meshy file is missing, loadModel()
     // catches the "Failed to open file" throw and falls back to a model-
     // less entity, so the factory never aborts the whole game.
-    if (loadModel(ecs, entity, kDefaultCatModelPath)) {
+    // Try the generated line first; if the file is absent (generated art
+    // is gitignored, so a fresh clone won't have it until retopo_rig.py
+    // runs) fall back to the committed-pipeline Meshy rig rather than a
+    // model-less invisible player.
+    if (loadModel(ecs, entity, kDefaultCatModelPath) ||
+        loadModel(ecs, entity, kFallbackMeshyCatModelPath)) {
         configureAnimations(ecs, entity);
 
         // Stamp the player's clan-leader identity onto the mesh tint. The

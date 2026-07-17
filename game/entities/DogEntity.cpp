@@ -63,7 +63,25 @@ namespace {
 // without a mesh — AI and combat still work, the dog just renders as an
 // invisible collider. That's strictly better than aborting the entire
 // game on the first wave.
+// kUseGeneratedCharacters — ship the retopo+bake character line
+// (assets/models/generated_v2/, built by scripts/retopo_rig.py): the Meshy
+// sculpts' silhouette and baked texture on clean ~20k-tri topology with
+// the hand-designed rig and authored idle/walk/run/attack gaits. The raw
+// Meshy rigged/ exports (120-450k tris, scan-style topology that tears
+// under deformation and blows the ~300k loader budget on dog_big) remain
+// on disk as the A/B fallback — flip this false to compare.
+constexpr bool kUseGeneratedCharacters = true;
+
 const char* modelPathForType(EnemyType type) {
+    if constexpr (kUseGeneratedCharacters) {
+        switch (type) {
+            case EnemyType::BigDog:  return "assets/models/generated_v2/dog_big.glb";
+            case EnemyType::FastDog: return "assets/models/generated_v2/dog_fast.glb";
+            case EnemyType::BossDog: return "assets/models/generated_v2/dog_boss.glb";
+            case EnemyType::Dog:
+            default:                 return "assets/models/generated_v2/dog_regular.glb";
+        }
+    }
     switch (type) {
         case EnemyType::BigDog:
             return "assets/models/meshy_raw_dogs/rigged/dog_big.glb";
