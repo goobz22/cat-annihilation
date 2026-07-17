@@ -311,8 +311,9 @@ void PauseMenu::update(float /*deltaTime*/) {
     // legacy hover hit-test here would fire m_audio.playMenuHover() whenever
     // the cursor crossed one of those now-invisible rects — a phantom hover
     // sound with no on-screen button (2026-07-17 audit). Skip the legacy
-    // per-frame path; this matches the kEnabled guards in render() (:335) and
-    // handleInput() (:853). Pinned by scripts/lint-pause-parity-guards.ts.
+    // per-frame path; this matches the kEnabled guards render() and
+    // handleInput() already carry. Pinned by scripts/lint-pause-parity-guards.ts,
+    // which asserts all three entry points keep this branch.
     if constexpr (WebParity::kEnabled) {
         return;
     }
