@@ -576,6 +576,143 @@ void printHelp() {
     std::cout << "\n";
 }
 
+// ============================================================================
+// Headless input script (--input-script)
+// ============================================================================
+//
+// Drives menus and gameplay WITHOUT any real desktop input or a visible
+// window. Motivation (owner directive 2026-07-16): automated verification on
+// this machine must never pop windows or move the real cursor — combine
+// `--hidden` with a script and observe results via `--frame-dump`.
+// Synthesizing REAL OS input was also unreliable evidence (DPI scaling skews
+// SetCursorPos coordinates), so the script injects at the two layers the
+// game actually reads: Engine::Input's per-frame poll (via the injection
+// queues) and ImGui's event queue (menus are ImGui widgets).
+//
+// Grammar: semicolon-separated commands, executed in order.
+//   wait:<seconds>     pause the cursor for S seconds
+//   click:<x>,<y>      move + left-click at NORMALIZED window coords [0,1]
+//   key:<name>         tap a key (enter, space, escape, w/a/s/d, 1..7)
+//   quit               end the run cleanly
+// Example: --input-script "wait:2;click:0.5,0.38;wait:1;click:0.63,0.62;wait:20;quit"
+struct InputScript {
+    struct Command {
+        enum class Type { Wait, Click, Key, Quit } type = Type::Wait;
+        float a = 0.0F;
+        float b = 0.0F;
+        Engine::Input::Key key = Engine::Input::Key::Enter;
+    };
+    std::vector<Command> commands;
+    size_t nextCommand = 0;
+    float waitTimer = 0.0F;
+    int clickPhase = 0;  // 0 = idle, counts frames through move/press/release
+
+    bool active() const { return nextCommand < commands.size(); }
+};
+
+static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
+    if (name == "enter") return Engine::Input::Key::Enter;
+    if (name == "space") return Engine::Input::Key::Space;
+    if (name == "escape") return Engine::Input::Key::Escape;
+    if (name == "w") return Engine::Input::Key::W;
+    if (name == "a") return Engine::Input::Key::A;
+    if (name == "s") return Engine::Input::Key::S;
+    if (name == "d") return Engine::Input::Key::D;
+    if (name.size() == 1 && name[0] >= '1' && name[0] <= '7') {
+        return static_cast<Engine::Input::Key>(
+            static_cast<int>(Engine::Input::Key::Num1) + (name[0] - '1'));
+    }
+    Engine::Logger::warn("[input-script] unknown key '" + name + "', using Enter");
+    return Engine::Input::Key::Enter;
+}
+
+static InputScript parseInputScript(const std::string& text) {
+    InputScript script;
+    size_t cursor = 0;
+    while (cursor < text.size()) {
+        const size_t end = text.find(';', cursor);
+        const std::string token =
+            text.substr(cursor, end == std::string::npos ? std::string::npos
+                                                         : end - cursor);
+        cursor = end == std::string::npos ? text.size() : end + 1;
+        if (token.empty()) continue;
+
+        InputScript::Command command;
+        if (token == "quit") {
+            command.type = InputScript::Command::Type::Quit;
+        } else if (token.rfind("wait:", 0) == 0) {
+            command.type = InputScript::Command::Type::Wait;
+            command.a = std::stof(token.substr(5));
+        } else if (token.rfind("click:", 0) == 0) {
+            command.type = InputScript::Command::Type::Click;
+            const std::string coords = token.substr(6);
+            const size_t comma = coords.find(',');
+            command.a = std::stof(coords.substr(0, comma));
+            command.b = std::stof(coords.substr(comma + 1));
+        } else if (token.rfind("key:", 0) == 0) {
+            command.type = InputScript::Command::Type::Key;
+            command.key = inputScriptKeyFromName(token.substr(4));
+        } else {
+            Engine::Logger::warn("[input-script] unknown command '" + token + "' skipped");
+            continue;
+        }
+        script.commands.push_back(command);
+    }
+    return script;
+}
+
+static void runInputScriptStep(InputScript& script, float dt,
+                               Engine::Input& input, Engine::Window& window,
+                               bool& running) {
+    if (!script.active()) return;
+    auto& command = script.commands[script.nextCommand];
+    using Type = InputScript::Command::Type;
+
+    switch (command.type) {
+        case Type::Wait:
+            script.waitTimer += dt;
+            if (script.waitTimer >= command.a) {
+                script.waitTimer = 0.0F;
+                ++script.nextCommand;
+            }
+            break;
+        case Type::Click: {
+            // Three phases spread over frames so ImGui sees a real
+            // press→hold→release sequence (its buttons activate on the
+            // release edge over the same item the press started on).
+            const double px = static_cast<double>(command.a) * window.getWidth();
+            const double py = static_cast<double>(command.b) * window.getHeight();
+            input.injectCursorPos(px, py);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(static_cast<float>(px), static_cast<float>(py));
+            if (script.clickPhase == 2) {
+                io.AddMouseButtonEvent(0, true);
+                input.injectMouseTap(Engine::Input::MouseButton::Left, 2);
+            } else if (script.clickPhase == 5) {
+                io.AddMouseButtonEvent(0, false);
+            }
+            if (++script.clickPhase > 7) {
+                script.clickPhase = 0;
+                ++script.nextCommand;
+                Engine::Logger::info("[input-script] clicked (" +
+                                     std::to_string(command.a) + ", " +
+                                     std::to_string(command.b) + ")");
+            }
+            break;
+        }
+        case Type::Key:
+            input.injectKeyTap(command.key, 2);
+            Engine::Logger::info("[input-script] key tap");
+            ++script.nextCommand;
+            break;
+        case Type::Quit:
+            Engine::Logger::info("[input-script] quit — ending run");
+            running = false;
+            ++script.nextCommand;
+            break;
+    }
+}
+
 int main(int argc, char* argv[]) {
     // Parse command line arguments
     CommandLineArgs cmdArgs = parseCommandLine(argc, argv);
@@ -1177,6 +1314,16 @@ int main(int argc, char* argv[]) {
 
         // Poll events
         window.pollEvents();
+
+        // Headless input script (--input-script): advance the command
+        // cursor and enqueue synthetic events BEFORE input.update()
+        // consumes its injection queues this frame. ImGui receives the
+        // same clicks via its own event queue so menu buttons behave
+        // exactly as under a real mouse — see runInputScriptStep's
+        // docblock for the command grammar and the why.
+        if (inputScript.active()) {
+            runInputScriptStep(inputScript, deltaTime, input, window, running);
+        }
 
         // Update input
         input.update();
