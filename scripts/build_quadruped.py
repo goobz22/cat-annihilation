@@ -746,6 +746,19 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
 
     # Rest vertex world positions + each vert's nearest rest bone.
     rest_world = [mesh_obj.matrix_world @ v.co for v in mesh_obj.data.vertices]
+
+    # A size-relative reference floor for the rest distance. WHY: a vertex that
+    # sits almost exactly ON a bone segment has a rest distance near zero, so a
+    # pure posed/rest ratio would explode to huge values on any normal joint
+    # motion even when the surface is deforming perfectly. Flooring the reference
+    # at a small fraction of the model size (~2.5% of the bbox diagonal) means
+    # "1.5x its rest distance" is measured against a sane minimum, so the metric
+    # flags a vertex that genuinely FLIES AWAY from its bone (a real tear) without
+    # false-positiving on verts that legitimately live on the bone surface.
+    bx = [p.x for p in rest_world]; by = [p.y for p in rest_world]; bz = [p.z for p in rest_world]
+    diag = math.sqrt((max(bx) - min(bx)) ** 2 + (max(by) - min(by)) ** 2 + (max(bz) - min(bz)) ** 2)
+    ref_floor = max(1e-4, 0.025 * diag)
+
     nearest_bone = [None] * len(rest_world)
     rest_dist = [0.0] * len(rest_world)
     for i, pw in enumerate(rest_world):
@@ -755,7 +768,7 @@ def deformation_quality(mesh_obj, arm_obj, clip_names, ratio_limit=1.5, frames_p
             if d < best_d:
                 best_d, best_name = d, name
         nearest_bone[i] = best_name
-        rest_dist[i] = max(best_d, 1e-4)   # floor avoids div-by-zero on-bone verts
+        rest_dist[i] = max(best_d, ref_floor)
 
     scene = bpy.context.scene
     results = []
