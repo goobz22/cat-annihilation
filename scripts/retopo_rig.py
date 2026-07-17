@@ -497,6 +497,160 @@ def bake_texture(source_obj, retopo_obj, tex_size, diag):
 
 
 # ---------------------------------------------------------------------------
+# Stage 4b — anatomy refinement for irregular Meshy stances
+# ---------------------------------------------------------------------------
+#
+# rq.detect_anatomy assumes a roughly square stance: it quadrant-partitions
+# the lowest-3% verts around the bbox center and averages each quadrant into
+# a paw. Two of the shipped sculpts violate that assumption and produced
+# measurably broken rigs (deform-sanity ratios 2.05 and 7.06):
+#   - ember_leader drags its TAIL on the ground; the tail's contact verts
+#     land in the back-left quadrant and drag paw_back_L (and the whole left
+#     hind chain) toward the tail, so shin_L/foot_L bind to tail/air.
+#   - dog_big stands contrapposto with BOTH right paws gathered at mid-body;
+#     the per-quadrant leg attaches then hover over the paws in the belly,
+#     and the two right leg chains become overlapping vertical columns that
+#     heat-diffusion cross-binds (its run clip tore the right legs apart).
+# The refinements below fix both classes using the `anatomy` parameter that
+# build_armature exposes for exactly this purpose — rq's own detection logic
+# is not modified.
+
+def cluster_ground_contacts(points, ground_band_count, cluster_threshold):
+    """Greedy XY clustering of the lowest-`ground_band_count` verts.
+    Returns [(centroid_xy ndarray, vert_indices list), ...] sorted by size.
+    Greedy running-centroid clustering is sufficient here because paw
+    contacts are compact islands separated by air at ground level."""
+    order = np.argsort(points[:, 2])[:ground_band_count]
+    clusters = []  # [xy_sum, count, indices]
+    for vert_index in order:
+        xy = points[vert_index, :2]
+        for cluster in clusters:
+            if np.linalg.norm(cluster[0] / cluster[1] - xy) < cluster_threshold:
+                cluster[0] = cluster[0] + xy
+                cluster[1] += 1
+                cluster[2].append(vert_index)
+                break
+        else:
+            clusters.append([xy.copy(), 1, [vert_index]])
+    clusters.sort(key=lambda c: -c[1])
+    return [(c[0] / c[1], c[2]) for c in clusters]
+
+
+def refine_anatomy(mesh_obj, bbox, anatomy):
+    """Post-process rq.detect_anatomy's landmarks for irregular stances.
+
+    Refinement 1 — tail-contact exclusion. A ground cluster only counts as a
+    paw if a LEG stands on it: we count mesh verts in the vertical column
+    above the cluster (18%-45% of body height — the shin/knee zone) and drop
+    clusters with almost none (a draped tail is thin and diagonal, a leg is a
+    dense column). If anything was dropped, paws are re-detected from the
+    surviving ground verts with rq's own quadrant convention.
+
+    Refinement 2 — attach-point symmetrization. Shoulders and hips live on
+    the TORSO, which is bilaterally symmetric even when the paws pose
+    staggered; only the leg below the attach should follow the stance. Each
+    L/R attach pair is rebuilt at the pair's mean forward/height with a
+    mirrored lateral spread about the body midline (the hip-chest lateral
+    average — NOT the bbox center, which an off-center tail can shift). For
+    a square stance this is a near-no-op; for a gathered stance it turns two
+    overlapping vertical bone columns into separated diagonals that heat
+    diffusion can tell apart."""
+    mesh = mesh_obj.data
+    count = len(mesh.vertices)
+    coords = np.empty(count * 3, dtype=np.float32)
+    mesh.vertices.foreach_get('co', coords)
+    rot = np.array(mesh_obj.matrix_world.to_3x3(), dtype=np.float64)
+    loc = np.array(mesh_obj.matrix_world.translation, dtype=np.float64)
+    points = coords.reshape(-1, 3).astype(np.float64) @ rot.T + loc
+
+    forward = np.array(bbox["forward"], dtype=np.float64)
+    side = np.array(bbox["side"], dtype=np.float64)
+    origin = np.array((bbox["center_x"], bbox["center_y"], 0.0))
+    ground_z = bbox["ground_z"]
+    body_height = bbox["body_height"]
+    body_length = bbox["body_length"]
+
+    band_count = max(60, int(count * 0.03))
+    clusters = cluster_ground_contacts(
+        points, band_count, cluster_threshold=0.15 * max(body_length,
+                                                         bbox["body_width"]))
+
+    # Leg-column density test per cluster.
+    column_radius = 0.08 * body_length
+    band_lo = ground_z + 0.18 * body_height
+    band_hi = ground_z + 0.45 * body_height
+    in_band = (points[:, 2] >= band_lo) & (points[:, 2] <= band_hi)
+    band_xy = points[in_band, :2]
+    column_counts = []
+    for centroid_xy, _ in clusters:
+        column_counts.append(int(
+            (np.linalg.norm(band_xy - centroid_xy, axis=1)
+             < column_radius).sum()))
+    max_column = max(column_counts) if column_counts else 0
+    keep = [cc >= max(30, 0.15 * max_column) for cc in column_counts]
+    dropped = [i for i, k in enumerate(keep) if not k]
+    for i, ((centroid_xy, indices), cc) in enumerate(zip(clusters,
+                                                         column_counts)):
+        print(f"[retopo_rig] ground cluster {i}: n={len(indices)} "
+              f"centroid=({centroid_xy[0]:.3f},{centroid_xy[1]:.3f}) "
+              f"leg_column={cc} -> {'PAW' if keep[i] else 'NON-LEG (dropped)'}")
+
+    if dropped and any(keep):
+        # Re-detect paws from leg-backed ground verts only, using rq's exact
+        # quadrant convention (forward/side projection around bbox center).
+        surviving = [vi for (centroid_xy, indices), k in zip(clusters, keep)
+                     if k for vi in indices]
+        rel = points[surviving] - origin
+        f_coord = rel @ forward
+        s_coord = rel @ side
+        for paw_name, f_positive, s_positive in (
+            ('paw_front_L', True, True), ('paw_front_R', True, False),
+            ('paw_back_L', False, True), ('paw_back_R', False, False),
+        ):
+            mask = ((f_coord > 0) == f_positive) & ((s_coord > 0) == s_positive)
+            if int(mask.sum()) >= 5:
+                new_paw = points[np.array(surviving)[mask]].mean(axis=0)
+                old = anatomy[paw_name]
+                print(f"[retopo_rig] refine {paw_name}: "
+                      f"({old.x:.3f},{old.y:.3f}) -> "
+                      f"({new_paw[0]:.3f},{new_paw[1]:.3f})")
+                anatomy[paw_name] = Vector(new_paw)
+
+    # Attach symmetrization about the body lateral midline.
+    lat_mid = 0.5 * (np.array(anatomy['hip_center']) @ side
+                     + np.array(anatomy['chest_center']) @ side)
+    for left_name, right_name, center_name in (
+        ('shoulder_L', 'shoulder_R', 'chest_center'),
+        ('thigh_L', 'thigh_R', 'hip_center'),
+    ):
+        left = np.array(anatomy[left_name], dtype=np.float64)
+        right = np.array(anatomy[right_name], dtype=np.float64)
+        pair_forward = 0.5 * ((left - origin) @ forward
+                              + (right - origin) @ forward)
+        spread = 0.5 * (abs(left @ side - lat_mid)
+                        + abs(right @ side - lat_mid))
+        pair_z = 0.5 * (left[2] + right[2])
+        base = origin + forward * pair_forward
+        new_left = base + side * (lat_mid + spread)
+        new_right = base + side * (lat_mid - spread)
+        new_left[2] = pair_z
+        new_right[2] = pair_z
+        anatomy[left_name] = Vector(new_left)
+        anatomy[right_name] = Vector(new_right)
+        # Keep the spine ends consistent with the symmetrized attaches (rq
+        # itself defines hip/chest centers as the L/R attach midpoints).
+        center = base + side * lat_mid
+        center[2] = pair_z
+        anatomy[center_name] = Vector(center)
+    print(f"[retopo_rig] refined attaches: shoulder_L="
+          f"{tuple(round(v, 3) for v in anatomy['shoulder_L'])} shoulder_R="
+          f"{tuple(round(v, 3) for v in anatomy['shoulder_R'])} thigh_L="
+          f"{tuple(round(v, 3) for v in anatomy['thigh_L'])} thigh_R="
+          f"{tuple(round(v, 3) for v in anatomy['thigh_R'])}")
+    return anatomy
+
+
+# ---------------------------------------------------------------------------
 # Stage 5 — deformation sanity
 # ---------------------------------------------------------------------------
 
