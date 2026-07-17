@@ -95,6 +95,104 @@ void WavePopup::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
     const float width = static_cast<float>(screenWidth);
     const float height = static_cast<float>(screenHeight);
 
+    // Web parity: the between-waves UI is ONE small passive panel
+    // (WaveTransition.tsx) — no fullscreen dim, no stats block, no
+    // press-space prompt, no countdown number. Three staggered lines in a
+    // dark rounded card. Rendered for BOTH native popup states so the
+    // native complete→countdown flow maps onto the web's single 4s window.
+    if constexpr (CatGame::WebParity::kEnabled) {
+        namespace WP = CatGame::WebParity;
+        // Elapsed time since the panel appeared drives the web's 0.8s/1.6s
+        // line staggering (tsx:17-19).
+        const float panelElapsed = m_state == PopupState::WaveComplete
+                                       ? m_displayTimer
+                                       : m_countdownTimer;
+        // Which wave is COMPLETE and which comes NEXT depends on the native
+        // state: WaveComplete carries the finished wave, Countdown carries
+        // the wave about to start.
+        const int completedWave = m_state == PopupState::WaveComplete
+                                      ? static_cast<int>(m_completedWave)
+                                      : static_cast<int>(m_startingWave) - 1;
+        const int nextWave = completedWave + 1;
+        const int nextEnemies = m_state == PopupState::WaveComplete
+                                    ? static_cast<int>(m_nextWaveEnemyCount)
+                                    : static_cast<int>(m_waveEnemyCount);
+
+        // The panel only exists BETWEEN waves; wave 0 has no "complete"
+        // line to show (fresh run) — the web never renders the panel there
+        // either (isWaveTransition is false before wave 1 spawns).
+        if (completedWave < 1) {
+            return;
+        }
+
+        auto lineText = [&](int index) -> std::string {
+            switch (index) {
+                case 0: return "WAVE " + std::to_string(completedWave) + " COMPLETE!";
+                case 1: return "WAVE " + std::to_string(nextWave) + " STARTING SOON...";
+                default: return std::to_string(nextEnemies) + " ENEMIES INCOMING";
+            }
+        };
+        // Web emoji flourishes (party popper / dog) have no atlas glyph and
+        // are dropped — the copy is otherwise verbatim.
+
+        ImFont* lineFonts[3] = {m_imguiLayer->GetBoldFont(),
+                                m_imguiLayer->GetBoldFont(),
+                                m_imguiLayer->GetRegularFont()};
+        const WP::UiColor lineColors[3] = {WP::kWaveTransitionComplete,
+                                           WP::kWaveTransitionNext,
+                                           WP::kWaveTransitionEnemies};
+        const float lineDelays[3] = {0.0F, WP::kWaveTransitionNextDelay,
+                                     WP::kWaveTransitionEnemiesDelay};
+
+        // Measure the visible lines to size the panel.
+        float textHeight = 0.0F;
+        float textWidth = 0.0F;
+        const float lineGap = 18.0F;  // tsx marginBottom 20/15px between lines
+        for (int i = 0; i < 3; ++i) {
+            if (panelElapsed < lineDelays[i]) continue;
+            if (lineFonts[i] != nullptr) ImGui::PushFont(lineFonts[i]);
+            const ImVec2 sz = ImGui::CalcTextSize(lineText(i).c_str());
+            if (lineFonts[i] != nullptr) ImGui::PopFont();
+            textHeight += sz.y + (textHeight > 0.0F ? lineGap : 0.0F);
+            textWidth = std::max(textWidth, sz.x);
+        }
+        const float panelW = std::max(WP::kWaveTransitionPanelMinWidth,
+                                      textWidth + WP::kWaveTransitionPanelPadding * 2.0F);
+        const float panelH = textHeight + WP::kWaveTransitionPanelPadding * 2.0F;
+        const ImVec2 panelMin((width - panelW) * 0.5F, (height - panelH) * 0.5F);
+        const ImVec2 panelMax(panelMin.x + panelW, panelMin.y + panelH);
+
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        draw->AddRectFilled(panelMin, panelMax,
+                            IM_COL32(0, 0, 0,
+                                     static_cast<int>(255.0F * WP::kWaveTransitionPanelBgAlpha * m_fadeAlpha)),
+                            WP::kWaveTransitionPanelRadius);
+        draw->AddRect(panelMin, panelMax,
+                      IM_COL32(WP::kWaveTransitionBorder.red,
+                               WP::kWaveTransitionBorder.green,
+                               WP::kWaveTransitionBorder.blue,
+                               static_cast<int>(255.0F * m_fadeAlpha)),
+                      WP::kWaveTransitionPanelRadius, 0, 2.0F);  // tsx:46 2px solid
+
+        float lineY = panelMin.y + WP::kWaveTransitionPanelPadding;
+        for (int i = 0; i < 3; ++i) {
+            if (panelElapsed < lineDelays[i]) continue;
+            ImFont* font = lineFonts[i];
+            const std::string text = lineText(i);
+            if (font != nullptr) ImGui::PushFont(font);
+            const ImVec2 sz = ImGui::CalcTextSize(text.c_str());
+            if (font != nullptr) ImGui::PopFont();
+            draw->AddText(font, font != nullptr ? font->FontSize : 20.0F,
+                          ImVec2(panelMin.x + (panelW - sz.x) * 0.5F, lineY),
+                          IM_COL32(lineColors[i].red, lineColors[i].green,
+                                   lineColors[i].blue,
+                                   static_cast<int>(255.0F * m_fadeAlpha)),
+                          text.c_str());
+            lineY += sz.y + lineGap;
+        }
+        return;
+    }
+
     // Fullscreen transparent window with a dim overlay tinted by the fade alpha.
     const float overlayAlpha =
         (m_state == PopupState::WaveComplete ? 0.60F : 0.50F) * m_fadeAlpha;

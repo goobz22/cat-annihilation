@@ -38,6 +38,21 @@ fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
 not the source constants** — the capture pipeline is
 `scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
+**Breadth pass 2026-07-17 (pause / wave-transition / level-up):**
+- Pause menu rebuilt to the web modal (sliders wired into the parity movement
+  math, controls grid, RESUME/QUIT, ESC-or-P) over the now-rendered frozen
+  world; resume was dead code (handleInput only runs while Playing) — fixed in
+  updatePaused, verified by a full headless round-trip.
+- Wave-transition panel rebuilt to WaveTransition.tsx (small dark card,
+  staggered WAVE-N-COMPLETE / STARTING-SOON / ENEMIES-INCOMING lines — note
+  the web says "WAVE" here while its persistent banner says "ROUND"). Found
+  TWO dead gates: GameUI updated AND rendered the popup only in a UI state
+  that live play never enters — the popup had never rendered once in a real
+  run. Verified live via 1-second-cadence autoplay wavescan captures.
+- Level-up moment: the web has NO visual (console.log only, gameStore:738) —
+  native's 3s "Level Up!" toast recorded as a keep-divergence (better
+  feedback, same class as the low-health vignette).
+
 Polish CLOSED 2026-07-17: tree crowns MEASURED at parity after the exposure
 fix (median crown pixels: web (27,77,29) vs native (32,67,37) — native is not
 brighter; no calibration warranted) · enemy-bar anchor calibrated to 1.2 units

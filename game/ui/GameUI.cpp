@@ -92,6 +92,12 @@ void GameUI::update(float deltaTime) {
 
         case GameState::Playing:
             m_hud->update(deltaTime);
+            // Tick the wave-transition popup during live play — same dead-gate
+            // fix as the render dispatch below: the dedicated WaveComplete UI
+            // state is never entered in a real run, so an update gated on it
+            // left the popup's timers and fade at zero (the panel rendered
+            // fully transparent even after the render wiring was fixed).
+            m_wavePopup->update(deltaTime);
             break;
 
         case GameState::Paused:

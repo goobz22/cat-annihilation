@@ -851,6 +851,22 @@ inline constexpr float kHudEnemyBarWorldHeight   = 1.5f;  // tsx:483 group posit
 // captures). 1.2 reproduces the web's VISUAL clearance over the native
 // silhouettes; the cited literal stays above as the web source of truth.
 inline constexpr float kHudEnemyBarAnchorNative  = 1.2f;
+
+// ---- Wave-transition panel (WaveTransition.tsx, mounted BasicScene:184) --
+// The BETWEEN-waves popup is a small centered dark panel with three
+// staggered lines — NOT a fullscreen dim, NOT a countdown number, and it
+// says "WAVE", unlike the persistent top banner which says "ROUND"
+// (WaveDisplay.tsx:58 — the web genuinely mixes the two words).
+inline constexpr float kWaveTransitionPanelMinWidth = 400.0f; // tsx:47 minWidth
+inline constexpr float kWaveTransitionPanelPadding  = 30.0f;  // tsx:44 padding
+inline constexpr float kWaveTransitionPanelRadius   = 15.0f;  // tsx:45 borderRadius
+inline constexpr float kWaveTransitionPanelBgAlpha  = 0.8f;   // tsx:43 rgba(0,0,0,0.8)
+inline constexpr UiColor kWaveTransitionBorder = {0x44, 0x44, 0x44};  // tsx:46
+inline constexpr UiColor kWaveTransitionComplete = {0x00, 0xFF, 0x00}; // tsx:52 #00ff00
+inline constexpr UiColor kWaveTransitionNext     = {0xFF, 0xFF, 0x00}; // tsx:63 #ffff00
+inline constexpr UiColor kWaveTransitionEnemies  = {0xFF, 0xFF, 0xFF}; // tsx:73 #ffffff
+inline constexpr float kWaveTransitionNextDelay    = 0.8f; // tsx:18 setTimeout 800ms
+inline constexpr float kWaveTransitionEnemiesDelay = 1.6f; // tsx:19 setTimeout 1600ms
 inline constexpr float kHudEnemyBarWorldWidth    = 1.0f;  // tsx:485 boxGeometry width
 inline constexpr float kHudEnemyBarWorldBgHeight = 0.08f; // tsx:485 boxGeometry height
 inline constexpr float kHudEnemyBarWorldFgHeight = 0.06f; // tsx:489 fill height

@@ -547,6 +547,18 @@ TEST_CASE("in-game HUD colours and sizes match the web survival HUD", "[web-pari
     // it must clear the ~1.1-1.2-unit native dog silhouette but never
     // exceed the web value (that would float the bar higher than web).
     CHECK(WebParity::kHudEnemyBarAnchorNative == 1.2f);
+
+    // Wave-transition panel (WaveTransition.tsx) — the between-waves popup
+    // is a small dark card with three STAGGERED lines; it says "WAVE" while
+    // the persistent banner says "ROUND" (the web mixes the two on purpose).
+    CHECK(WebParity::kWaveTransitionPanelMinWidth == 400.0f);   // tsx:47
+    CHECK(WebParity::kWaveTransitionPanelRadius == 15.0f);      // tsx:45
+    CHECK(WebParity::kWaveTransitionPanelBgAlpha == 0.8f);      // tsx:43
+    CHECK(WebParity::kWaveTransitionComplete.green == 0xFF);    // tsx:52 #00ff00
+    CHECK(WebParity::kWaveTransitionNext.red == 0xFF);          // tsx:63 #ffff00
+    CHECK(WebParity::kWaveTransitionNext.green == 0xFF);
+    CHECK(WebParity::kWaveTransitionNextDelay == 0.8f);         // tsx:18 800ms
+    CHECK(WebParity::kWaveTransitionEnemiesDelay == 1.6f);      // tsx:19 1600ms
     CHECK(WebParity::kHudEnemyBarAnchorNative < WebParity::kHudEnemyBarWorldHeight);
     CHECK(WebParity::kHudEnemyBarWorldWidth == 1.0f);    // tsx:485
     CHECK(WebParity::kHudEnemyBarHighThreshold == 0.6f); // tsx:491
