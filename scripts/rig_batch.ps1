@@ -71,8 +71,23 @@ foreach ($file in $glbFiles) {
     $outputFile = Join-Path $OutputDir $file.Name
     Write-Host "-> $($file.Name)"
 
+    # --factory-startup is REQUIRED, not cosmetic. This machine has the
+    # broken mpfb / MakeHuman addon installed (its register() dies with a
+    # SyntaxError on Blender 4.4). A half-registered addon does not merely
+    # print a stderr traceback: it corrupts Blender's bundled glTF importer,
+    # so bpy.ops.import_scene.gltf silently returns a degenerate 42-vertex
+    # stand-in instead of the real 100k-250k-vertex Meshy mesh. Everything
+    # downstream then runs on garbage and the export aborts with an
+    # un-skinned file. --factory-startup never loads the user addon, so the
+    # importer stays intact (verified: 121,131 verts on dog_regular vs 42).
+    # The bundled io_scene_gltf2 importer/exporter is enabled under factory
+    # settings, so import + skinned export still work. rig_quadruped.py also
+    # carries a best-effort in-script guard, but the mpfb corruption is
+    # timing-dependent, so disabling the addon at the CLI is the only
+    # reliable fix.
     $blenderArgs = @(
         "--background",
+        "--factory-startup",
         "--python", $scriptPath,
         "--",
         $file.FullName,
@@ -81,11 +96,9 @@ foreach ($file in $glbFiles) {
     )
     if ($FlipForward) { $blenderArgs += "--flip-forward" }
 
-    # Blender writes a lot of init noise to stdout/stderr, and in particular
-    # this machine has a broken third-party addon (mpfb / MakeHuman plugin
-    # for Blender 4.4) whose own register() throws a SyntaxError traceback
-    # every startup. That traceback goes to stderr. We must still capture
-    # Blender's output for log filtering, but in Windows PowerShell 5.1 the
+    # Blender writes a lot of init noise to stdout/stderr. We must still
+    # capture Blender's output for log filtering, but in Windows PowerShell
+    # 5.1 the
     # combination of '2>&1' + '$ErrorActionPreference = Stop' (set at the
     # top of this script) wraps each stderr line as a NativeCommandError
     # ErrorRecord and terminates the script mid-loop. Solution: locally
