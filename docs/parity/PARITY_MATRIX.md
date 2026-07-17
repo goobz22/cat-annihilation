@@ -21,11 +21,27 @@ captures (Playwright headless vs native `--hidden` frames, in
 | Wave banner | Big white "ROUND N / SURVIVE THE HORDE" | Small yellow "WAVE N / Dogs remaining" |
 | Death | Modal card w/ red glow, Survival Time + Enemies Remaining, TRY AGAIN, "Press Space or click" | Fullscreen text, wave+kills, "Press R or Enter" |
 
-Fix workflow `presentation-parity` dispatched 2026-07-17 (world-look /
-hud-ingame / menus-screens agents). **Standing lesson (T9): "parity" claims
-require the RENDERED result compared, not the source constants** — the capture
-pipeline is `scripts/webref_capture.ts` (Playwright, needs `node`, against
+**ALL NINE ROWS CLOSED same day** (workflow `presentation-parity` + orchestrator
+integration, verified by re-captures in `build-ninja/headless/gammaprobe*/` +
+`finalprobe/` against the web frames): navy-gradient card menu w/ side-by-side
+mode cards ✅ · two-column customize w/ tinted cat preview ✅ · deep-green
+ground (pixel-matched (27,61,15) vs web (27,60,15); the web's #4c6156 fog
+turned out INERT — real fog is sky-blue #87CEEB) ✅ · horizon haze ✅ · enemy
+overhead bars (cleared outside Playing) ✅ · status pill + 9-slot icon hotbar +
+weapon-skill card (elemental XP curve gained its missing parity branch:
+0/132 not 0/50) ✅ · ROUND banner ✅ · death modal w/ Survival Time + TRY
+AGAIN + Space-or-click ✅ · SCORE removed under parity ✅. Root-cause engine
+fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
+(the sRGB swapchain was double-encoding every UI color ~2.2× brighter).
+
+**Standing lesson (T9): "parity" claims require the RENDERED result compared,
+not the source constants** — the capture pipeline is
+`scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
+Remaining cosmetic polish: tree crown brightness still reads lighter than the
+web's near-black greens (entity exposure calibrated for characters; a
+per-surface tree calibration vs web pixels is the next nicety) · enemy-bar
+vertical offset sits slightly higher than web's.
 
 **Web-side finding:** `bun run dev` (vite 7 dev) fails to emit the optimized
 `@react-three/drei` dep on this machine (504 "Outdated Optimize Dep" forever;
