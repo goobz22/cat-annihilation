@@ -1009,6 +1009,7 @@ def main():
     rq.align_mesh_to_world(retopo_obj)  # no-op unless something drifted
     bbox = rq.analyze_bbox(retopo_obj, opts["flip_forward"])
     anatomy = rq.detect_anatomy(retopo_obj, bbox)
+    anatomy = refine_anatomy(retopo_obj, bbox, anatomy)
     arm_obj = rq.build_armature(bbox, opts["species"], anatomy=anatomy)
     rq.parent_with_auto_weights(retopo_obj, arm_obj)
     rq.bake_animation_clips(arm_obj)
