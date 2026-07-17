@@ -604,7 +604,7 @@ TEST_CASE("SceneNode property: invariants hold across 200 random mutations",
     // After every step, sum-of-subtrees and parent-pointer consistency
     // must hold.
     auto root = buildRandomTree(0xABCDEFu, 100, 5);
-    std::mt19937 rng(0x13579u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_scene_property_node:0x13579")));
 
     auto collectAllNonRoot = [&]() {
         std::vector<SceneNode*> list;
