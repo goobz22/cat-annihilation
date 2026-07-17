@@ -897,99 +897,173 @@ void MainMenu::renderModeSelectPage(float width, float height) {
 }
 
 void MainMenu::renderCustomizePage(float width, float height) {
+    // The web customize screen (GameModeSelection.tsx:176-306 + menus.css:
+    // 2205-2344) is a two-COLUMN card: an ORANGE "Customize Your Cat" title,
+    // a LEFT live-3D preview panel, a RIGHT panel with the FUR then EYE color
+    // grids, a grey "← Back" + teal "Start Game" footer, and Reset Progress
+    // below. We rebuild that box with the ImGui DrawList. The web's live
+    // rotatable 3D cat is approximated by a STATIC silhouette tinted with the
+    // selected fur + eye swatches (native draws no 3D scene here) — documented
+    // at the preview draw site.
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* titleFont = m_imguiLayer->GetTitleFont();
+    ImFont* boldFont = m_imguiLayer->GetBoldFont();
+    ImFont* regularFont = m_imguiLayer->GetRegularFont();
+    if (titleFont == nullptr) { titleFont = ImGui::GetFont(); }
+    if (boldFont == nullptr) { boldFont = ImGui::GetFont(); }
+    if (regularFont == nullptr) { regularFont = ImGui::GetFont(); }
+
+    auto measure = [](const ImFont* font, float size, const char* text) -> ImVec2 {
+        return font->CalcTextSizeA(size, FLT_MAX, 0.0F, text);
+    };
+    auto drawText = [&](const ImFont* font, float size, float x, float y,
+                        ImU32 col, const char* text) {
+        drawList->AddText(font, size, ImVec2(x, y), col, text);
+    };
+    auto drawCentered = [&](const ImFont* font, float size, float centerX, float y,
+                            ImU32 col, const char* text) {
+        const float textWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
+        drawList->AddText(font, size, ImVec2(centerX - textWidth * 0.5F, y), col, text);
+    };
+
+    // -------------------------------------------------------------- Card box
+    const float cardWidth = std::min(880.0F, width * 0.92F);
+    const float headerZone = 92.0F;
+    const float panelHeight = 320.0F;
+    const float afterPanels = 22.0F;
+    const float actionsHeight = 52.0F;
+    const float afterActions = 18.0F;
+    const float resetHeight = 40.0F;
+    const float bottomPad = 22.0F;
+    const float cardHeight = headerZone + panelHeight + afterPanels + actionsHeight +
+                             afterActions + resetHeight + bottomPad;
+    const float cardX = (width - cardWidth) * 0.5F;
+    const float cardY = std::max(20.0F, (height - cardHeight) * 0.5F);
+    const ImVec2 cardMin(cardX, cardY);
+    const ImVec2 cardMax(cardX + cardWidth, cardY + cardHeight);
+    drawList->AddRectFilled(cardMin, cardMax,
+                            midFill(WebParity::kCardTop, WebParity::kCardBottom), 20.0F);
+    drawList->AddRect(cardMin, cardMax, toImCol(WebParity::kCardBorder), 20.0F, 0, 3.0F);
+
     // ------------------------------------------------------------------ Title
-    // Web parity: "Customize Your Cat" / "Survival Warrior"
-    // (GameModeSelection.tsx:179-180, survival path). Same heading
-    // treatment as the mode-select page so the two pages read as one menu.
-    if (auto* titleFont = m_imguiLayer->GetTitleFont()) {
-        ImGui::PushFont(titleFont);
-    }
-    const char* titleText = WebParity::kCustomizeHeading;
-    const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
-    const float titleY = height * 0.13F;
-    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, titleY));
-    ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", titleText);
-    if (m_imguiLayer->GetTitleFont() != nullptr) {
-        ImGui::PopFont();
+    // ORANGE/amber title (menus.css:2220) — the web uses #f39c12, NOT the
+    // yellow/gold the pre-audit native customize page used — with the grey
+    // "Survival Warrior" subheading below.
+    const float titleSize = 40.0F;
+    const ImVec2 titleDim = measure(titleFont, titleSize, WebParity::kCustomizeHeading);
+    const float titleTop = cardY + 18.0F;
+    drawCentered(titleFont, titleSize, cardX + cardWidth * 0.5F, titleTop,
+                 toImCol(WebParity::kCustomizeTitleColor), WebParity::kCustomizeHeading);
+    drawCentered(regularFont, 16.0F, cardX + cardWidth * 0.5F,
+                 titleTop + titleDim.y + 6.0F, toImCol(WebParity::kCustomizeSubtitleColor),
+                 WebParity::kCustomizeSubheading);
+
+    // -------------------------------------------------------------- Two panels
+    const float panelPad = 28.0F;
+    const float panelGap = 24.0F;
+    const float panelTop = cardY + headerZone;
+    const float panelW = (cardWidth - 2.0F * panelPad - panelGap) * 0.5F;
+    const float leftX = cardX + panelPad;
+    const float rightX = leftX + panelW + panelGap;
+
+    // LEFT: preview panel — bg black@0.3, faint white border (menus.css:
+    // 2237-2247). Inside, a static cat silhouette tinted with the selected
+    // fur + eye swatches: the parity approximation of the web's live 3D cat
+    // (native renders no 3D scene on this screen). A caption pill names the
+    // two live choices — the truthful stand-in for the web's "Drag to rotate"
+    // 3D interaction, which a static image cannot offer.
+    const ImVec2 leftMin(leftX, panelTop);
+    const ImVec2 leftMax(leftX + panelW, panelTop + panelHeight);
+    drawList->AddRectFilled(leftMin, leftMax, toImCol(WebParity::kPanelFill, 0.3F), 12.0F);
+    drawList->AddRect(leftMin, leftMax, toImCol(WebParity::kPanelBorder, 0.1F), 12.0F, 0, 2.0F);
+    {
+        const WebParity::ColorSwatch& furSwatch = WebParity::kFurSwatches[m_selectedFurIndex];
+        const WebParity::ColorSwatch& eyeSwatch = WebParity::kEyeSwatches[m_selectedEyeIndex];
+        const ImU32 furCol = IM_COL32(furSwatch.red, furSwatch.green, furSwatch.blue, 255);
+        const ImU32 eyeCol = IM_COL32(eyeSwatch.red, eyeSwatch.green, eyeSwatch.blue, 255);
+        const float previewCenterX = leftX + panelW * 0.5F;
+        const float headCenterY = panelTop + panelHeight * 0.40F;
+        const float headRadius = panelW * 0.17F;
+        // Body — a rounded fur block below the head.
+        drawList->AddRectFilled(
+            ImVec2(previewCenterX - headRadius * 0.95F, headCenterY + headRadius * 0.2F),
+            ImVec2(previewCenterX + headRadius * 0.95F, headCenterY + headRadius * 2.7F),
+            furCol, headRadius * 0.7F);
+        // Ears — two fur triangles above the head.
+        drawList->AddTriangleFilled(
+            ImVec2(previewCenterX - headRadius * 0.85F, headCenterY - headRadius * 0.4F),
+            ImVec2(previewCenterX - headRadius * 0.15F, headCenterY - headRadius * 1.25F),
+            ImVec2(previewCenterX - headRadius * 0.05F, headCenterY - headRadius * 0.2F), furCol);
+        drawList->AddTriangleFilled(
+            ImVec2(previewCenterX + headRadius * 0.85F, headCenterY - headRadius * 0.4F),
+            ImVec2(previewCenterX + headRadius * 0.15F, headCenterY - headRadius * 1.25F),
+            ImVec2(previewCenterX + headRadius * 0.05F, headCenterY - headRadius * 0.2F), furCol);
+        // Head.
+        drawList->AddCircleFilled(ImVec2(previewCenterX, headCenterY), headRadius, furCol, 40);
+        // Eyes — in the selected eye colour, with a dark pupil.
+        const float eyeOffsetX = headRadius * 0.42F;
+        const float eyeY = headCenterY - headRadius * 0.05F;
+        drawList->AddCircleFilled(ImVec2(previewCenterX - eyeOffsetX, eyeY),
+                                  headRadius * 0.18F, eyeCol, 20);
+        drawList->AddCircleFilled(ImVec2(previewCenterX + eyeOffsetX, eyeY),
+                                  headRadius * 0.18F, eyeCol, 20);
+        drawList->AddCircleFilled(ImVec2(previewCenterX - eyeOffsetX, eyeY),
+                                  headRadius * 0.08F, IM_COL32(20, 20, 20, 255), 12);
+        drawList->AddCircleFilled(ImVec2(previewCenterX + eyeOffsetX, eyeY),
+                                  headRadius * 0.08F, IM_COL32(20, 20, 20, 255), 12);
+        // Nose — small pink triangle (the web cat's #FF69B4 default nose).
+        drawList->AddTriangleFilled(
+            ImVec2(previewCenterX - headRadius * 0.12F, eyeY + headRadius * 0.35F),
+            ImVec2(previewCenterX + headRadius * 0.12F, eyeY + headRadius * 0.35F),
+            ImVec2(previewCenterX, eyeY + headRadius * 0.55F), IM_COL32(0xFF, 0x69, 0xB4, 255));
+        // Caption pill naming the live choices (stands in for "Drag to rotate").
+        std::string caption = std::string("Fur: ") + furSwatch.name + "   Eyes: " + eyeSwatch.name;
+        const ImVec2 capDim = measure(regularFont, 13.0F, caption.c_str());
+        const float capY = panelTop + panelHeight - 30.0F;
+        const float capX = previewCenterX - capDim.x * 0.5F;
+        drawList->AddRectFilled(ImVec2(capX - 10.0F, capY - 4.0F),
+                                ImVec2(capX + capDim.x + 10.0F, capY + capDim.y + 4.0F),
+                                IM_COL32(0, 0, 0, 180), 12.0F);
+        drawText(regularFont, 13.0F, capX, capY,
+                 toImCol(WebParity::kCustomizeSubtitleColor), caption.c_str());
     }
 
-    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
-        ImGui::PushFont(regularFont);
-    }
-    const char* subtitleText = WebParity::kCustomizeSubheading;
-    const ImVec2 subSize = ImGui::CalcTextSize(subtitleText);
-    ImGui::SetCursorPos(ImVec2((width - subSize.x) * 0.5F, titleY + titleSize.y + 4.0F));
-    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", subtitleText);
-    if (m_imguiLayer->GetRegularFont() != nullptr) {
-        ImGui::PopFont();
-    }
+    // RIGHT: options panel with the FUR then EYE grids (menus.css:2254-2299).
+    const ImVec2 rightMin(rightX, panelTop);
+    const ImVec2 rightMax(rightX + panelW, panelTop + panelHeight);
+    drawList->AddRectFilled(rightMin, rightMax, toImCol(WebParity::kPanelFill, 0.3F), 12.0F);
+    drawList->AddRect(rightMin, rightMax, toImCol(WebParity::kPanelBorder, 0.1F), 12.0F, 0, 2.0F);
 
-    // ---------------------------------------------------------- Colour pickers
-    // The web customize screen stacks two identical pickers — Fur Color
-    // (GameModeSelection.tsx:196-209) then Eye Color (:211-224) — each a
-    // labeled section over a grid of unlabeled colour buttons with the
-    // active choice outlined. Because the two controls are structurally the
-    // same, ONE lambda draws both instead of duplicating the
-    // ColorButton / selection-ring / tooltip logic twice; it returns the
-    // index clicked this frame (or -1) and reports the grid's bottom Y so
-    // the next section can stack beneath it.
-    constexpr int kSwatchColumns = 5;
-    constexpr float kSwatchSize = 56.0F;
-    constexpr float kSwatchGap = 14.0F;
-    const float gridWidth = static_cast<float>(kSwatchColumns) * kSwatchSize +
-                            static_cast<float>(kSwatchColumns - 1) * kSwatchGap;
-    const float gridX = (width - gridWidth) * 0.5F;
-    // The whole customize stack starts at 0.30h (was 0.40h before the eye
-    // picker existed): the added eye row needs vertical room, and starting
-    // higher keeps BACK / START on screen down to 720p.
-    const float furGridY = height * 0.30F;
+    const int gridColumns = 5;                       // menus.css:2277 repeat(5,1fr)
+    const float swatchGap = 10.0F;
+    const float panelInnerPad = 16.0F;
+    const float gridStartX = rightX + panelInnerPad;
+    const float gridAreaWidth = panelW - 2.0F * panelInnerPad;
+    const float swatchSize = std::min(
+        52.0F, (gridAreaWidth - static_cast<float>(gridColumns - 1) * swatchGap) /
+                   static_cast<float>(gridColumns));
 
-    auto drawSwatchGrid = [&](const char* label,
-                              const WebParity::ColorSwatch* swatches,
-                              int swatchCount,
-                              int columns,
-                              float swatchSize,
-                              int selectedIndex,
-                              float originX,
-                              float originY,
-                              float& outBottomY) -> int {
-        // Section label (gold, bold) centred above the grid.
-        if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
-            ImGui::PushFont(boldFont);
-        }
-        const ImVec2 labelSize = ImGui::CalcTextSize(label);
-        ImGui::SetCursorPos(ImVec2((width - labelSize.x) * 0.5F,
-                                   originY - labelSize.y - 14.0F));
-        ImGui::TextColored(ImVec4(1.00F, 0.80F, 0.10F, 1.00F), "%s", label);
-        if (m_imguiLayer->GetBoldFont() != nullptr) {
-            ImGui::PopFont();
-        }
-
+    // One lambda draws either grid (fur or eye) — the web renders both with
+    // the same .color-grid/.color-option markup. Returns the swatch clicked
+    // this frame (or -1). Swatch faces are the RAW web sRGB bytes (ImGui does
+    // no colour conversion); the ORANGE selection ring is the web's
+    // .color-option.selected outline (menus.css:2295-2299), distinct from the
+    // gold ring on the mode-select page.
+    auto drawSwatchGrid = [&](const char* idPrefix, const WebParity::ColorSwatch* swatches,
+                              int swatchCount, int selectedIndex, float originX,
+                              float originY) -> int {
         int clickedIndex = -1;
-        int rowsDrawn = 0;
         for (int i = 0; i < swatchCount; ++i) {
-            const auto& swatch = swatches[i];
-            const int column = i % columns;
-            const int row = i / columns;
-            rowsDrawn = row + 1;
-            ImGui::SetCursorPos(
-                ImVec2(originX + static_cast<float>(column) * (swatchSize + kSwatchGap),
-                       originY + static_cast<float>(row) * (swatchSize + kSwatchGap)));
-
-            // ImGui hands widget colours to the backend as-authored (no
-            // colour-space conversion), so the swatch face shows the raw
-            // web sRGB bytes — exactly the web hex. Only the value fed
-            // onward to a tint push constant is linear-decoded (that is
-            // getSelected*Linear's job, not the preview's).
+            const int column = i % gridColumns;
+            const int row = i / gridColumns;
+            const float swatchX = originX + static_cast<float>(column) * (swatchSize + swatchGap);
+            const float swatchY = originY + static_cast<float>(row) * (swatchSize + swatchGap);
+            ImGui::SetCursorPos(ImVec2(swatchX, swatchY));
+            const WebParity::ColorSwatch& swatch = swatches[i];
             const ImVec4 faceColor(static_cast<float>(swatch.red) / 255.0F,
                                    static_cast<float>(swatch.green) / 255.0F,
-                                   static_cast<float>(swatch.blue) / 255.0F,
-                                   1.0F);
-            // Two-level ID scope: the section label disambiguates the fur
-            // grid from the eye grid (both draw a "##swatch" button), and
-            // the index disambiguates swatches within one grid — without the
-            // label push the two grids' same-index buttons would collide.
-            ImGui::PushID(label);
+                                   static_cast<float>(swatch.blue) / 255.0F, 1.0F);
+            ImGui::PushID(idPrefix);
             ImGui::PushID(i);
             if (ImGui::ColorButton("##swatch", faceColor,
                                    ImGuiColorEditFlags_NoTooltip |
@@ -999,108 +1073,118 @@ void MainMenu::renderCustomizePage(float width, float height) {
                 m_audio.playMenuClick();
                 clickedIndex = i;
             }
-            // Our own tooltip (the swatch's parity-table name) rather than
-            // ColorButton's default r/g/b readout, which is picker chrome
-            // that means nothing to a player.
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", swatch.name);
             }
             ImGui::PopID();
             ImGui::PopID();
-
-            // Selection ring — the ImGui take on the web's `.selected`
-            // outline (GameModeSelection.tsx:203 fur / :218 eye). Same gold
-            // as the keyboard ring on the mode-select page.
             if (i == selectedIndex) {
                 const ImVec2 rectMin = ImGui::GetItemRectMin();
                 const ImVec2 rectMax = ImGui::GetItemRectMax();
-                ImGui::GetWindowDrawList()->AddRect(
-                    ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
-                    ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
-                    IM_COL32(255, 204, 26, 255), 4.0F, 0, 3.0F);
+                drawList->AddRect(ImVec2(rectMin.x - 3.0F, rectMin.y - 3.0F),
+                                  ImVec2(rectMax.x + 3.0F, rectMax.y + 3.0F),
+                                  toImCol(WebParity::kSwatchSelectedColor), 6.0F, 0, 3.0F);
             }
         }
-        outBottomY = rowsDrawn > 0
-            ? originY + static_cast<float>(rowsDrawn) * swatchSize +
-                  static_cast<float>(rowsDrawn - 1) * kSwatchGap
-            : originY;
         return clickedIndex;
     };
 
-    // FUR COLOR — 5x2 grid over kFurSwatches.
-    float furGridBottom = furGridY;
-    const int furClicked = drawSwatchGrid(
-        "FUR COLOR", WebParity::kFurSwatches, WebParity::kFurSwatchCount,
-        kSwatchColumns, kSwatchSize, m_selectedFurIndex, gridX, furGridY,
-        furGridBottom);
+    const float furLabelY = panelTop + 14.0F;
+    const float furGridY = furLabelY + 22.0F;
+    const int furRows = (WebParity::kFurSwatchCount + gridColumns - 1) / gridColumns;
+    const float furGridBottom = furGridY + static_cast<float>(furRows) * swatchSize +
+                                static_cast<float>(furRows - 1) * swatchGap;
+    const float eyeLabelY = furGridBottom + 14.0F;
+    const float eyeGridY = eyeLabelY + 22.0F;
+
+    drawText(boldFont, 15.0F, gridStartX, furLabelY,
+             toImCol(WebParity::kCustomizeTitleColor), "FUR COLOR");
+    const int furClicked = drawSwatchGrid("fur", WebParity::kFurSwatches,
+                                          WebParity::kFurSwatchCount, m_selectedFurIndex,
+                                          gridStartX, furGridY);
     if (furClicked >= 0) {
         m_selectedFurIndex = furClicked;
     }
 
-    // EYE COLOR — eight swatches in one row directly below the fur grid,
-    // mirroring the web ordering (fur section, then eye section). The eye
-    // swatches are a touch smaller so eight of them span roughly the same
-    // width as the five-wide fur grid above.
-    constexpr int kEyeColumns = 8;
-    constexpr float kEyeSwatchSize = 44.0F;
-    const float eyeGridWidth = static_cast<float>(kEyeColumns) * kEyeSwatchSize +
-                               static_cast<float>(kEyeColumns - 1) * kSwatchGap;
-    const float eyeGridX = (width - eyeGridWidth) * 0.5F;
-    const float eyeGridY = furGridBottom + 48.0F; // leave room for the EYE COLOR label
-    float eyeGridBottom = eyeGridY;
-    const int eyeClicked = drawSwatchGrid(
-        "EYE COLOR", WebParity::kEyeSwatches, WebParity::kEyeSwatchCount,
-        kEyeColumns, kEyeSwatchSize, m_selectedEyeIndex, eyeGridX, eyeGridY,
-        eyeGridBottom);
+    drawText(boldFont, 15.0F, gridStartX, eyeLabelY,
+             toImCol(WebParity::kCustomizeTitleColor), "EYE COLOR");
+    const int eyeClicked = drawSwatchGrid("eye", WebParity::kEyeSwatches,
+                                          WebParity::kEyeSwatchCount, m_selectedEyeIndex,
+                                          gridStartX, eyeGridY);
     if (eyeClicked >= 0) {
         m_selectedEyeIndex = eyeClicked;
     }
 
-    // Selected-choice readout. The web shows the choices on a live 3D cat
-    // preview beside the grids; the native menu draws no 3D scene (a noted
-    // parity delta), so naming both selections is the stand-in feedback.
-    if (auto* regularFont = m_imguiLayer->GetRegularFont()) {
-        ImGui::PushFont(regularFont);
-    }
-    const std::string selectionText =
-        std::string("Fur: ") + WebParity::kFurSwatches[m_selectedFurIndex].name +
-        "    Eyes: " + WebParity::kEyeSwatches[m_selectedEyeIndex].name;
-    const ImVec2 nameSize = ImGui::CalcTextSize(selectionText.c_str());
-    const float nameY = eyeGridBottom + 20.0F;
-    ImGui::SetCursorPos(ImVec2((width - nameSize.x) * 0.5F, nameY));
-    ImGui::TextColored(ImVec4(0.80F, 0.80F, 0.90F, 0.90F), "%s", selectionText.c_str());
-    if (m_imguiLayer->GetRegularFont() != nullptr) {
-        ImGui::PopFont();
-    }
-
     // ----------------------------------------------------------------- Actions
-    // Mirrors the web's footer pair — "← Back" (GameModeSelection.tsx:291)
-    // and "Start Game" (tsx:304); uppercase to match this menu's native
-    // button voice.
-    if (auto* boldFont = m_imguiLayer->GetBoldFont()) {
-        ImGui::PushFont(boldFont);
-    }
-    constexpr float kBackWidth = 170.0F;
-    constexpr float kStartWidth = 230.0F;
-    constexpr float kActionHeight = 56.0F;
-    constexpr float kActionGap = 24.0F;
-    const float actionsY = nameY + nameSize.y + 32.0F;
-    const float actionsX = (width - (kBackWidth + kActionGap + kStartWidth)) * 0.5F;
+    // Grey "< BACK" left, teal "START GAME" right (menus.css:1523 back /
+    // :1534 start). The web arrow "←" has no atlas glyph, so ASCII "<".
+    const float actionsY = panelTop + panelHeight + afterPanels;
+    const float backWidth = 170.0F;
+    const float startWidth = 230.0F;
+    ImGui::PushFont(boldFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0F);
 
-    ImGui::SetCursorPos(ImVec2(actionsX, actionsY));
-    if (ImGui::Button("< BACK", ImVec2(kBackWidth, kActionHeight))) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImColor(toImCol(WebParity::kBackButtonTop)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImColor(toImCol(WebParity::kBackButtonTop, 0.85F)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          ImColor(toImCol(WebParity::kBackButtonBottom)).Value);
+    ImGui::SetCursorPos(ImVec2(leftX, actionsY));
+    if (ImGui::Button("< BACK", ImVec2(backWidth, actionsHeight))) {
         m_audio.playMenuClick();
         m_currentPage = MenuPage::ModeSelect;
     }
+    ImGui::PopStyleColor(3);
 
-    ImGui::SetCursorPos(ImVec2(actionsX + kBackWidth + kActionGap, actionsY));
-    if (ImGui::Button("START GAME", ImVec2(kStartWidth, kActionHeight))) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImColor(toImCol(WebParity::kStartButtonTop)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImColor(toImCol(WebParity::kStartButtonTop, 0.9F)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          ImColor(toImCol(WebParity::kStartButtonBottom)).Value);
+    ImGui::SetCursorPos(ImVec2(cardX + cardWidth - panelPad - startWidth, actionsY));
+    if (ImGui::Button(WebParity::kStartGameLabel, ImVec2(startWidth, actionsHeight))) {
         m_audio.playMenuClick();
         confirmStartGame();
     }
-    if (m_imguiLayer->GetBoldFont() != nullptr) {
-        ImGui::PopFont();
+    ImGui::PopStyleColor(3);
+
+    ImGui::PopStyleVar();
+    ImGui::PopFont();
+
+    // ------------------------------------------------------------ Reset below
+    // The customize screen carries the SAME Reset Progress control as the
+    // mode-select page (menus.css shows it under both), sharing the one
+    // confirm latch — see the mode-select footer for the two-click semantics.
+    const float resetY = actionsY + actionsHeight + afterActions;
+    const float resetWidth = 210.0F;
+    ImGui::PushFont(regularFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0F);
+    const WebParity::UiColor resetTop =
+        m_resetConfirmPending ? WebParity::kDeathAccent : WebParity::kResetButtonTop;
+    const WebParity::UiColor resetBottom =
+        m_resetConfirmPending ? WebParity::kDeathAccentDark : WebParity::kResetButtonBottom;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImColor(toImCol(resetTop)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImColor(toImCol(WebParity::kDeathAccent, 0.9F)).Value);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImColor(toImCol(resetBottom)).Value);
+    ImGui::SetCursorPos(ImVec2(cardX + (cardWidth - resetWidth) * 0.5F, resetY));
+    const char* resetLabel =
+        m_resetConfirmPending ? WebParity::kResetConfirmLabel : WebParity::kResetProgressLabel;
+    if (ImGui::Button(resetLabel, ImVec2(resetWidth, resetHeight))) {
+        m_audio.playMenuClick();
+        if (m_resetConfirmPending) {
+            m_resetConfirmPending = false;
+            if (m_resetProgressCallback) {
+                m_resetProgressCallback();
+            }
+        } else {
+            m_resetConfirmPending = true;
+            m_resetConfirmTimer = 3.0F;
+        }
     }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    ImGui::PopFont();
 }
 
 void MainMenu::confirmStartGame() {
