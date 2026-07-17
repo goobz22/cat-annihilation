@@ -512,18 +512,36 @@ def segment_distances(points, seg_a, seg_b):
     return np.linalg.norm(points - closest, axis=1)
 
 
-def min_bone_distances(points, segments):
-    """Distance from every point to its NEAREST bone segment, plus WHICH
-    segment won — the index is what turns a bare "ratio 1.7" failure into an
-    actionable "the escaping verts live around shin_L" diagnosis."""
-    result = np.full(len(points), np.inf, dtype=np.float64)
-    nearest = np.zeros(len(points), dtype=np.int32)
-    for idx, (seg_a, seg_b) in enumerate(segments):
-        dists = segment_distances(points, seg_a, seg_b)
-        closer = dists < result
-        nearest[closer] = idx
-        np.minimum(result, dists, out=result)
-    return result, nearest
+def bone_distance_matrix(points, segments):
+    """(n_verts, n_bones) matrix of point-to-segment distances."""
+    return np.stack([segment_distances(points, seg_a, seg_b)
+                     for seg_a, seg_b in segments], axis=1)
+
+
+def masked_min_distances(distance_matrix, influence_mask):
+    """Per-vertex nearest distance + bone index, considering ONLY the bones
+    that actually influence each vertex. Why the mask: control bones like
+    'root' run from the ground up through the groin without carrying any
+    meaningful weight, so an unmasked 'nearest bone' both under-floors rest
+    distances (the bone is nearby but drives nothing) and mis-attributes
+    ordinary thigh-fold deformation as an escape from 'root'. The invariant
+    being enforced is 'a vertex rides the bones that DRIVE it'."""
+    masked = np.where(influence_mask, distance_matrix, np.inf)
+    return masked.min(axis=1), masked.argmin(axis=1)
+
+
+def reset_pose(arm_obj):
+    """Return every pose bone to identity. Actions only write the channels
+    they key, so switching from clip A to clip B leaves A's values behind on
+    any channel B does not key (e.g. walk keys 'head', run does not). Without
+    an explicit reset that residue contaminates deform measurements, posed
+    previews and the 'rest' render (which showed the standUp fold until this
+    existed)."""
+    for pose_bone in arm_obj.pose.bones:
+        pose_bone.rotation_mode = 'QUATERNION'
+        pose_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pose_bone.location = (0.0, 0.0, 0.0)
+        pose_bone.scale = (1.0, 1.0, 1.0)
 
 
 DEFORM_RATIO_LIMIT = 1.5
@@ -559,12 +577,32 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
 
     arm_mat = arm_obj.matrix_world
     bone_names = [bone.name for bone in arm_obj.data.bones]
+    bone_col = {name: col for col, name in enumerate(bone_names)}
     rest_segments = []
     for bone in arm_obj.data.bones:
         head = np.array(arm_mat @ bone.head_local, dtype=np.float64)
         tail = np.array(arm_mat @ bone.tail_local, dtype=np.float64)
         rest_segments.append((head, tail))
-    rest_dist_raw, rest_nearest = min_bone_distances(rest_pts, rest_segments)
+
+    # Per-vertex influence mask: which bones carry a real weight (>=0.1) on
+    # this vertex. Verts with no strong influence (blend-only regions) fall
+    # back to the full bone set rather than dividing by an empty mask.
+    group_to_col = {}
+    for group_index, group in enumerate(mesh_obj.vertex_groups):
+        if group.name in bone_col:
+            group_to_col[group_index] = bone_col[group.name]
+    influence = np.zeros((len(mesh_obj.data.vertices), len(bone_names)),
+                         dtype=bool)
+    for vertex in mesh_obj.data.vertices:
+        for group_entry in vertex.groups:
+            col = group_to_col.get(group_entry.group)
+            if col is not None and group_entry.weight >= 0.10:
+                influence[vertex.index, col] = True
+    no_influence = ~influence.any(axis=1)
+    influence[no_influence, :] = True
+
+    rest_dist_raw, rest_nearest = masked_min_distances(
+        bone_distance_matrix(rest_pts, rest_segments), influence)
     rest_dist = np.maximum(rest_dist_raw, floor)
 
     # Sample clips one at a time: NLA tracks are muted so ONLY the active
@@ -580,6 +618,7 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
         action = bpy.data.actions.get(clip_name)
         if action is None:
             continue
+        reset_pose(arm_obj)  # clear channels the previous clip keyed
         anim.action = action
         frame_start, frame_end = action.frame_range
         for i in range(DEFORM_SAMPLES_PER_CLIP):
@@ -605,7 +644,8 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
                 head = np.array(arm_mat @ pose_bone.head, dtype=np.float64)
                 tail = np.array(arm_mat @ pose_bone.tail, dtype=np.float64)
                 posed_segments.append((head, tail))
-            posed_dist, posed_nearest = min_bone_distances(pts, posed_segments)
+            posed_dist, posed_nearest = masked_min_distances(
+                bone_distance_matrix(pts, posed_segments), influence)
 
             ratios = posed_dist / rest_dist
             ratio = float(np.max(ratios))
@@ -634,8 +674,10 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
                 }
 
     # Restore the exact post-bake_animation_clips state (action cleared, NLA
-    # unmuted) so the exporter sees the clips the way rig_quadruped left them.
+    # unmuted, rest pose) so the exporter sees the clips the way rig_quadruped
+    # left them — and no clip's residue leaks into the export or previews.
     anim.action = None
+    reset_pose(arm_obj)
     for track, was_muted in saved_mutes:
         track.mute = was_muted
     bpy.context.scene.frame_set(0)
@@ -736,6 +778,7 @@ def render_posed_previews(mesh_obj, arm_obj, previews_dir, base_name):
     poses = [('rest', None, 0.0), ('walk', 'walk', 0.25),
              ('attack', 'attack', 0.58)]
     for label, clip_name, phase in poses:
+        reset_pose(arm_obj)  # each pose starts from a clean rest state
         if clip_name is None:
             anim.action = None
             bpy.context.scene.frame_set(0)
@@ -751,6 +794,7 @@ def render_posed_previews(mesh_obj, arm_obj, previews_dir, base_name):
         paths[label] = path
 
     anim.action = None
+    reset_pose(arm_obj)
     for track in anim.nla_tracks:
         track.mute = False
     bpy.context.scene.frame_set(0)
@@ -830,6 +874,7 @@ def main():
         anim = arm_obj.animation_data
         for track in anim.nla_tracks:
             track.mute = True
+        reset_pose(arm_obj)
         anim.action = bpy.data.actions[worst_clip]
         bpy.context.scene.frame_set(worst_frame)
         lo, hi = mesh_world_extents(retopo_obj)
@@ -841,6 +886,7 @@ def main():
         render_to(debug_path)
         preview_paths['deform_worst'] = debug_path
         anim.action = None
+        reset_pose(arm_obj)
         for track in anim.nla_tracks:
             track.mute = False
         clear_preview_rig()
