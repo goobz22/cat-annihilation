@@ -47,6 +47,24 @@ fix underneath: ImGui vertex colors are now sRGB→linear decoded post-Render()
 not the source constants** — the capture pipeline is
 `scripts/webref_capture.ts` (Playwright, needs `node`, against
 `bunx vite preview --port 4173`; dev-server capture is broken — see below).
+**Feedback/audio/stability audit 2026-07-17 (second pass):**
+- Attack feedback: web sword visual = a 0.3-unit body lunge only
+  (CatMesh.tsx:185-193); native's rigged attack clips cover the class
+  (sanctioned art divergence). Web defend = crouch pose; native block
+  stance equivalent.
+- Damage numbers: the web has NONE — native's HUD damage-number/indicator
+  renderers turn out to be defined-but-never-called (dead in every config),
+  which accidentally matches; the accumulating list self-prunes (no leak).
+  Recorded as dormant scaffolding, do not wire under parity.
+- Audio: silent-by-default is the standing 2026-04-26 operator directive
+  (crash-scream hazard). NEW: `--hidden` runs force silence even with
+  CAT_AUDIO=1 — automated runs must never grab the speakers. Visible play
+  still honors CAT_AUDIO=1 opt-in; flipping the default back ON awaits an
+  operator call now that the crash class is fixed.
+- Stability: 3 consecutive death→restart cycles (R/space mixed) all reset
+  cleanly to wave 1 / 100 HP. Wave-8 stress (27 dogs + shadows + bars):
+  median 59 fps, p10 50.7.
+
 **Combat visuals 2026-07-17:** projectiles previously flew INVISIBLY in
 survival (their only visual was a particle emitter the survival ScenePass
 never renders — dogs died to unseen force). Now web-parity geometry: spells

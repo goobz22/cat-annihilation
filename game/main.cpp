@@ -1224,7 +1224,16 @@ int main(int argc, char* argv[]) {
     // mode is end-to-end safe. Logging the failure as warn (not error)
     // keeps it in the playtest log for diagnosis without false-flagging
     // it as a fatal condition.
-    if (!audioEngine->initialize()) {
+    // Hidden runs are ALWAYS silent, even with CAT_AUDIO=1 in the
+    // environment: --hidden means automated verification on a machine the
+    // operator is actively using, and a test run grabbing the audio device
+    // to bark and screech is the sonic version of the popped-window problem
+    // the hidden mode exists to prevent. This tightens the 2026-04-26
+    // silence directive's intent; it never loosens it (visible runs still
+    // require the explicit CAT_AUDIO=1 opt-in).
+    if (cmdArgs.hiddenWindow) {
+        Engine::Logger::info("Audio: forced silent (--hidden test run)");
+    } else if (!audioEngine->initialize()) {
         Engine::Logger::warn("Audio engine disabled (running silent); set CAT_AUDIO=1 to enable");
     } else {
         Engine::Logger::info("Audio engine initialized");
