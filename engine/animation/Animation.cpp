@@ -87,9 +87,13 @@ bool Animation::hasChannelForBone(int boneIndex) const {
     return findChannelByBone(boneIndex) >= 0;
 }
 
-void Animation::sample(float time, std::vector<Transform>& outTransforms) const {
-    // Normalize time
-    float normalizedTime = normalizeTime(time, true);
+void Animation::sample(float time, std::vector<Transform>& outTransforms,
+                       bool loop) const {
+    // Normalize time. Wrap for looping clips; CLAMP for one-shots so the final
+    // keyframe is held at the end (before this respected `loop`, sample always
+    // wrapped and a finished non-looping clip snapped to frame 0 — Round-3
+    // audit HIGH, pinned by test_animator.cpp "non-looping clip HOLDS").
+    float normalizedTime = normalizeTime(time, loop);
 
     // Per-component merge into outTransforms.
     //
