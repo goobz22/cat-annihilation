@@ -234,186 +234,530 @@ void HUD::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, uint
     ImGui::Begin("##HUDOverlay", nullptr, kOverlayFlags);
     ImDrawList* draw = ImGui::GetWindowDrawList();
 
-    // -------------------------------------------------- Health bar (bottom-left).
-    // Keep well clear of the Windows taskbar in windowed mode — the client area can
-    // be ~40px shorter than the reported screenHeight. The X/width/Y here are hoisted
-    // so the active-weapon indicator (above) and level/XP bar (below) can align to the
-    // same bottom-left stat column instead of hardcoding the geometry three times.
-    const float healthBarWidth = 360.0F;
-    const float healthBarHeight = 32.0F;
-    const float healthBarX = 32.0F;
-    const float healthBarY = height - healthBarHeight - 120.0F;
-    {
-        const ImU32 bgColor = IM_COL32(20, 20, 30, 200);
-        const ImU32 fillColor = (healthRatio < 0.3F)
-            ? IM_COL32(230, 60, 50, 230)
-            : IM_COL32(60, 200, 90, 230);
-        const ImU32 borderColor = IM_COL32(255, 255, 255, 160);
+    // The whole in-game HUD is a 1:1 rebuild of the web survival HUD
+    // (src/components/ui/*). Layout + colours cite WebParityConfig.hpp (the
+    // "In-game HUD" block), which cites the web CSS/TSX line-by-line. Under
+    // WebParity::kEnabled the native flavor (bottom-left HP stack, yellow
+    // WAVE text, permanent dog counter, SCORE, combo) is REPLACED by the web
+    // layout; the old flavor is preserved on the !kEnabled branch below.
+    namespace WP = CatGame::WebParity;
+    ImFont* title = m_imguiLayer->GetTitleFont();
 
-        draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
-                            ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), bgColor, 6.0F);
-        draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
-                            ImVec2(healthBarX + healthBarWidth * healthRatio, healthBarY + healthBarHeight), fillColor, 6.0F);
-        draw->AddRect(ImVec2(healthBarX, healthBarY),
-                      ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), borderColor, 6.0F, 0, 2.0F);
+    if (WP::kEnabled) {
+        // ================================================================
+        // Bottom-centre STATUS PILL (web CatStats.tsx + ui.css
+        // .cat-stats-container). One dark rounded bar holding four
+        // separator-divided segments: cat "Lv.N" (orange) | XP bar +
+        // "cur/next" text | heart + "HP/max" (red) | "Next Lv.N: ability".
+        // ================================================================
+        const float pillH = WP::kHudPillHeight;
+        const float pillMidPad = 16.0F;   // ui.css:22 .cat-stats-section padding 0 16px
 
-        if (regular != nullptr) {
-            ImGui::PushFont(regular);
+        // -- Measure each segment's content so the pill can be sized to fit
+        //    and centred (the web bar is shrink-to-content, not fixed width).
+        char levelText[32];
+        std::snprintf(levelText, sizeof(levelText), "Lv.%u", m_catLevel);
+        char hpText[48];
+        std::snprintf(hpText, sizeof(hpText), "%d/%d",
+                      static_cast<int>(std::floor(m_currentHealth)),
+                      static_cast<int>(m_maxHealth));
+
+        // Reconstruct the pill's ABSOLUTE XP text ("0/104" on a fresh run)
+        // from the cat level + the 0..1 progress, via the same catXpForLevel
+        // curve the web store uses (CatStats.tsx:33-36,140). No extra plumbing.
+        const int catLevel = static_cast<int>(std::max<uint32_t>(m_catLevel, 1));
+        const float xpProg = std::clamp(m_xpProgress, 0.0F, 1.0F);
+        const float xpCurTotal = (catLevel <= 1) ? 0.0F : WP::catXpForLevel(catLevel);
+        const float xpNextTotal = WP::catXpForLevel(catLevel + 1);
+        const float xpAbsolute = xpCurTotal + xpProg * (xpNextTotal - xpCurTotal);
+        char xpText[48];
+        std::snprintf(xpText, sizeof(xpText), "%d/%d",
+                      static_cast<int>(std::lround(xpAbsolute)),
+                      static_cast<int>(std::lround(xpNextTotal)));
+
+        if (bold != nullptr) { ImGui::PushFont(bold); }
+        const ImVec2 levelSize = ImGui::CalcTextSize(levelText);
+        const ImVec2 hpSize = ImGui::CalcTextSize(hpText);
+        if (bold != nullptr) { ImGui::PopFont(); }
+        if (regular != nullptr) { ImGui::PushFont(regular); }
+        const ImVec2 xpTextSize = ImGui::CalcTextSize(xpText);
+        const ImVec2 nextSize = m_abilityLine.empty()
+            ? ImVec2(0.0F, 0.0F) : ImGui::CalcTextSize(m_abilityLine.c_str());
+        if (regular != nullptr) { ImGui::PopFont(); }
+
+        const float iconW = 20.0F;      // drawn cat / heart glyph reserve
+        const float iconGap = 6.0F;     // ui.css:75 gap:6px
+        const float xpColW = 120.0F;    // ui.css:44 .cat-xp-container min-width:120px
+        const float nextMaxW = 200.0F;  // ui.css:141 .cat-next-ability max-width ~150-200
+
+        const float seg1W = iconW + iconGap + levelSize.x;
+        const float seg2W = std::max(xpColW, xpTextSize.x);
+        const float seg3W = iconW + iconGap + hpSize.x;
+        const bool hasNext = !m_abilityLine.empty();
+        const float seg4W = hasNext ? std::min(nextSize.x, nextMaxW) : 0.0F;
+
+        auto segTotal = [&](float contentW) { return contentW + pillMidPad * 2.0F; };
+        float pillW = segTotal(seg1W) + segTotal(seg2W) + segTotal(seg3W);
+        if (hasNext) { pillW += segTotal(seg4W); }
+        const int sepCount = hasNext ? 3 : 2;
+        pillW += static_cast<float>(sepCount);  // 1px separators
+
+        const float pillX = (width - pillW) * 0.5F;
+        const float pillY = height - WP::kHudPillBottomMargin - pillH;
+        const float pillMidY = pillY + pillH * 0.5F;
+
+        // Pill background + 1px light border (ui.css:9,11,14).
+        draw->AddRectFilled(ImVec2(pillX, pillY), ImVec2(pillX + pillW, pillY + pillH),
+                            swatchColor(WP::kHudPillBg, WP::kHudPillBgAlpha),
+                            WP::kHudPillCornerRadius);
+        draw->AddRect(ImVec2(pillX, pillY), ImVec2(pillX + pillW, pillY + pillH),
+                      IM_COL32(255, 255, 255, 26), WP::kHudPillCornerRadius, 0, 1.0F);
+
+        float cursorX = pillX;
+        auto drawSeparator = [&](float atX) {
+            draw->AddLine(ImVec2(atX, pillY + 8.0F), ImVec2(atX, pillY + pillH - 8.0F),
+                          IM_COL32(255, 255, 255, 26), 1.0F);
+        };
+
+        // -- Segment 1: cat icon + "Lv.N" (orange #ff6b35, ui.css:32).
+        {
+            const float cx = cursorX + pillMidPad + iconW * 0.5F;
+            drawCatIcon(draw, ImVec2(cx, pillMidY), 9.0F, swatchColor(WP::kHudCatLevelColor));
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            draw->AddText(ImVec2(cursorX + pillMidPad + iconW + iconGap, pillMidY - levelSize.y * 0.5F),
+                          swatchColor(WP::kHudCatLevelColor), levelText);
+            if (bold != nullptr) { ImGui::PopFont(); }
+            cursorX += segTotal(seg1W);
         }
-        char label[64];
-        std::snprintf(label, sizeof(label), "HP  %d / %d",
-                      static_cast<int>(m_currentHealth), static_cast<int>(m_maxHealth));
-        const ImVec2 labelSize = ImGui::CalcTextSize(label);
-        draw->AddText(ImVec2(healthBarX + (healthBarWidth - labelSize.x) * 0.5F,
-                             healthBarY + (healthBarHeight - labelSize.y) * 0.5F),
-                      IM_COL32(255, 255, 255, 240), label);
-        if (regular != nullptr) {
-            ImGui::PopFont();
+        drawSeparator(cursorX); cursorX += 1.0F;
+
+        // -- Segment 2: XP bar (track #374151, amber gradient #fbbf24->#f59e0b,
+        //    ui.css:50/58) with the "cur/next" text centred beneath it.
+        {
+            const float barX = cursorX + pillMidPad;
+            const float barW = seg2W;
+            const float barH = WP::kHudXpBarHeight;
+            const float barTop = pillMidY - barH - 4.0F;
+            draw->AddRectFilled(ImVec2(barX, barTop), ImVec2(barX + barW, barTop + barH),
+                                swatchColor(WP::kHudXpTrackColor), 3.0F);
+            if (xpProg > 0.0F) {
+                const float fillR = barX + barW * xpProg;
+                draw->AddRectFilledMultiColor(
+                    ImVec2(barX, barTop), ImVec2(fillR, barTop + barH),
+                    swatchColor(WP::kHudXpFillStart), swatchColor(WP::kHudXpFillEnd),
+                    swatchColor(WP::kHudXpFillEnd), swatchColor(WP::kHudXpFillStart));
+            }
+            draw->AddRect(ImVec2(barX, barTop), ImVec2(barX + barW, barTop + barH),
+                          IM_COL32(75, 85, 99, 255), 3.0F, 0, 1.0F);  // #4b5563 (ui.css:53)
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            draw->AddText(ImVec2(barX + (barW - xpTextSize.x) * 0.5F, barTop + barH + 3.0F),
+                          swatchColor(WP::kHudXpTextColor), xpText);
+            if (regular != nullptr) { ImGui::PopFont(); }
+            cursorX += segTotal(seg2W);
+        }
+        drawSeparator(cursorX); cursorX += 1.0F;
+
+        // -- Segment 3: heart icon + "HP/max" (red #ef4444, ui.css:83).
+        {
+            const float cx = cursorX + pillMidPad + iconW * 0.5F;
+            drawHeartIcon(draw, ImVec2(cx, pillMidY), 9.0F, swatchColor(WP::kHudHealthColor));
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            draw->AddText(ImVec2(cursorX + pillMidPad + iconW + iconGap, pillMidY - hpSize.y * 0.5F),
+                          swatchColor(WP::kHudHealthColor), hpText);
+            if (bold != nullptr) { ImGui::PopFont(); }
+            cursorX += segTotal(seg3W);
+        }
+
+        // -- Segment 4: "Next Lv.N: <ability>" hint (muted grey #9ca3af,
+        //    ui.css:138). Composed by the game layer (m_abilityLine); clipped
+        //    to the segment so a long ability name can't overrun the pill.
+        if (hasNext) {
+            drawSeparator(cursorX); cursorX += 1.0F;
+            const float textX = cursorX + pillMidPad;
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            draw->PushClipRect(ImVec2(textX, pillY), ImVec2(textX + nextMaxW, pillY + pillH), true);
+            draw->AddText(ImVec2(textX, pillMidY - nextSize.y * 0.5F),
+                          swatchColor(WP::kHudNextAbilityColor), m_abilityLine.c_str());
+            draw->PopClipRect();
+            if (regular != nullptr) { ImGui::PopFont(); }
+        }
+
+        // ================================================================
+        // HOTBAR (web InventoryHotbar.tsx + inventory.css). 9 dark squares
+        // below the pill; slots 1-4 seed water-spell / sword / bow / shield
+        // (gameStore.ts initialInventory), 5-9 empty. Active slot gets a
+        // coloured ring + a size pop, and the active item name prints to its
+        // right. Icons are hand-drawn (no emoji glyphs) — see the helpers.
+        // ================================================================
+        const float slotSize = WP::kHudHotbarSlotSize;
+        const float slotGap = WP::kHudHotbarSlotGap;
+        const int slotCount = WP::kHotbarSlotCount;
+        const float hotbarW = slotCount * slotSize + (slotCount - 1) * slotGap;
+        const float hotbarX = (width - hotbarW) * 0.5F;
+        const float slotTop = height - WP::kHudHotbarBottomMargin - slotSize;
+        const int activeIndex = m_activeWeaponName.empty()
+            ? -1 : static_cast<int>(m_activeWeaponSlot) - 1;
+
+        for (int slot = 0; slot < slotCount; ++slot) {
+            const float sx = hotbarX + slot * (slotSize + slotGap);
+            const bool active = (slot == activeIndex);
+
+            // The active slot's ring colour is the item's tint (web active-slot
+            // theming, inventory.css:33-36) — teal for the water drop, silver
+            // for sword/shield, brown for bow; empty active slots fall back to
+            // the amber active border (inventory.css:27).
+            WP::ColorSwatch itemTint = WP::kHudHotbarActiveBorder;
+            switch (slot) {
+                case 0: itemTint = WP::kHudItemWater;  break;
+                case 1: itemTint = WP::kHudItemSword;  break;
+                case 2: itemTint = WP::kHudItemBow;    break;
+                case 3: itemTint = WP::kHudItemShield; break;
+                default: break;
+            }
+
+            // Active slot pops slightly larger (web transform: scale(1.1)).
+            const float pop = active ? 3.0F : 0.0F;
+            const ImVec2 slotMin(sx - pop, slotTop - pop);
+            const ImVec2 slotMax(sx + slotSize + pop, slotTop + slotSize + pop);
+            draw->AddRectFilled(slotMin, slotMax,
+                                swatchColor(active ? WP::kHudHotbarActiveSlotBg : WP::kHudHotbarSlotBg),
+                                WP::kHudHotbarSlotRadius);
+            draw->AddRect(slotMin, slotMax,
+                          swatchColor(active ? itemTint : WP::kHudHotbarInactiveBorder),
+                          WP::kHudHotbarSlotRadius, 0, active ? 3.0F : 2.0F);
+
+            const ImVec2 iconC(sx + slotSize * 0.5F, slotTop + slotSize * 0.5F - 4.0F);
+            const float iconS = 13.0F;
+            switch (slot) {
+                case 0: drawDropIcon(draw, iconC, iconS, swatchColor(WP::kHudItemWater));   break;
+                case 1: drawSwordsIcon(draw, iconC, iconS, swatchColor(WP::kHudItemSword)); break;
+                case 2: drawBowIcon(draw, iconC, iconS, swatchColor(WP::kHudItemBow));      break;
+                case 3: drawShieldIcon(draw, iconC, iconS, swatchColor(WP::kHudItemShield));break;
+                default: {
+                    // Empty slot: big muted number centred (inventory.css:57 #4b5563).
+                    char num[4];
+                    std::snprintf(num, sizeof(num), "%d", slot + 1);
+                    if (bold != nullptr) { ImGui::PushFont(bold); }
+                    const ImVec2 numSize = ImGui::CalcTextSize(num);
+                    draw->AddText(ImVec2(iconC.x - numSize.x * 0.5F, iconC.y - numSize.y * 0.5F),
+                                  swatchColor(WP::kHudSlotNumberColor), num);
+                    if (bold != nullptr) { ImGui::PopFont(); }
+                    break;
+                }
+            }
+
+            // White key label at the slot's bottom edge (inventory.css:61-68).
+            char key[4];
+            std::snprintf(key, sizeof(key), "%d", slot + 1);
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            const ImVec2 keySize = ImGui::CalcTextSize(key);
+            draw->AddText(ImVec2(sx + slotSize * 0.5F - keySize.x * 0.5F,
+                                 slotTop + slotSize - keySize.y - 2.0F),
+                          IM_COL32(255, 255, 255, 235), key);
+            if (regular != nullptr) { ImGui::PopFont(); }
+        }
+
+        // Active item name to the right of the strip (inventory.css:71-79).
+        if (!m_activeWeaponName.empty()) {
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            const ImVec2 nameSize = ImGui::CalcTextSize(m_activeWeaponName.c_str());
+            draw->AddText(ImVec2(hotbarX + hotbarW + 16.0F, slotTop + slotSize * 0.5F - nameSize.y * 0.5F),
+                          IM_COL32(255, 255, 255, 245), m_activeWeaponName.c_str());
+            if (bold != nullptr) { ImGui::PopFont(); }
+        }
+
+        // ================================================================
+        // WEAPON-SKILL CARD (web WeaponSkills.tsx + ui.css). Bottom-right
+        // (ui.css:170-171 bottom:6rem right:1rem — confirmed by web_03; the
+        // task's "top-right" wording would DIVERGE from the reference, so the
+        // web position wins). Shows the ACTIVE weapon's skill only; the shield
+        // has no skill (web returns null), so the card hides for it.
+        // ================================================================
+        {
+            const char* skillTitle = nullptr;
+            WP::ColorSwatch skillColor = WP::kHudWeaponWaterColor;
+            if (m_activeWeaponName == "Water Spell") {
+                skillTitle = "Water Magic"; skillColor = WP::kHudWeaponWaterColor;
+            } else if (m_activeWeaponName == "Sword") {
+                skillTitle = "Sword"; skillColor = WP::kHudWeaponSwordColor;
+            } else if (m_activeWeaponName == "Bow") {
+                skillTitle = "Bow"; skillColor = WP::kHudWeaponBowColor;
+            }
+
+            if (skillTitle != nullptr && m_weaponSkillLevel > 0) {
+                // Progress fraction, web-exact (WeaponSkills.tsx:33-36): the bar
+                // spans only the CURRENT level's XP window, so subtract the
+                // level's cumulative floor via weaponXpForLevel.
+                const float curLevelXp = (m_weaponSkillLevel <= 1)
+                    ? 0.0F : WP::weaponXpForLevel(m_weaponSkillLevel);
+                const float need = static_cast<float>(m_weaponSkillXpToNext) - curLevelXp;
+                const float into = static_cast<float>(m_weaponSkillCurrentXp) - curLevelXp;
+                const float pct = (need > 0.0F) ? std::clamp(into / need, 0.0F, 1.0F) : 0.0F;
+
+                char titleText[64];
+                std::snprintf(titleText, sizeof(titleText), "%s Level %d", skillTitle, m_weaponSkillLevel);
+                char xpLine[64];
+                std::snprintf(xpLine, sizeof(xpLine), "%d / %d XP",
+                              m_weaponSkillCurrentXp, m_weaponSkillXpToNext);
+                char nextLine[64];
+                std::snprintf(nextLine, sizeof(nextLine), "%d XP to level %d",
+                              std::max(0, m_weaponSkillXpToNext - m_weaponSkillCurrentXp),
+                              m_weaponSkillLevel + 1);
+
+                if (bold != nullptr) { ImGui::PushFont(bold); }
+                const ImVec2 titleSize = ImGui::CalcTextSize(titleText);
+                if (bold != nullptr) { ImGui::PopFont(); }
+                if (regular != nullptr) { ImGui::PushFont(regular); }
+                const ImVec2 xpLineSize = ImGui::CalcTextSize(xpLine);
+                const ImVec2 nextLineSize = ImGui::CalcTextSize(nextLine);
+                if (regular != nullptr) { ImGui::PopFont(); }
+
+                const float cardPad = 16.0F;
+                const float cardW = std::max(WP::kHudWeaponPanelMinWidth, titleSize.x + cardPad * 2.0F);
+                const float barH = 10.0F;
+                const float cardH = cardPad + titleSize.y + 12.0F + barH + 8.0F +
+                                    xpLineSize.y + 6.0F + nextLineSize.y + cardPad;
+                const float cardX = width - 16.0F - cardW;
+                const float cardBottom = height - WP::kHudPillBottomMargin;  // bottom:6rem
+                const float cardY = cardBottom - cardH;
+
+                draw->AddRectFilled(ImVec2(cardX, cardY), ImVec2(cardX + cardW, cardY + cardH),
+                                    IM_COL32(0, 0, 0, 230), WP::kHudWeaponPanelRadius);  // ui.css:172
+                draw->AddRect(ImVec2(cardX, cardY), ImVec2(cardX + cardW, cardY + cardH),
+                              swatchColor(skillColor, 90), WP::kHudWeaponPanelRadius, 0, 2.0F);  // ui.css border rgba(color,0.3)
+
+                float rowY = cardY + cardPad;
+                if (bold != nullptr) { ImGui::PushFont(bold); }
+                draw->AddText(ImVec2(cardX + (cardW - titleSize.x) * 0.5F, rowY),
+                              swatchColor(skillColor), titleText);
+                if (bold != nullptr) { ImGui::PopFont(); }
+                rowY += titleSize.y + 12.0F;
+
+                const float barX = cardX + cardPad;
+                const float barW = cardW - cardPad * 2.0F;
+                draw->AddRectFilled(ImVec2(barX, rowY), ImVec2(barX + barW, rowY + barH),
+                                    IM_COL32(55, 65, 81, 204), 6.0F);  // rgba(55,65,81,0.8) ui.css:241
+                if (pct > 0.0F) {
+                    draw->AddRectFilled(ImVec2(barX, rowY), ImVec2(barX + barW * pct, rowY + barH),
+                                        swatchColor(skillColor), 6.0F);
+                }
+                rowY += barH + 8.0F;
+
+                if (regular != nullptr) { ImGui::PushFont(regular); }
+                draw->AddText(ImVec2(cardX + (cardW - xpLineSize.x) * 0.5F, rowY),
+                              swatchColor(WP::kHudXpTextColor), xpLine);  // #d1d5db ui.css:279
+                rowY += xpLineSize.y + 6.0F;
+                draw->AddText(ImVec2(cardX + (cardW - nextLineSize.x) * 0.5F, rowY),
+                              swatchColor(WP::kHudNextAbilityColor), nextLine);  // #9ca3af ui.css:288
+                if (regular != nullptr) { ImGui::PopFont(); }
+            }
+        }
+
+        // ================================================================
+        // WAVE BANNER (web WaveDisplay.tsx .wave-display-counter): big white
+        // "ROUND N" over a "SURVIVE THE HORDE" subtitle, permanent, top:16px.
+        // The native pre-parity "Dogs remaining: X/Y" counter has no web
+        // counterpart during play, so it is removed under parity.
+        // ================================================================
+        {
+            char roundText[32];
+            std::snprintf(roundText, sizeof(roundText), "ROUND %u", m_currentWave);
+            ImFont* bannerFont = (title != nullptr) ? title : bold;
+            if (bannerFont != nullptr) { ImGui::PushFont(bannerFont); }
+            const ImVec2 roundSize = ImGui::CalcTextSize(roundText);
+            draw->AddText(ImVec2((width - roundSize.x) * 0.5F, WP::kHudWaveBannerTopMargin),
+                          swatchColor(WP::kHudWaveTitleColor), roundText);
+            if (bannerFont != nullptr) { ImGui::PopFont(); }
+
+            const char* subtitle = "SURVIVE THE HORDE";
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            const ImVec2 subSize = ImGui::CalcTextSize(subtitle);
+            draw->AddText(ImVec2((width - subSize.x) * 0.5F,
+                                 WP::kHudWaveBannerTopMargin + roundSize.y + 4.0F),
+                          swatchColor(WP::kHudWaveSubtitleColor), subtitle);
+            if (bold != nullptr) { ImGui::PopFont(); }
+        }
+    } else {
+        // ================================================================
+        // Pre-parity NATIVE-FLAVOR HUD (WebParity::kEnabled == false): the
+        // original bottom-left HP stack, yellow WAVE text + permanent dog
+        // counter, top-right SCORE, and combo. Preserved verbatim behind the
+        // flag so flipping parity off restores the native look for experiments.
+        // ================================================================
+        const float healthBarWidth = 360.0F;
+        const float healthBarHeight = 32.0F;
+        const float healthBarX = 32.0F;
+        const float healthBarY = height - healthBarHeight - 120.0F;
+        {
+            const ImU32 bgColor = IM_COL32(20, 20, 30, 200);
+            const ImU32 fillColor = (healthRatio < 0.3F)
+                ? IM_COL32(230, 60, 50, 230)
+                : IM_COL32(60, 200, 90, 230);
+            const ImU32 borderColor = IM_COL32(255, 255, 255, 160);
+
+            draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
+                                ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), bgColor, 6.0F);
+            draw->AddRectFilled(ImVec2(healthBarX, healthBarY),
+                                ImVec2(healthBarX + healthBarWidth * healthRatio, healthBarY + healthBarHeight), fillColor, 6.0F);
+            draw->AddRect(ImVec2(healthBarX, healthBarY),
+                          ImVec2(healthBarX + healthBarWidth, healthBarY + healthBarHeight), borderColor, 6.0F, 0, 2.0F);
+
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            char label[64];
+            std::snprintf(label, sizeof(label), "HP  %d / %d",
+                          static_cast<int>(m_currentHealth), static_cast<int>(m_maxHealth));
+            const ImVec2 labelSize = ImGui::CalcTextSize(label);
+            draw->AddText(ImVec2(healthBarX + (healthBarWidth - labelSize.x) * 0.5F,
+                                 healthBarY + (healthBarHeight - labelSize.y) * 0.5F),
+                          IM_COL32(255, 255, 255, 240), label);
+            if (regular != nullptr) { ImGui::PopFont(); }
+        }
+
+        if (!m_activeWeaponName.empty()) {
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            char weaponText[80];
+            std::snprintf(weaponText, sizeof(weaponText), "%s  [%u]",
+                          m_activeWeaponName.c_str(), m_activeWeaponSlot);
+            const ImVec2 weaponSize = ImGui::CalcTextSize(weaponText);
+            const float weaponY = healthBarY - weaponSize.y - 8.0F;
+            draw->AddText(ImVec2(healthBarX, weaponY), IM_COL32(251, 191, 36, 245), weaponText);
+            if (bold != nullptr) { ImGui::PopFont(); }
+        }
+
+        {
+            const float xpRowY = healthBarY + healthBarHeight + 10.0F;
+            const float xpBarHeight = 14.0F;
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            char levelLabel[32];
+            std::snprintf(levelLabel, sizeof(levelLabel), "LVL %u", m_catLevel);
+            const ImVec2 levelSize = ImGui::CalcTextSize(levelLabel);
+            draw->AddText(ImVec2(healthBarX, xpRowY + (xpBarHeight - levelSize.y) * 0.5F),
+                          IM_COL32(255, 107, 53, 245), levelLabel);
+            if (bold != nullptr) { ImGui::PopFont(); }
+
+            const float xpBarX = healthBarX + levelSize.x + 12.0F;
+            const float xpBarRight = healthBarX + healthBarWidth;
+            const float xpBarWidth = xpBarRight - xpBarX;
+            const float xpRatio = std::clamp(m_xpProgress, 0.0F, 1.0F);
+            const ImU32 xpTrackColor = IM_COL32(55, 65, 81, 220);
+            const ImU32 xpBorderColor = IM_COL32(255, 255, 255, 120);
+            draw->AddRectFilled(ImVec2(xpBarX, xpRowY),
+                                ImVec2(xpBarRight, xpRowY + xpBarHeight), xpTrackColor, 4.0F);
+            if (xpRatio > 0.0F) {
+                const float xpFillRight = xpBarX + xpBarWidth * xpRatio;
+                const ImU32 xpFillLeft = IM_COL32(251, 191, 36, 235);
+                const ImU32 xpFillEnd = IM_COL32(245, 158, 11, 235);
+                draw->AddRectFilledMultiColor(ImVec2(xpBarX, xpRowY),
+                                              ImVec2(xpFillRight, xpRowY + xpBarHeight),
+                                              xpFillLeft, xpFillEnd, xpFillEnd, xpFillLeft);
+            }
+            draw->AddRect(ImVec2(xpBarX, xpRowY),
+                          ImVec2(xpBarRight, xpRowY + xpBarHeight), xpBorderColor, 4.0F, 0, 1.5F);
+            if (!m_abilityLine.empty()) {
+                const float abilityRowY = xpRowY + xpBarHeight + 6.0F;
+                draw->AddText(ImVec2(healthBarX, abilityRowY),
+                              IM_COL32(156, 163, 175, 220), m_abilityLine.c_str());
+            }
+        }
+
+        {
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            char waveText[64];
+            std::snprintf(waveText, sizeof(waveText), "WAVE  %u", m_currentWave);
+            const ImVec2 waveSize = ImGui::CalcTextSize(waveText);
+            draw->AddText(ImVec2((width - waveSize.x) * 0.5F, 20.0F),
+                          IM_COL32(255, 220, 80, 255), waveText);
+            if (bold != nullptr) { ImGui::PopFont(); }
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            char enemyText[64];
+            std::snprintf(enemyText, sizeof(enemyText), "Dogs remaining: %u / %u",
+                          m_remainingEnemies, m_totalEnemies);
+            const ImVec2 enemySize = ImGui::CalcTextSize(enemyText);
+            draw->AddText(ImVec2((width - enemySize.x) * 0.5F, 20.0F + waveSize.y + 4.0F),
+                          IM_COL32(220, 220, 230, 220), enemyText);
+            if (regular != nullptr) { ImGui::PopFont(); }
+        }
+
+        {
+            if (bold != nullptr) { ImGui::PushFont(bold); }
+            char scoreText[64];
+            std::snprintf(scoreText, sizeof(scoreText), "SCORE  %u", m_score);
+            const ImVec2 scoreSize = ImGui::CalcTextSize(scoreText);
+            draw->AddText(ImVec2(width - scoreSize.x - 24.0F, 20.0F),
+                          IM_COL32(255, 255, 255, 240), scoreText);
+            if (bold != nullptr) { ImGui::PopFont(); }
+        }
+
+        if (m_combo > 1) {
+            if (regular != nullptr) { ImGui::PushFont(regular); }
+            char comboText[48];
+            std::snprintf(comboText, sizeof(comboText), "Combo x%u", m_combo);
+            const ImVec2 comboSize = ImGui::CalcTextSize(comboText);
+            draw->AddText(ImVec2(width - comboSize.x - 24.0F, 60.0F),
+                          IM_COL32(255, 180, 40, 230), comboText);
+            if (regular != nullptr) { ImGui::PopFont(); }
         }
     }
 
-    // ------------------------------------ Active weapon indicator (above HP bar).
-    // Mirrors the web InventoryHotbar's active-slot label (InventoryHotbar.tsx:66-70):
-    // the selected item's name plus its 1-based slot key. Native has no on-screen
-    // hotbar grid yet, so this compact readout is the survival player's only cue for
-    // which weapon/spell number-key 1-9 is live. Coloured amber (#fbbf24) to match the
-    // web active-slot highlight border (styles/components/inventory.css:27). Hidden
-    // until a name is fed, so it never shows a blank "[1]" before the hotbar wires up.
-    if (!m_activeWeaponName.empty()) {
-        if (bold != nullptr) {
-            ImGui::PushFont(bold);
-        }
-        char weaponText[80];
-        std::snprintf(weaponText, sizeof(weaponText), "%s  [%u]",
-                      m_activeWeaponName.c_str(), m_activeWeaponSlot);
-        const ImVec2 weaponSize = ImGui::CalcTextSize(weaponText);
-        // Sit one text-height above the HP bar, left-aligned to the same column.
-        const float weaponY = healthBarY - weaponSize.y - 8.0F;
-        draw->AddText(ImVec2(healthBarX, weaponY), IM_COL32(251, 191, 36, 245), weaponText);
-        if (bold != nullptr) {
-            ImGui::PopFont();
-        }
-    }
+    // ---------------------------------------- Enemy overhead health bars
+    // Web LocalEnemySystem.tsx:483-494: a billboarded #333 track + health-tiered
+    // fill floating 1.5 world-units above every LIVING dog. Projected here with
+    // the fed camera view-projection and drawn on the foreground draw list so the
+    // bars sit over the 3D dogs. Rendered only when the game layer has fed a
+    // camera and at least one enemy this frame (INTEGRATION: see setEnemyBarCamera
+    // / addEnemyBar); empty otherwise, so this is inert until wired.
+    if (m_enemyBarCameraValid && !m_enemyBars.empty()) {
+        const Engine::mat4 view =
+            m_enemyBarCamera.rotation.toMatrix().transposed() *
+            Engine::mat4::translate(Engine::vec3(-m_enemyBarCamera.position.x,
+                                                 -m_enemyBarCamera.position.y,
+                                                 -m_enemyBarCamera.position.z));
+        const Engine::mat4 proj = Engine::mat4::perspective(
+            m_enemyBarFovY, m_enemyBarAspect, m_enemyBarNear, m_enemyBarFar);
+        const Engine::mat4 viewProj = proj * view;
+        const Engine::vec3 camRight = m_enemyBarCamera.right();
+        const float halfW = WP::kHudEnemyBarWorldWidth * 0.5F;
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
 
-    // ------------------------------------- Cat level + XP bar (below the HP bar).
-    // Mirrors web CatStats: '🐱 Lv.{level}' (CatStats.tsx:125-127) plus the XP progress
-    // bar (CatStats.tsx:133-137) whose fill = xpIntoLevel/xpNeededForLevel. Native feeds
-    // LevelingSystem::getXPProgress() (already normalised 0..1). Styled to match the HP
-    // bar's primitives (rounded track + fill + border) so the two stats read as one
-    // column, but thinner to echo the web bar's slim 6px track. Colours cite the web
-    // CSS: track #374151 (ui.css:50), amber gradient #fbbf24→#f59e0b (ui.css:58), and
-    // the 'LVL N' caption in cat-level orange #ff6b35 (ui.css:32).
-    {
-        const float xpRowY = healthBarY + healthBarHeight + 10.0F;
-        const float xpBarHeight = 14.0F;
+        for (const auto& bar : m_enemyBars) {
+            const Engine::vec3 worldTop(bar.worldPosition.x,
+                                        bar.worldPosition.y + WP::kHudEnemyBarWorldHeight,
+                                        bar.worldPosition.z);
+            const Engine::vec3 leftWorld(worldTop.x - camRight.x * halfW,
+                                         worldTop.y - camRight.y * halfW,
+                                         worldTop.z - camRight.z * halfW);
+            const Engine::vec3 rightWorld(worldTop.x + camRight.x * halfW,
+                                          worldTop.y + camRight.y * halfW,
+                                          worldTop.z + camRight.z * halfW);
 
-        // 'LVL N' caption to the left of the bar (web renders the level as its own text
-        // segment ahead of the XP bar). Drawn bold in cat-level orange.
-        if (bold != nullptr) {
-            ImGui::PushFont(bold);
-        }
-        char levelLabel[32];
-        std::snprintf(levelLabel, sizeof(levelLabel), "LVL %u", m_catLevel);
-        const ImVec2 levelSize = ImGui::CalcTextSize(levelLabel);
-        // Vertically centre the caption on the (thinner) XP bar.
-        draw->AddText(ImVec2(healthBarX, xpRowY + (xpBarHeight - levelSize.y) * 0.5F),
-                      IM_COL32(255, 107, 53, 245), levelLabel);
-        if (bold != nullptr) {
-            ImGui::PopFont();
-        }
+            ImVec2 centerScreen, leftScreen, rightScreen;
+            float clipW = 0.0F;
+            if (!projectWorldPoint(viewProj, worldTop, width, height, centerScreen, clipW) ||
+                !projectWorldPoint(viewProj, leftWorld, width, height, leftScreen, clipW) ||
+                !projectWorldPoint(viewProj, rightWorld, width, height, rightScreen, clipW)) {
+                continue;  // off-screen / behind the camera
+            }
 
-        // XP bar occupies the column width remaining after the caption, and ends flush
-        // with the HP bar's right edge so both bars share the same right margin.
-        const float xpBarX = healthBarX + levelSize.x + 12.0F;
-        const float xpBarRight = healthBarX + healthBarWidth;
-        const float xpBarWidth = xpBarRight - xpBarX;
-        const float xpRatio = std::clamp(m_xpProgress, 0.0F, 1.0F);
+            const float barPixW = std::max(6.0F, std::fabs(rightScreen.x - leftScreen.x));
+            const float barPixH = std::max(2.0F,
+                barPixW * (WP::kHudEnemyBarWorldBgHeight / WP::kHudEnemyBarWorldWidth));
+            const float barLeft = centerScreen.x - barPixW * 0.5F;
+            const float barTop = centerScreen.y - barPixH * 0.5F;
 
-        const ImU32 xpTrackColor = IM_COL32(55, 65, 81, 220);   // web #374151
-        const ImU32 xpBorderColor = IM_COL32(255, 255, 255, 120);
-
-        draw->AddRectFilled(ImVec2(xpBarX, xpRowY),
-                            ImVec2(xpBarRight, xpRowY + xpBarHeight), xpTrackColor, 4.0F);
-        // Horizontal amber gradient (#fbbf24 → #f59e0b) over just the filled portion,
-        // reproducing the web linear-gradient(90deg, ...) fill.
-        if (xpRatio > 0.0F) {
-            const float xpFillRight = xpBarX + xpBarWidth * xpRatio;
-            const ImU32 xpFillLeft = IM_COL32(251, 191, 36, 235);   // web #fbbf24
-            const ImU32 xpFillEnd = IM_COL32(245, 158, 11, 235);    // web #f59e0b
-            draw->AddRectFilledMultiColor(ImVec2(xpBarX, xpRowY),
-                                          ImVec2(xpFillRight, xpRowY + xpBarHeight),
-                                          xpFillLeft, xpFillEnd, xpFillEnd, xpFillLeft);
-        }
-        draw->AddRect(ImVec2(xpBarX, xpRowY),
-                      ImVec2(xpBarRight, xpRowY + xpBarHeight), xpBorderColor, 4.0F, 0, 1.5F);
-
-        // Ability strip (web CatStats.tsx:64-75): unlocked ability names +
-        // the next-unlock hint, one muted line under the XP bar. Text is
-        // composed by the game layer (it owns the LevelingSystem state);
-        // an empty line collapses the row entirely.
-        if (!m_abilityLine.empty()) {
-            const float abilityRowY = xpRowY + xpBarHeight + 6.0F;
-            draw->AddText(ImVec2(healthBarX, abilityRowY),
-                          IM_COL32(156, 163, 175, 220),  // web muted grey #9ca3af
-                          m_abilityLine.c_str());
-        }
-    }
-
-    // ---------------------------------------------- Wave / enemies (top-center)
-    {
-        if (bold != nullptr) {
-            ImGui::PushFont(bold);
-        }
-        char waveText[64];
-        std::snprintf(waveText, sizeof(waveText), "WAVE  %u", m_currentWave);
-        const ImVec2 waveSize = ImGui::CalcTextSize(waveText);
-        draw->AddText(ImVec2((width - waveSize.x) * 0.5F, 20.0F),
-                      IM_COL32(255, 220, 80, 255), waveText);
-        if (bold != nullptr) {
-            ImGui::PopFont();
-        }
-
-        if (regular != nullptr) {
-            ImGui::PushFont(regular);
-        }
-        char enemyText[64];
-        std::snprintf(enemyText, sizeof(enemyText), "Dogs remaining: %u / %u",
-                      m_remainingEnemies, m_totalEnemies);
-        const ImVec2 enemySize = ImGui::CalcTextSize(enemyText);
-        draw->AddText(ImVec2((width - enemySize.x) * 0.5F, 20.0F + waveSize.y + 4.0F),
-                      IM_COL32(220, 220, 230, 220), enemyText);
-        if (regular != nullptr) {
-            ImGui::PopFont();
-        }
-    }
-
-    // ------------------------------------------------------- Score (top-right)
-    {
-        if (bold != nullptr) {
-            ImGui::PushFont(bold);
-        }
-        char scoreText[64];
-        std::snprintf(scoreText, sizeof(scoreText), "SCORE  %u", m_score);
-        const ImVec2 scoreSize = ImGui::CalcTextSize(scoreText);
-        draw->AddText(ImVec2(width - scoreSize.x - 24.0F, 20.0F),
-                      IM_COL32(255, 255, 255, 240), scoreText);
-        if (bold != nullptr) {
-            ImGui::PopFont();
-        }
-    }
-
-    // ----------------------------------------------------- Combo under score
-    if (m_combo > 1) {
-        if (regular != nullptr) {
-            ImGui::PushFont(regular);
-        }
-        char comboText[48];
-        std::snprintf(comboText, sizeof(comboText), "Combo x%u", m_combo);
-        const ImVec2 comboSize = ImGui::CalcTextSize(comboText);
-        draw->AddText(ImVec2(width - comboSize.x - 24.0F, 60.0F),
-                      IM_COL32(255, 180, 40, 230), comboText);
-        if (regular != nullptr) {
-            ImGui::PopFont();
+            // Background track (#333333, tsx:486).
+            fg->AddRectFilled(ImVec2(barLeft, barTop), ImVec2(barLeft + barPixW, barTop + barPixH),
+                              swatchColor(WP::kHudEnemyBarBg));
+            // Health-tiered fill (tsx:491-492), left-anchored, slightly inset.
+            const float ratio = std::clamp(bar.healthRatio, 0.0F, 1.0F);
+            const WP::ColorSwatch fillSwatch =
+                (ratio > WP::kHudEnemyBarHighThreshold) ? WP::kHudEnemyBarHigh
+                : (ratio > WP::kHudEnemyBarMidThreshold) ? WP::kHudEnemyBarMid
+                                                         : WP::kHudEnemyBarLow;
+            const float fgInset = barPixH * 0.15F;
+            const float fgH = barPixH - fgInset * 2.0F;
+            fg->AddRectFilled(ImVec2(barLeft, barTop + fgInset),
+                              ImVec2(barLeft + barPixW * ratio, barTop + fgInset + fgH),
+                              swatchColor(fillSwatch));
         }
     }
 
@@ -534,6 +878,35 @@ void HUD::setXpProgress(float progress) {
 
 void HUD::setAbilityLine(const std::string& line) {
     m_abilityLine = line;
+}
+
+void HUD::setActiveWeaponSkill(int level, int currentXp, int xpToNextLevel) {
+    // The HUD derives the card's title + colour from m_activeWeaponName; these
+    // are just the raw numbers it cannot know. Level <= 0 hides the card (the
+    // web has no skill for the shield). Store as-is; the render path clamps.
+    m_weaponSkillLevel = level;
+    m_weaponSkillCurrentXp = currentXp;
+    m_weaponSkillXpToNext = xpToNextLevel;
+}
+
+void HUD::setEnemyBarCamera(const Engine::Transform& cameraTransform,
+                            float fovYRadians, float aspect,
+                            float nearPlane, float farPlane) {
+    m_enemyBarCamera = cameraTransform;
+    m_enemyBarFovY = fovYRadians;
+    m_enemyBarAspect = aspect;
+    m_enemyBarNear = nearPlane;
+    m_enemyBarFar = farPlane;
+    m_enemyBarCameraValid = true;
+}
+
+void HUD::clearEnemyBars() {
+    // Cheap: keeps the vector's capacity so per-frame re-adds don't realloc.
+    m_enemyBars.clear();
+}
+
+void HUD::addEnemyBar(const Engine::vec3& worldPosition, float healthRatio) {
+    m_enemyBars.push_back(EnemyBar{worldPosition, healthRatio});
 }
 
 // ============================================================================
