@@ -87,6 +87,25 @@ inline constexpr float kEnemyAttackCooldown = 1.0f;   // tsx:349 (1000 ms)
 inline constexpr float kEnemyAggroRange = 10000.0f;
 inline constexpr float kEnemyIdleWait = 0.0f;
 
+// gameStore.ts:671-693 (damagePlayer) — the web applies incoming enemy
+// melee with ZERO player invincibility. damagePlayer(amount) is a bare
+// `health = max(0, health - amount)` with no i-frame guard, and every dog
+// swings on its OWN 1000 ms cooldown (LocalEnemySystem.tsx:353-377, keyed on
+// per-enemy `enemy.lastAttackTime`). Nothing arbitrates between dogs, so N
+// dogs standing in the 1.2 m ring each land their full 15 in the SAME frame —
+// web melee is uncapped (an N-dog swarm bursts up to N*15/frame).
+//
+// The pre-parity native AI instead stamped a SHARED 0.2 s player i-frame after
+// any single dog hit and gated every other dog behind it, which silently
+// capped a swarm to 15 damage / 0.2 s (a 75 DPS ceiling) — strictly gentler
+// than the web when the player is mobbed. That divergence is cited to NO web
+// literal and was never recorded as a deliberate divergence, so under parity
+// we neutralize it: EnemyAISystem stamps THIS value (0 s) after a dog hit
+// instead of 0.2 s and drops the shared-i-frame gate, so each dog's 15 lands
+// independently exactly like the web. The target is literally zero because the
+// web has no melee i-frame at all — this is a parity value, not a native tune.
+inline constexpr float kEnemyMeleeIFrameSeconds = 0.0f;
+
 // ---------------------------------------------------------------------
 // Player — reference: src/config/gameConfig.ts PLAYER (these ARE the
 // live values: CatCharacter/index.tsx imports GAME_CONFIG for movement)
