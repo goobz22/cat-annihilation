@@ -218,6 +218,22 @@ public:
             // side effect of mutating m_freeRects, and the outer loop
             // just drives it to a fixed point.
         }
+
+        // Fully-empty reset. Pairwise strip merging (mergeOnce) can only
+        // coalesce rects that share a COMPLETE edge, and a guillotine
+        // free history can end in a "pinwheel" partition where no two
+        // free rects do — leaving the atlas provably empty yet unable to
+        // serve a full-size insert (found 2026-07-16 by the seeded
+        // property sweep: CAT_TEST_SEED=12345/777 reproduce usedPixels()
+        // == 0 with insert(width, height) failing). The general fix is a
+        // rectilinear-union defragmenter, which is out of proportion for
+        // a shadow atlas; the zero-used case is exact, O(1), and covers
+        // the failure players would actually hit (a full churn cycle
+        // followed by a large cascade allocation).
+        if (m_usedPixels == 0) {
+            m_freeRects.clear();
+            m_freeRects.push_back(PackedRect{0, 0, m_width, m_height});
+        }
     }
 
     /**
