@@ -151,52 +151,102 @@ void EnemyAISystem::updateAttackingState(CatEngine::Entity entity, EnemyComponen
     // Attack if cooldown is ready
     if (enemy.canAttack()) {
         auto* targetHealth = ecs_->getComponent<HealthComponent>(enemy.target);
-        if (targetHealth && !targetHealth->isInvincible()) {
-            // Web-parity shield front-arc negation (LocalEnemySystem.tsx:356-375):
-            // if the player is raising the shield and this dog is attacking from
-            // within the front arc of the player's facing, the blow is fully
-            // negated — no health is lost. The dog still "swings" and is put on
-            // cooldown below (matching tsx:377, where enemy.lastAttackTime is
-            // stamped OUTSIDE the shieldBlocks branch), so a blocked dog does not
-            // retry every frame; it just harmlessly bonks the shield each cycle.
-            const bool negatedByShield =
-                isAttackNegatedByShield(enemy, *transform, *targetTransform);
-
-            if (!negatedByShield) {
-                // Route enemy damage through HealthComponent::damage() instead
-                // of mutating currentHealth directly. The direct-mutation
-                // pre-fix path:
-                //
-                //   (a) bypassed HealthComponent::damage()'s own invincibility
-                //       + death-flag bookkeeping, so a target dropped to ≤0 hp
-                //       by this branch never flipped isDead until the next
-                //       HealthSystem::updateHealth tick — a one-frame window
-                //       where an enemy could deal a "post-mortem" second hit on
-                //       the same target before HealthSystem caught up.
-                //
-                //   (b) never tagged a damage source, so the friendly-fire
-                //       detection layer (HitInfo.attacker / HealthComponent
-                //       callbacks) couldn't tell a dog-on-cat hit from a dog-
-                //       on-dog hit. Routing through damage() and stamping
-                //       lastDamageType=Physical along with the entity-tagged
-                //       fields means the death callback's EntityDeathEvent
-                //       picks the right (attacker, target) pair for whatever
-                //       game-layer subscriber wants to gate on it.
-                //
-                // The hand-set 0.2 s i-frame is preserved because the dog AI
-                // intentionally uses a tighter window than HealthComponent's
-                // 0.5 s default (dogs need to be able to chain-attack faster
-                // than the player). We override AFTER damage() because damage()
-                // writes invincibilityDuration into invincibilityTimer.
-                targetHealth->lastDamageType = DamageType::Physical;
-                targetHealth->damage(enemy.attackDamage);
-                targetHealth->invincibilityTimer = 0.2f;
+        if (targetHealth) {
+            // ---- Shared-i-frame gate: web parity removes it -----------------
+            // The pre-parity native build stamped a shared 0.2 s player i-frame
+            // after ANY dog hit (below) and gated every other attacking dog
+            // behind !isInvincible(), so a mob could only land 15 damage per
+            // 0.2 s — a 75 DPS ceiling that made a swarm strictly gentler than
+            // the web. The web has no such shared window: damagePlayer
+            // (gameStore.ts:671-693) subtracts every hit with ZERO invincibility
+            // and each dog swings on its own 1000 ms cooldown
+            // (LocalEnemySystem.tsx:353-377, keyed on per-enemy lastAttackTime),
+            // so N dogs in the ring each land their full 15 in the SAME frame.
+            // Under parity we therefore DROP the gate and evaluate every
+            // attacking dog's blow independently; with parity off the native
+            // gate is preserved for native-flavor balance. `WebParity::kEnabled`
+            // is constexpr, so the unused branch folds out — no per-frame cost.
+            //
+            // Skipping the gate ALSO skips the cooldown reset (as the original
+            // did), so a native dog blocked by the shared i-frame does not
+            // consume its swing and re-attempts next frame — unchanged behavior
+            // off parity.
+            bool blockedBySharedIFrame = false;
+            if constexpr (!WebParity::kEnabled) {
+                blockedBySharedIFrame = targetHealth->isInvincible();
             }
 
-            // Reset attack cooldown whether or not the shield ate the hit — a
-            // blocked swing still consumes the dog's attack, so it must wait a
-            // full cooldown before bonking the shield again.
-            enemy.attackCooldownTimer = enemy.attackCooldown;
+            if (!blockedBySharedIFrame) {
+                // Web-parity shield front-arc negation (LocalEnemySystem.tsx:356-375):
+                // if the player is raising the shield and this dog is attacking from
+                // within the front arc of the player's facing, the blow is fully
+                // negated — no health is lost. The dog still "swings" and is put on
+                // cooldown below (matching tsx:377, where enemy.lastAttackTime is
+                // stamped OUTSIDE the shieldBlocks branch), so a blocked dog does not
+                // retry every frame; it just harmlessly bonks the shield each cycle.
+                const bool negatedByShield =
+                    isAttackNegatedByShield(enemy, *transform, *targetTransform);
+
+                if (!negatedByShield) {
+                    // Route enemy damage through HealthComponent::damage() instead
+                    // of mutating currentHealth directly. The direct-mutation
+                    // pre-fix path:
+                    //
+                    //   (a) bypassed HealthComponent::damage()'s own invincibility
+                    //       + death-flag bookkeeping, so a target dropped to ≤0 hp
+                    //       by this branch never flipped isDead until the next
+                    //       HealthSystem::updateHealth tick — a one-frame window
+                    //       where an enemy could deal a "post-mortem" second hit on
+                    //       the same target before HealthSystem caught up. Removing
+                    //       the shared i-frame under parity lets multiple dogs hit
+                    //       the player in one frame, so that window is now exercised
+                    //       every swarm — but it is HARMLESS for the player: the
+                    //       cat's HealthComponent::onDeath is deliberately UNSET
+                    //       (CatEntity.cpp), so damage() never dispatches death
+                    //       inline, and the canonical Playing→GameOver transition
+                    //       fires EXACTLY ONCE from HealthSystem::updateHealth behind
+                    //       its `!isDead` guard. A same-frame second hit on a 0-hp
+                    //       player therefore cannot double-fire GameOver.
+                    //
+                    //   (b) never tagged a damage source, so the friendly-fire
+                    //       detection layer (HitInfo.attacker / HealthComponent
+                    //       callbacks) couldn't tell a dog-on-cat hit from a dog-
+                    //       on-dog hit. Routing through damage() and stamping
+                    //       lastDamageType=Physical along with the entity-tagged
+                    //       fields means the death callback's EntityDeathEvent
+                    //       picks the right (attacker, target) pair for whatever
+                    //       game-layer subscriber wants to gate on it.
+                    targetHealth->lastDamageType = DamageType::Physical;
+                    targetHealth->damage(enemy.attackDamage);
+
+                    // Overwrite the i-frame HealthComponent::damage() just wrote
+                    // (it stores invincibilityDuration — 0.5 s by default — into
+                    // invincibilityTimer). Under parity this becomes 0 s
+                    // (kEnemyMeleeIFrameSeconds), so the NEXT dog in the same swarm
+                    // is not blocked by damage()'s OWN internal i-frame check and
+                    // lands its own 15 this frame — reproducing the web's uncapped
+                    // melee. With parity off it stays the tighter 0.2 s native
+                    // window (dogs are meant to chain-attack faster than the
+                    // player's own i-frame budget). The native value is a local
+                    // constant on purpose: it is native-flavor balance, NOT a web
+                    // literal, so it does not belong in WebParityConfig.hpp.
+                    if constexpr (WebParity::kEnabled) {
+                        targetHealth->invincibilityTimer =
+                            WebParity::kEnemyMeleeIFrameSeconds;
+                    } else {
+                        constexpr float kNativeMeleeIFrameSeconds = 0.2f;
+                        targetHealth->invincibilityTimer = kNativeMeleeIFrameSeconds;
+                    }
+                }
+
+                // Reset attack cooldown whether or not the shield ate the hit — a
+                // blocked swing still consumes the dog's attack, so it must wait a
+                // full cooldown before bonking the shield again. Under parity this
+                // per-dog cooldown is the ONLY rate limit on melee (there is no
+                // shared player i-frame), so each dog still swings just once per
+                // its own 1.0 s kEnemyAttackCooldown, exactly like the web.
+                enemy.attackCooldownTimer = enemy.attackCooldown;
+            }
         }
     }
 }
