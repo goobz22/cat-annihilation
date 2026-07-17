@@ -468,6 +468,23 @@ inline float sunDirectionNormalizedZ() { return kSunDirectionZ / sunDirectionLen
 // records the web target for the shadow-pass wiring + its regression test.
 inline constexpr bool kShadowsEnabled = true;
 
+// Native shadow-map tuning. These are NOT web literals: BasicScene.tsx sets
+// NO shadow-mapSize and NO shadow-camera bounds on its directionalLight
+// (tsx:196), so three.js falls back to its defaults — a 512x512 map over a
+// tiny ±5-unit orthographic box (near 0.5 / far 500) fixed at the world
+// origin. That default only shadows a ~10x10 patch near (0,0) and would leave
+// the rest of the ±240 arena shadowless. We therefore diverge UP (a deliberate
+// quality divergence, not a behavioral one): a 2048² map over an 80-unit
+// orthographic box that FOLLOWS the player keeps full-resolution soft shadows
+// under the action everywhere the camera goes. The native shadow pass
+// (engine/renderer/passes/ScenePass.cpp) reads these so the box size / range
+// live in ONE place with the pinning test, exactly like the sun direction.
+inline constexpr int   kShadowMapResolution   = 2048;   // depth texture is NxN
+inline constexpr float kShadowOrthoHalfExtent = 40.0f;  // half-width => 80-unit box
+inline constexpr float kShadowLightDistance   = 100.0f; // sun eye offset up-sun from focus
+inline constexpr float kShadowOrthoNear       = 1.0f;   // light-space near plane
+inline constexpr float kShadowOrthoFar        = 250.0f; // light-space far plane (covers casters)
+
 // Player ↔ tree collision — the web SURVIVAL scene has NONE, so under
 // parity the cat walks straight through every tree/bush/rock. Full trace:
 //   - SurvivalScene (BasicScene.tsx:181-211) mounts NEITHER

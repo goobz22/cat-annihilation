@@ -31,7 +31,25 @@
 // to the web port's #4c6156 near=30 far=150 forest fog. Until that
 // lands, fog still blends to SKY_COLOR with the pre-port density.
 
+// Percentage-closer-filtering helpers (pcfShadow + SHADOW_BIAS/PCF_RADIUS via
+// constants.glsl). Reused verbatim from the engine's shadow toolkit rather
+// than re-inlining a Poisson kernel here (2026-07-17 directional-shadow iter).
+#include "../shadows/pcf.glsl"
+
 layout(set = 0, binding = 0) uniform sampler2D grassSampler;
+
+// ---- Real-time directional shadow map (set 1) --------------------------
+// Written by ScenePass's depth-only shadow pass each frame from the sun's
+// orthographic view, then sampled here so the ground darkens where a
+// tree / cat / dog occludes the sun — the visible payload of web parity
+// (<Canvas shadows> in BasicScene.tsx). Bound once per frame; the same set
+// serves the terrain and entity pipelines (layout-compatible set 1).
+layout(set = 1, binding = 0) uniform sampler2D uShadowMap;
+layout(set = 1, binding = 1) uniform ShadowUBO {
+    mat4 invCameraViewProj; // (unused by terrain — entities reconstruct with it)
+    mat4 lightViewProj;     // world -> sun light-clip, matches the depth render
+    vec4 params;            // xy = framebuffer size in px; zw reserved
+} shadowU;
 
 layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec2 vTexCoord;
@@ -94,6 +112,36 @@ const float FOG_FAR   = 150.0;
 // the C++ constant and this one in the same commit.
 const float GRASS_TILE_SIZE = 500.0;
 
+// Sample the sun shadow map for a world-space receiver point.
+// Returns the OCCLUSION fraction in [0, 1]: 0 = fully lit, 1 = fully in
+// shadow (pcfShadow's convention). Callers multiply the DIRECT (Lambert)
+// term by (1 - occlusion) only — never the ambient — so shadowed grass
+// keeps the 0.5 ambient floor exactly like three.js keeps its ambientLight
+// under a shadow (shadows attenuate the directional contribution alone).
+float sunShadowOcclusion(vec3 worldPos, vec3 n) {
+    vec4 lightClip = shadowU.lightViewProj * vec4(worldPos, 1.0);
+    // Ortho light projection keeps w == 1, but divide anyway so the same
+    // helper is correct if a future perspective spot light reuses it.
+    vec3 proj = lightClip.xyz / lightClip.w;
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    // Outside the light frustum (beyond the player-following box, or past the
+    // near/far depth range) there is no recorded occluder -> treat as lit.
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        proj.z < 0.0 || proj.z > 1.0) {
+        return 0.0;
+    }
+    // Slope-scaled depth bias: grazing-angle receivers (n nearly perpendicular
+    // to the sun) need more bias to avoid self-shadow "acne"; steep receivers
+    // need almost none, which keeps contact shadows tight (minimal
+    // peter-panning). The rasteriser also applies a constant+slope depth bias
+    // when writing the map (ScenePass shadow pipelines), so this fragment bias
+    // is deliberately small — it only cleans up residual acne the raster bias
+    // misses. Clamp keeps tan()'s blow-up near 90 degrees bounded.
+    float ndl = clamp(dot(n, SUN_DIR), 0.0, 1.0);
+    float bias = clamp(SHADOW_BIAS * tan(acos(ndl)), SHADOW_BIAS * 0.5, SHADOW_BIAS * 4.0);
+    return pcfShadow(uShadowMap, vec3(uv, proj.z), bias);
+}
+
 void main() {
     // Sample the procedural grass at the world xz position. REPEAT
     // address mode (configured in ScenePass::CreateTextureResources)
@@ -105,7 +153,12 @@ void main() {
     float lambert = max(dot(n, SUN_DIR), 0.0);
 
     vec3 ambient = albedo * 0.5; // web BasicScene.tsx:195 ambientLight intensity 0.5 (WebParity::kAmbientLightIntensity)
-    vec3 diffuse = albedo * SUN_COLOR * lambert;
+    // Directional (Lambert) term only is attenuated by the shadow — matching
+    // three.js, where a shadow removes the directionalLight contribution but
+    // leaves ambientLight untouched. Multiplying the ambient too would crush
+    // shadowed grass to near-black and regress the deliberate 0.5 ambient floor.
+    float occlusion = sunShadowOcclusion(vWorldPos, n);
+    vec3 diffuse = albedo * SUN_COLOR * lambert * (1.0 - occlusion);
     vec3 litColor = ambient + diffuse;
 
     // ---- Distance fog -----------------------------------------------

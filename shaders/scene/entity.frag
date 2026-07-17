@@ -51,6 +51,10 @@
 // the fragment, and the default-white texture handles entities whose
 // model didn't ship a baseColor at all.
 
+// PCF helpers (pcfShadow + SHADOW_BIAS/PCF_RADIUS via constants.glsl),
+// reused for the real-time directional shadow term (2026-07-17 iter).
+#include "../shadows/pcf.glsl"
+
 layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec2 vUV;
@@ -65,6 +69,22 @@ layout(location = 0) out vec4 outColor;
 // and any model lacking baseColorImageCpu point at a shared 1×1 white
 // fallback so the sampler always reads valid data.
 layout(set = 0, binding = 0) uniform sampler2D uBaseColor;
+
+// ---- Real-time directional shadow map (set 1) --------------------------
+// The SAME set 1 the terrain pipeline binds — one shadow map + one light
+// matrix serve every receiver. entity.frag is shared by BOTH the static and
+// GPU-skinned entity pipelines, so shadows MUST live at set 1 in both of
+// those pipeline layouts; the skinned pipeline consequently moves its bone
+// palette to set 2 (see entity_skinned.vert). Reading the shadow map here
+// lets cats/dogs receive tree shadows and self/inter-shadow, not just the
+// ground — a superset of the web (whose ground is the only receiveShadow
+// surface), which only ever looks better, never wrong.
+layout(set = 1, binding = 0) uniform sampler2D uShadowMap;
+layout(set = 1, binding = 1) uniform ShadowUBO {
+    mat4 invCameraViewProj; // clip -> world, to rebuild the fragment's world pos
+    mat4 lightViewProj;     // world -> sun light-clip, matches the depth render
+    vec4 params;            // xy = framebuffer size in px; zw reserved
+} shadowU;
 
 // Fragment push constant slice — atmospheric fog factor.
 //
@@ -103,6 +123,39 @@ const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);              // web directional ligh
 // Keeping the literal in two shaders is the unfortunate cost of not yet
 // having a shared GLSL header system.
 const vec3 FOG_COLOR = vec3(0.0723, 0.1193, 0.0929);
+
+// Sun shadow occlusion for a world-space receiver point (0 = lit, 1 = shadowed).
+// Identical semantics to scene.frag's sunShadowOcclusion — kept as a local copy
+// because the engine has no shared-GLSL-header mechanism yet (the same reason
+// FOG_COLOR is duplicated above). Only the DIRECT term is scaled by (1-this).
+float sunShadowOcclusion(vec3 worldPos, vec3 n) {
+    vec4 lightClip = shadowU.lightViewProj * vec4(worldPos, 1.0);
+    vec3 proj = lightClip.xyz / lightClip.w;
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        proj.z < 0.0 || proj.z > 1.0) {
+        return 0.0;
+    }
+    float ndl = clamp(dot(n, SUN_DIR), 0.0, 1.0);
+    float bias = clamp(SHADOW_BIAS * tan(acos(ndl)), SHADOW_BIAS * 0.5, SHADOW_BIAS * 4.0);
+    return pcfShadow(uShadowMap, vec3(uv, proj.z), bias);
+}
+
+// Rebuild this fragment's world position from the depth buffer + the inverse
+// camera view-projection. The entity vertex stages (entity.vert /
+// entity_skinned.vert) only forward normal/color/uv — NOT world position — so
+// growing their push constants to carry a model matrix would be the alternative
+// (and would push the entity vertex range past the portable 128-byte limit).
+// Reconstructing from gl_FragCoord instead keeps those vertex stages and the
+// hot draw loop's push layout completely untouched, at the cost of one
+// mat-vec here. gl_FragCoord.xy is in pixels; .z is already the Vulkan [0,1]
+// window depth, so ndc = (frag.xy/size)*2-1 with z passed straight through,
+// and invCameraViewProj is the exact inverse of the matrix that rendered it.
+vec3 reconstructWorldPos() {
+    vec2 ndcXY = (gl_FragCoord.xy / shadowU.params.xy) * 2.0 - 1.0;
+    vec4 worldH = shadowU.invCameraViewProj * vec4(ndcXY, gl_FragCoord.z, 1.0);
+    return worldH.xyz / worldH.w;
+}
 
 void main() {
     // Sample the authored baseColor texture with hardware-filtered linear
@@ -143,7 +196,10 @@ void main() {
     vec3 n = normalize(vNormal);
     float lambert = max(dot(n, SUN_DIR), 0.0);
     vec3 ambient = albedo * 0.5; // web BasicScene.tsx:195 ambientLight intensity 0.5 (WebParity::kAmbientLightIntensity)
-    vec3 diffuse = albedo * SUN_COLOR * lambert;
+    // Shadow attenuates the directional term ONLY (ambient floor preserved),
+    // matching three.js shadow semantics — same rule as scene.frag.
+    float occlusion = sunShadowOcclusion(reconstructWorldPos(), n);
+    vec3 diffuse = albedo * SUN_COLOR * lambert * (1.0 - occlusion);
     vec3 litColor = ambient + diffuse;
 
     // ---- Distance fog -----------------------------------------------

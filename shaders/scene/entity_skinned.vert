@@ -66,7 +66,15 @@ layout(push_constant) uniform PushConstants {
 // lays a mat4[256] out as 256 tightly-packed column-major mat4s —
 // byte-identical to memcpy'ing Engine::mat4 (vec4 columns[4]) straight
 // from Animator's palette vector, so the CPU upload is a single memcpy.
-layout(set = 1, binding = 0) uniform BonePalette {
+//
+// SET 2 (moved from set 1 on 2026-07-17 for the directional-shadow iter):
+// the shared entity.frag now samples the real-time shadow map at set 1, and
+// a fragment can only reference ONE set index for a given resource across
+// both the static and skinned pipelines it links into. Making shadows set 1
+// in BOTH entity pipeline layouts forces the palette (skinned-only) to the
+// next free slot, set 2. ScenePass::CreateSkinnedEntityPipeline lays out the
+// sets [0=baseColor, 1=shadow, 2=palette] and binds this at firstSet=2.
+layout(set = 2, binding = 0) uniform BonePalette {
     mat4 bones[256];
 } palette;
 

@@ -339,6 +339,48 @@ private:
     bool CreateSkinnedEntityPipeline();
     void DestroySkinnedEntityPipeline();
 
+    // ---- Real-time directional shadows (2026-07-17 iteration) -----------
+    //
+    // The web survival build renders three.js shadow maps (<Canvas shadows> +
+    // a castShadow directionalLight at [10,10,5], BasicScene.tsx). These
+    // functions give the native ScenePass the same: a depth-only pass renders
+    // shadow CASTERS (entities + the parity forest) from the sun's orthographic
+    // view into a depth texture each frame BEFORE the main pass, and the
+    // terrain/entity fragment shaders sample it (PCF) to attenuate the direct
+    // Lambert term only — matching three.js shadow semantics.
+    //
+    // CreateShadowSetLayout(): builds ONLY m_shadowSetLayout (set 1 =
+    //   {binding 0: sampler2D shadowMap, binding 1: ShadowUBO}). Called from
+    //   Setup BEFORE the terrain / entity / skinned pipelines because THEIR
+    //   layouts reference it at set 1 (the receiver side). Mirrors how
+    //   CreateTextureResources publishes m_textureDescriptorSetLayout before
+    //   CreatePipeline. A failure here fails Setup — it is a descriptor set
+    //   layout, essentially infallible on a working device.
+    //
+    // CreateShadowResources(): builds the caster side — the shadow depth image
+    //   + view, the depth-only render pass + framebuffer, the compare-free
+    //   sampler, the per-frame ShadowUBO ring + its descriptor sets, the
+    //   DEDICATED shadow bone-palette ring, and the two caster pipelines
+    //   (static + GPU-skinned). Core resources failing fails Setup; the caster
+    //   PIPELINES failing (missing SPIR-V on a stripped build) only disables
+    //   caster rendering — the shadow map is still cleared to 1.0 each frame so
+    //   receivers read "fully lit" and the scene renders exactly as pre-shadow.
+    //
+    // RecordShadowPass(): the per-frame depth render — begins the shadow render
+    //   pass (clears depth to 1.0), and, when WebParity::kShadowsEnabled and
+    //   the caster pipelines exist, draws every entity from the sun's view.
+    //
+    // ComputeSunLightViewProj(): builds the light-space view-projection for the
+    //   frame — a player-following orthographic box down the sun ray, with
+    //   texel snapping to keep shadow edges from shimmering as the box slides.
+    bool CreateShadowSetLayout();
+    bool CreateShadowResources();
+    void DestroyShadowResources();
+    void RecordShadowPass(VkCommandBuffer cmd,
+                          const std::vector<EntityDraw>& entities,
+                          const Engine::mat4& lightViewProj);
+    Engine::mat4 ComputeSunLightViewProj(const Engine::mat4& invCameraViewProj) const;
+
     // Lazy uploader for the per-Model skin-attribute side-car buffer
     // (binding 1 of the skinned pipeline): an interleaved
     // (ivec4 joints, vec4 weights) stream, stride 32 B, packed in the
@@ -697,6 +739,76 @@ private:
     // Active skinning route for palette-carrying draws. Default GPU —
     // the whole point of this iteration is animation ON at full fps.
     SkinningMode m_skinningMode = SkinningMode::GpuPalette;
+
+    // ---- Real-time directional shadow map (2026-07-17 iteration) -----------
+    //
+    // A single depth texture rendered from the sun's orthographic view each
+    // frame and sampled by the terrain + entity fragment shaders. ONE image is
+    // correct (not a ring): the shadow map is written then read within the same
+    // frame, and the single graphics queue serialises frame N's write+read
+    // before frame N+1's — a subpass dependency handles the in-frame
+    // write->sample hazard, the queue handles the cross-frame one.
+    VkImage        m_shadowMapImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_shadowMapMemory = VK_NULL_HANDLE;
+    VkImageView    m_shadowMapView   = VK_NULL_HANDLE;
+    VkRenderPass   m_shadowRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer  m_shadowFramebuffer = VK_NULL_HANDLE;
+    // Compare-free NEAREST sampler: the fragment shaders do MANUAL 25-tap PCF
+    // (pcf.glsl) reading raw depth, so no linear filtering (which D32_SFLOAT is
+    // not guaranteed to support) and no hardware depth-compare is needed.
+    VkSampler      m_shadowSampler   = VK_NULL_HANDLE;
+
+    // Caster (depth-only) pipelines: static for props/trees/bind-pose/CPU-
+    // skinned/cube casters, skinned for GPU-palette characters. Share nothing
+    // with the main pipelines except the per-Model vertex/index buffers they
+    // read. Push constant = mat4 lightMvp (lightViewProj * modelMatrix).
+    VkShaderModule   m_shadowCastVert        = VK_NULL_HANDLE;
+    VkShaderModule   m_shadowCastSkinnedVert = VK_NULL_HANDLE;
+    VkShaderModule   m_shadowCastFrag        = VK_NULL_HANDLE;
+    VkPipelineLayout m_shadowStaticPipelineLayout  = VK_NULL_HANDLE;
+    VkPipelineLayout m_shadowSkinnedPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline       m_shadowStaticPipeline  = VK_NULL_HANDLE;
+    VkPipeline       m_shadowSkinnedPipeline = VK_NULL_HANDLE;
+
+    // Set 1 for the RECEIVER (terrain/entity) pipelines: binding 0 = the shadow
+    // map sampler, binding 1 = the ShadowUBO (light matrix + inverse camera
+    // matrix + framebuffer size). Published by CreateShadowSetLayout before the
+    // receiver pipelines are built; one ring slot's set is bound per frame.
+    VkDescriptorSetLayout m_shadowSetLayout = VK_NULL_HANDLE;
+
+    // Per-frame ShadowUBO ring. std140 layout mirrored by the ShadowUBO block
+    // in scene.frag / entity.frag: two mat4 + one vec4 = 144 bytes. Ring depth
+    // = frames-in-flight (2) for the exact CPU-write-during-record vs
+    // GPU-read hazard the bone-palette ring documents. Each slot's descriptor
+    // set points binding 0 at the shared shadow map view + binding 1 at that
+    // slot's UBO buffer.
+    struct ShadowUboData {
+        Engine::mat4 invCameraViewProj; // clip -> world, for entity worldPos rebuild
+        Engine::mat4 lightViewProj;     // world -> sun light-clip
+        Engine::vec4 params;            // xy = framebuffer size (px); zw reserved
+    };
+    struct ShadowUboFrameSlot {
+        std::unique_ptr<RHI::VulkanBuffer> buffer;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    };
+    static constexpr uint32_t kShadowUboRingSlots = 2;
+    std::array<ShadowUboFrameSlot, kShadowUboRingSlots> m_shadowUboRing{};
+    VkDescriptorPool m_shadowUboDescriptorPool = VK_NULL_HANDLE;
+    uint64_t m_shadowUboFrameCounter = 0;
+
+    // DEDICATED shadow bone-palette ring (separate from m_bonePaletteRing so
+    // the main entity draw loop is untouched by the shadow feature). Reuses
+    // m_bonePaletteDescriptorSetLayout (identical dynamic-UBO layout) but has
+    // its own buffers + descriptor sets + pool. Both rings receive the SAME
+    // Animator palette per entity, so the shadow pose matches the lit pose.
+    std::array<BonePaletteFrameSlot, kBonePaletteRingSlots> m_shadowBonePaletteRing{};
+    VkDescriptorPool m_shadowBonePaletteDescriptorPool = VK_NULL_HANDLE;
+    uint64_t m_shadowPaletteFrameCounter = 0;
+
+    // Caster rendering armed = WebParity::kShadowsEnabled AND both caster
+    // pipelines came up. When false the shadow pass still runs but only clears
+    // the map to 1.0 (fully lit), so receivers look exactly like pre-shadow.
+    bool m_shadowCastersEnabled = false;
 
     // Shared unit-cube mesh (extents ±0.5, 24 verts, 36 indices)
     std::unique_ptr<RHI::VulkanBuffer> m_cubeVertexBuffer;

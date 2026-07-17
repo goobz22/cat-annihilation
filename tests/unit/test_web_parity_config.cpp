@@ -365,6 +365,25 @@ TEST_CASE("environment (sway, lighting, shadows, tree collision) matches the web
     // Shadows — BasicScene.tsx:190 <Canvas shadows> + :196 castShadow.
     CHECK(WebParity::kShadowsEnabled == true);
 
+    // Native shadow-map tuning (deliberate quality divergence — three.js uses
+    // its defaults; we follow the player with a bigger, higher-res box). These
+    // are pinned so the ScenePass shadow pass and the config can never silently
+    // drift apart; the invariants that MATTER are the relationships below.
+    CHECK(WebParity::kShadowMapResolution == 2048);
+    CHECK(WebParity::kShadowOrthoHalfExtent == 40.0f);
+    CHECK(WebParity::kShadowLightDistance == 100.0f);
+    CHECK(WebParity::kShadowOrthoNear == 1.0f);
+    CHECK(WebParity::kShadowOrthoFar == 250.0f);
+    // The light must sit FAR enough up-sun that the whole box is in front of
+    // the near plane, and the far plane must reach past the box's back corner
+    // (distance + the box half-diagonal ~ 40*sqrt(2) ~ 56.6). Both hold with
+    // margin — this is the relationship a future retune must not break.
+    CHECK(WebParity::kShadowLightDistance > WebParity::kShadowOrthoHalfExtent);
+    CHECK(WebParity::kShadowOrthoFar >
+          WebParity::kShadowLightDistance + WebParity::kShadowOrthoHalfExtent);
+    CHECK(WebParity::kShadowOrthoNear > 0.0f);
+    CHECK(WebParity::kShadowOrthoNear < WebParity::kShadowOrthoFar);
+
     // Tree collision — web survival has none (SurvivalScene mounts no
     // TerrainCollisionSystem); the cat walks through trees.
     CHECK(WebParity::kForestPlayerCollision == false);
