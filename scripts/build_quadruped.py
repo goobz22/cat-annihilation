@@ -482,8 +482,9 @@ def ground_to_floor(mesh_obj, anatomy):
     places entities (origin on terrain). Done BEFORE the armature is built, so the
     bones inherit the grounded landmarks and no object-transform offset leaks into
     the export. It is a pure translation, so it cannot affect deformation."""
-    corners = [mesh_obj.matrix_world @ Vector(c) for c in mesh_obj.bound_box]
-    floor = min(c.z for c in corners)
+    # Use the true lowest VERTEX (not the cached object bound_box, which can lag
+    # a direct vertex edit) so the rest feet land exactly on Z=0.
+    floor = min((mesh_obj.matrix_world @ v.co).z for v in mesh_obj.data.vertices)
     if abs(floor) < 1e-4:
         return 0.0
     for v in mesh_obj.data.vertices:
