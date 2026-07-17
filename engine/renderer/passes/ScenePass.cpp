@@ -9,6 +9,12 @@
 #include "../../cuda/particles/ParticleSystem.hpp"
 #include "../../../game/world/Terrain.hpp"
 #include "../../../game/world/GrassTexture.hpp"
+// Single source of truth for the shadow feature gate (kShadowsEnabled) and the
+// native shadow-map tuning (resolution / ortho box / range). ScenePass already
+// reaches into game/world/* for Terrain + GrassTexture, so pulling the shared
+// config header in the same manner keeps the shadow constants in ONE place with
+// their pinning test rather than duplicating magic numbers in the renderer.
+#include "../../../game/config/WebParityConfig.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -75,6 +81,12 @@ bool ScenePass::Setup(RHI::VulkanDevice* device, RHI::VulkanSwapchain* swapchain
         // and the terrain draw path falls back to the default-white set
         // so the sampler always reads valid data.
     }
+    // Shadow SET LAYOUT (set 1 = shadow sampler + light UBO) must exist BEFORE
+    // the terrain / entity / skinned pipelines are built, because their layouts
+    // reference it at set 1 (they are the shadow RECEIVERS). Same
+    // publish-before-consume ordering as CreateTextureResources vs
+    // CreatePipeline. Fatal on failure — it's a descriptor set layout.
+    if (!CreateShadowSetLayout()) return false;
     if (!CreatePipeline()) return false;
     if (!CreateEntityPipelineAndMesh()) return false;
     // GPU skinning (2026-07-16): palette ring MUST come up before the
@@ -90,6 +102,16 @@ bool ScenePass::Setup(RHI::VulkanDevice* device, RHI::VulkanSwapchain* swapchain
         std::cerr << "[ScenePass] GPU-skinning setup failed — animated "
                   << "entities fall back to bind-pose (static mesh); "
                   << "terrain/entity rendering unaffected\n";
+    }
+    // Real-time directional shadow map. Core resources (depth image, render
+    // pass, framebuffer, sampler, UBO ring) failing is fatal — the receiver
+    // pipelines already declare set 1 and their fragment shaders always sample
+    // it, so a valid shadow set MUST exist. Only the caster PIPELINES loading
+    // is soft: a stripped shader dir leaves m_shadowCastersEnabled false and
+    // the shadow map is cleared to 1.0 each frame (receivers read fully lit).
+    if (!CreateShadowResources()) {
+        std::cerr << "[ScenePass] Shadow core resources failed to initialise\n";
+        return false;
     }
     // Sky pipeline is created EAGERLY (same as other pipelines) but its
     // failure is non-fatal: the renderer falls back to the flat sky-blue
@@ -171,6 +193,12 @@ void ScenePass::Shutdown() {
     // textures.
     DestroyTextureResources();
     DestroyPipeline();
+    // Shadow resources after all pipelines are gone: m_shadowSetLayout is
+    // referenced by the receiver pipeline layouts (already destroyed above), and
+    // the caster pipelines / shadow render pass / shadow map image are torn down
+    // here. The vkDeviceWaitIdle at the top of Shutdown drained any frame that
+    // could still be writing or sampling the shadow map.
+    DestroyShadowResources();
     DestroyFramebuffers();
     DestroyDepthResources();
 
@@ -513,10 +541,19 @@ bool ScenePass::CreatePipeline() {
     // in Setup(). No fallback required: if LoadGrassTexture failed,
     // the bind path uses m_defaultWhiteTexture's descriptor set
     // (which is always valid) so the sampler still reads valid data.
+    // set 0 = grass baseColor sampler; set 1 = shadow (sampler + light UBO) so
+    // scene.frag can sample the real-time shadow map. The terrain, static-entity
+    // and skinned-entity layouts all share these two set-layout HANDLES for sets
+    // 0 and 1, which makes them Vulkan-"compatible" for those sets — a set-1
+    // (shadow) bind therefore survives every pipeline switch inside the frame.
+    VkDescriptorSetLayout terrainSetLayouts[2] = {
+        m_textureDescriptorSetLayout,
+        m_shadowSetLayout,
+    };
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_textureDescriptorSetLayout;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = terrainSetLayouts;
     layoutInfo.pushConstantRangeCount = 2;
     layoutInfo.pPushConstantRanges = pcRanges;
 
@@ -974,6 +1011,38 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
                   << "," << (clipW != 0 ? clipZ/clipW : 0) << ")\n";
     }
 
+    // ---- Real-time directional shadow map (recorded BEFORE the main pass) ---
+    //
+    // Order matters: the depth-only shadow pass must fully render + transition
+    // the shadow map to SHADER_READ_ONLY_OPTIMAL before the main pass's
+    // fragment shaders sample it. Both passes are recorded into THIS command
+    // buffer back-to-back; the shadow render pass's subpass dependencies bridge
+    // the write->sample hazard (see CreateShadowResources). We build the sun's
+    // light-space matrix from the camera's inverse view-projection (so the
+    // ortho box follows the player), update this frame's ShadowUBO ring slot
+    // (light matrix + inverse-camera matrix for entity worldPos rebuild +
+    // framebuffer size), then draw the casters.
+    const Engine::mat4 invCamViewProj = viewProj.inverse();
+    const Engine::mat4 lightViewProj = ComputeSunLightViewProj(invCamViewProj);
+
+    const std::size_t shadowUboSlot = static_cast<std::size_t>(
+        m_shadowUboFrameCounter % kShadowUboRingSlots);
+    ++m_shadowUboFrameCounter;
+    VkDescriptorSet shadowReceiverSet = VK_NULL_HANDLE;
+    if (m_shadowUboRing[shadowUboSlot].buffer != nullptr) {
+        ShadowUboData shadowUbo{};
+        shadowUbo.invCameraViewProj = invCamViewProj;
+        shadowUbo.lightViewProj = lightViewProj;
+        shadowUbo.params = Engine::vec4(static_cast<float>(m_width),
+                                        static_cast<float>(m_height),
+                                        0.0F, 0.0F);
+        m_shadowUboRing[shadowUboSlot].buffer->UpdateData(
+            &shadowUbo, sizeof(shadowUbo), 0);
+        shadowReceiverSet = m_shadowUboRing[shadowUboSlot].descriptorSet;
+    }
+
+    RecordShadowPass(cmd, entities, lightViewProj);
+
     VkClearValue clears[2] = {};
     // Color is LOAD_OP_LOAD so this entry is unused but must be present.
     clears[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
@@ -1204,6 +1273,16 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_pipelineLayout, 0, 1, &groundSet, 0, nullptr);
 
+        // set 1 = the shadow map + light UBO so scene.frag can attenuate the
+        // ground's direct sun term where a caster occludes it. Bound through
+        // the terrain layout; the identical set-1 handle in the entity layouts
+        // means this survives the later terrain->entity pipeline switch.
+        if (shadowReceiverSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout, 1, 1, &shadowReceiverSet,
+                                    0, nullptr);
+        }
+
         // Vertex push constant — mat4 viewProj at offset 0 (unchanged
         // from the pre-fog baseline; only the range count changed).
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -1256,6 +1335,18 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             float mvp[16];
             float color[4];
         } pc{};
+
+        // set 1 = shadow map + light UBO for entity.frag. Bound once here
+        // through the entity layout (covers the no-terrain frame where the
+        // terrain block's identical bind never ran); it persists across the
+        // static<->skinned pipeline switches inside the loop because both
+        // entity layouts share this set-1 handle, and the per-model set-0 /
+        // per-skinned-draw set-2 binds below never disturb a lower/other set.
+        if (shadowReceiverSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_entityPipelineLayout, 1, 1,
+                                    &shadowReceiverSet, 0, nullptr);
+        }
 
         VkPipeline lastBoundPipeline = VK_NULL_HANDLE;
 
@@ -1518,7 +1609,7 @@ void ScenePass::Execute(VkCommandBuffer cmd, uint32_t swapchainImageIndex,
             if (useGpuSkinned) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         m_skinnedEntityPipelineLayout,
-                                        /*firstSet*/ 1, /*setCount*/ 1,
+                                        /*firstSet*/ 2, /*setCount*/ 1,
                                         &paletteSlot->descriptorSet,
                                         /*dynamicOffsetCount*/ 1,
                                         &paletteDynamicOffset);
@@ -1764,10 +1855,17 @@ bool ScenePass::CreateEntityPipelineAndMesh() {
     // sampler at the fragment stage. Push constants and descriptor sets
     // live in independent slots inside the pipeline layout, so this
     // doesn't conflict with the dual push-constant-range layout above.
+    // set 0 = per-Model baseColor sampler; set 1 = shadow (sampler + light UBO),
+    // sampled by entity.frag. Same two shared handles as the terrain layout, so
+    // the set-1 (shadow) bind survives terrain<->entity pipeline switches.
+    VkDescriptorSetLayout entitySetLayouts[2] = {
+        m_textureDescriptorSetLayout,
+        m_shadowSetLayout,
+    };
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_textureDescriptorSetLayout;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = entitySetLayouts;
     layoutInfo.pushConstantRangeCount = 2;
     layoutInfo.pPushConstantRanges = pcRanges;
     if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_entityPipelineLayout) != VK_SUCCESS) {
@@ -2584,15 +2682,21 @@ bool ScenePass::CreateSkinnedEntityPipeline() {
     pcRanges[1].size = sizeof(float) * 4;     // vec4 fogParams
 
     // Set 0 = shared baseColor texture layout (same handle as the static
-    // pipeline — required for set-0 compatibility, not just convenient);
-    // set 1 = the bone-palette dynamic UBO.
-    VkDescriptorSetLayout setLayouts[2] = {
+    // pipeline — required for set-0 compatibility); set 1 = the shadow set
+    // (same handle as terrain/static-entity — the shared entity.frag samples
+    // the shadow map at set 1, so it MUST be set 1 here too); set 2 = the
+    // bone-palette dynamic UBO. Sets 0 and 1 match the static pipeline layout
+    // exactly (compatible), so a static<->skinned switch never disturbs the
+    // bound texture or shadow sets — only set 2 (palette) is skinned-exclusive.
+    // This is why the palette moved from set 1 to set 2 in entity_skinned.vert.
+    VkDescriptorSetLayout setLayouts[3] = {
         m_textureDescriptorSetLayout,
+        m_shadowSetLayout,
         m_bonePaletteDescriptorSetLayout,
     };
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 2;
+    layoutInfo.setLayoutCount = 3;
     layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 2;
     layoutInfo.pPushConstantRanges = pcRanges;
