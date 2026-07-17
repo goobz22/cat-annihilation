@@ -23,7 +23,9 @@
 
 #include "imgui.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <random>
 
@@ -4090,10 +4092,22 @@ void CatAnnihilation::renderEndScreenOverlay(uint32_t screenWidth, uint32_t scre
     const float height = static_cast<float>(screenHeight);
     const bool victory = (currentState_ == GameState::Victory);
 
-    // Full-screen dim overlay + centered title/subtitle
+    // Web-parity death modal (src/components/ui/GameOverScreen.tsx + ui.css:
+    // 390-484): a centred red-glow CARD over a near-black dim \u2014 "YOU DIED", a
+    // message, an inset stats panel (Survival Time + Enemies Remaining), a red
+    // TRY AGAIN button, and an italic restart prompt. This replaces the old
+    // fullscreen "YOU DIED / Wave N Enemies killed N / Press R\u2026" text, which
+    // shared nothing with the web presentation. Victory is a native-only
+    // branch (survival is endless \u2014 kEndlessWaves \u2014 so it never triggers under
+    // parity); it reuses the same card in gold.
+
+    // Full-screen dim. The web overlay is rgba(0,0,0,0.95) \u2014 a NEUTRAL
+    // near-black, not the reddish tint the removed GameUI UIPass overlay drew.
+    // 0.92 keeps the game faintly visible behind, like the web.
     ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
     ImGui::SetNextWindowSize(ImVec2(width, height));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.70F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(0.0F, 0.0F, 0.0F, victory ? 0.85F : 0.92F));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
 
@@ -4105,45 +4119,129 @@ void CatAnnihilation::renderEndScreenOverlay(uint32_t screenWidth, uint32_t scre
 
     ImGui::Begin("##EndScreenOverlay", nullptr, kFlags);
 
-    if (auto* titleFont = imguiLayer_->GetTitleFont()) {
-        ImGui::PushFont(titleFont);
-    }
-    const char* title = victory ? "VICTORY" : "YOU DIED";
-    const ImVec2 titleSize = ImGui::CalcTextSize(title);
-    ImGui::SetCursorPos(ImVec2((width - titleSize.x) * 0.5F, height * 0.30F));
-    const ImVec4 titleColor = victory
-        ? ImVec4(0.95F, 0.88F, 0.30F, 1.0F)
-        : ImVec4(0.90F, 0.15F, 0.15F, 1.0F);
-    ImGui::TextColored(titleColor, "%s", title);
-    if (imguiLayer_->GetTitleFont() != nullptr) {
-        ImGui::PopFont();
-    }
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* titleFont = imguiLayer_->GetTitleFont();
+    ImFont* boldFont = imguiLayer_->GetBoldFont();
+    ImFont* regularFont = imguiLayer_->GetRegularFont();
+    if (titleFont == nullptr) { titleFont = ImGui::GetFont(); }
+    if (boldFont == nullptr) { boldFont = ImGui::GetFont(); }
+    if (regularFont == nullptr) { regularFont = ImGui::GetFont(); }
 
-    if (auto* boldFont = imguiLayer_->GetBoldFont()) {
-        ImGui::PushFont(boldFont);
-    }
-    char summary[128];
-    std::snprintf(summary, sizeof(summary),
-                  "Wave %d   Enemies killed %d",
-                  waveSystem_ != nullptr ? waveSystem_->getCurrentWave() : 0,
-                  enemiesKilled_);
-    const ImVec2 summarySize = ImGui::CalcTextSize(summary);
-    ImGui::SetCursorPos(ImVec2((width - summarySize.x) * 0.5F, height * 0.30F + titleSize.y + 28.0F));
-    ImGui::TextColored(ImVec4(1.0F, 1.0F, 1.0F, 0.92F), "%s", summary);
-    if (imguiLayer_->GetBoldFont() != nullptr) {
-        ImGui::PopFont();
-    }
+    // Accent: the web death red (#dc2626) or a native victory gold (no web
+    // analog \u2014 kept only for the unreachable-under-parity Victory branch).
+    const WebParity::UiColor accent =
+        victory ? WebParity::UiColor{0xE5, 0xB8, 0x3A} : WebParity::kDeathAccent;
 
-    if (auto* regularFont = imguiLayer_->GetRegularFont()) {
-        ImGui::PushFont(regularFont);
+    auto col = [](const WebParity::UiColor& color, float alpha = 1.0F) {
+        return IM_COL32(color.red, color.green, color.blue,
+                        static_cast<int>(alpha * 255.0F + 0.5F));
+    };
+    auto toVec = [](const WebParity::UiColor& color) {
+        return ImVec4(static_cast<float>(color.red) / 255.0F,
+                      static_cast<float>(color.green) / 255.0F,
+                      static_cast<float>(color.blue) / 255.0F, 1.0F);
+    };
+    auto centered = [&](ImFont* font, float size, float centerX, float y,
+                        ImU32 color, const char* text) {
+        const float textWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
+        drawList->AddText(font, size, ImVec2(centerX - textWidth * 0.5F, y), color, text);
+    };
+
+    // Card geometry \u2014 content-driven bands (title / message / stats / button /
+    // prompt), summed so the card always fits, then centred.
+    const float cardWidth = std::min(380.0F, width * 0.86F);
+    const float pad = 28.0F;
+    const float titleSize = 44.0F;
+    const float messageBand = 20.0F;
+    const float statsBand = 70.0F;
+    const float buttonBand = 46.0F;
+    const float promptBand = 16.0F;
+    const float cardHeight = pad + titleSize + 16.0F + messageBand + 20.0F + statsBand +
+                             22.0F + buttonBand + 14.0F + promptBand + pad;
+    const float cardX = (width - cardWidth) * 0.5F;
+    const float cardY = (height - cardHeight) * 0.5F;
+    const ImVec2 cardMin(cardX, cardY);
+    const ImVec2 cardMax(cardX + cardWidth, cardY + cardHeight);
+    const float centerX = cardX + cardWidth * 0.5F;
+
+    // Red-glow halo (web box-shadow 0 0 20px + 0 20px 40px rgba(220,38,38,.3)):
+    // stacked low-alpha rounded rects behind the card build a soft accent halo
+    // that the opaque card covers except at the margin.
+    for (int layer = 8; layer >= 1; --layer) {
+        const float expand = static_cast<float>(layer) * 3.0F;
+        drawList->AddRectFilled(ImVec2(cardMin.x - expand, cardMin.y - expand),
+                                ImVec2(cardMax.x + expand, cardMax.y + expand),
+                                col(accent, 0.04F), 20.0F);
     }
-    const char* prompt = "Press R or Enter to restart   \u2022   Esc for main menu";
-    const ImVec2 promptSize = ImGui::CalcTextSize(prompt);
-    ImGui::SetCursorPos(ImVec2((width - promptSize.x) * 0.5F, height * 0.55F));
-    ImGui::TextColored(ImVec4(0.85F, 0.85F, 0.90F, 0.85F), "%s", prompt);
-    if (imguiLayer_->GetRegularFont() != nullptr) {
-        ImGui::PopFont();
+    // Card body (#1a1a1a\u2192#0f0f0f, drawn as the rounded solid midpoint) + a 2px
+    // accent border \u2014 ui.css:404-407.
+    const WebParity::UiColor cardMid{
+        (WebParity::kDeathCardTop.red + WebParity::kDeathCardBottom.red) / 2,
+        (WebParity::kDeathCardTop.green + WebParity::kDeathCardBottom.green) / 2,
+        (WebParity::kDeathCardTop.blue + WebParity::kDeathCardBottom.blue) / 2};
+    drawList->AddRectFilled(cardMin, cardMax, col(cardMid), 12.0F);
+    drawList->AddRect(cardMin, cardMax, col(accent), 12.0F, 0, 2.0F);
+
+    float cursorY = cardY + pad;
+
+    // Title (accent, bold).
+    centered(titleFont, titleSize, centerX, cursorY, col(accent),
+             victory ? "VICTORY!" : WebParity::kDeathTitle);
+    cursorY += titleSize + 16.0F;
+
+    // Message.
+    centered(regularFont, 18.0F, centerX, cursorY, col(WebParity::kDeathMessageColor),
+             victory ? "You conquered the waves!" : WebParity::kDeathMessage);
+    cursorY += messageBand + 20.0F;
+
+    // Inset stats panel \u2014 bg rgba(0,0,0,0.3), 1px accent@0.3 border (ui.css:
+    // 439-444). Two bold lines: survival time from the run clock (gameTime_
+    // freezes at death \u2014 updateSystems runs only while Playing) and the count
+    // of dogs still ALIVE (WaveSystem::getEnemiesRemaining, the web's
+    // enemies.length \u2014 NOT a kill tally).
+    const ImVec2 statsMin(cardX + pad, cursorY);
+    const ImVec2 statsMax(cardX + cardWidth - pad, cursorY + statsBand);
+    drawList->AddRectFilled(statsMin, statsMax, IM_COL32(0, 0, 0, 77), 8.0F);
+    drawList->AddRect(statsMin, statsMax, col(accent, 0.3F), 8.0F, 0, 1.0F);
+    const int totalSeconds = static_cast<int>(gameTime_);
+    char survivalLine[64];
+    std::snprintf(survivalLine, sizeof(survivalLine), "Survival Time: %dm %ds",
+                  totalSeconds / 60, totalSeconds % 60);
+    const int remaining = (waveSystem_ != nullptr) ? waveSystem_->getEnemiesRemaining() : 0;
+    char enemiesLine[64];
+    std::snprintf(enemiesLine, sizeof(enemiesLine), "Enemies Remaining: %d",
+                  remaining < 0 ? 0 : remaining);
+    centered(boldFont, 16.0F, centerX, cursorY + 14.0F,
+             col(WebParity::kDeathStatsText), survivalLine);
+    centered(boldFont, 16.0F, centerX, cursorY + 38.0F,
+             col(WebParity::kDeathStatsText), enemiesLine);
+    cursorY += statsBand + 22.0F;
+
+    // TRY AGAIN \u2014 a real ImGui button so a MOUSE CLICK restarts the run
+    // (matching the web button's onClick); Space/Enter/R also restart via
+    // updateGameOver. Red gradient face (#dc2626 \u2192 #b91c1c), full card width.
+    const WebParity::UiColor buttonTop = victory ? accent : WebParity::kDeathAccent;
+    const WebParity::UiColor buttonBottom =
+        victory ? WebParity::UiColor{0xB8, 0x8F, 0x22} : WebParity::kDeathAccentDark;
+    ImGui::PushFont(boldFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, toVec(buttonTop));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toVec(buttonBottom));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, toVec(buttonBottom));
+    ImGui::SetCursorPos(ImVec2(cardX + pad, cursorY));
+    if (ImGui::Button(victory ? "CONTINUE" : WebParity::kDeathRestartLabel,
+                      ImVec2(cardWidth - 2.0F * pad, buttonBand))) {
+        restart();
     }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    ImGui::PopFont();
+    cursorY += buttonBand + 14.0F;
+
+    // Restart prompt (grey, ui.css:461). The web italicises it; the atlas has
+    // no italic face, so it renders upright (a documented approximation).
+    centered(regularFont, 14.0F, centerX, cursorY, col(WebParity::kDeathHintColor),
+             victory ? "Press Space or click to continue" : WebParity::kDeathPrompt);
 
     ImGui::End();
     ImGui::PopStyleVar(2);
