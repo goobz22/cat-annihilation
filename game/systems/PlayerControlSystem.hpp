@@ -102,6 +102,38 @@ public:
     void setMouseSensitivity(float sensitivity);
 
     /**
+     * Set the TURN-sensitivity multiplier applied to the web-parity tank-turn
+     * rotation rate. This is the native consumer of the pause menu's
+     * "TURN SENSITIVITY" slider — it mirrors the web exactly, where
+     * CatCharacter/index.tsx:272 computes
+     * `rotationSpeed = TURN_SPEED * delta * spinSensitivity`. A scale of 1.0
+     * (the default) leaves kPlayerTurnSpeed untouched; 0.1..2.0 is the slider's
+     * range (WebParity::kPauseTurnSensitivityMin/Max). Only the
+     * WebParity::kEnabled movement branch reads this — the legacy scheme is
+     * unaffected.
+     * @param scale Multiplier on kPlayerTurnSpeed (clamped by the slider UI).
+     */
+    void setTurnSensitivityScale(float scale) { turnSensitivityScale_ = scale; }
+
+    /**
+     * Set the MOVE-speed multiplier applied to the web-parity walk/run speed.
+     * Native consumer of the pause menu's "MOVEMENT SPEED" slider, mirroring
+     * CatCharacter/index.tsx:257 (`speed = MOVEMENT_SPEED * delta *
+     * moveSpeedMultiplier`) — the multiplier scales the BASE speed and the run
+     * sprint rides on top of it, exactly like the web applies runMultiplier
+     * after the moveSpeedMultiplier. A scale of 1.0 (default) is a no-op;
+     * 0.5..2.0 is the slider's range (WebParity::kPauseMoveSpeedMin/Max).
+     * @param scale Multiplier on the walk/run speed (clamped by the slider UI).
+     */
+    void setMoveSpeedScale(float scale) { moveSpeedScale_ = scale; }
+
+    /** @return the active turn-sensitivity multiplier (default 1.0). */
+    [[nodiscard]] float getTurnSensitivityScale() const { return turnSensitivityScale_; }
+
+    /** @return the active move-speed multiplier (default 1.0). */
+    [[nodiscard]] float getMoveSpeedScale() const { return moveSpeedScale_; }
+
+    /**
      * Enable or disable player control
      * @param enabled If true, player can control the entity
      */
@@ -637,6 +669,17 @@ private:
     float followPlayerYawLagPerSec_ = 8.0F;
     // Movement parameters
     float movementDeadzone_ = 0.1f;
+
+    // Web-parity pause-menu multipliers (the two gameplay sliders). Both
+    // default to 1.0 so they are pure no-ops until the player drags a slider —
+    // a fresh run behaves identically to before this wiring landed. The
+    // web-parity movement branch multiplies turnSensitivityScale_ into the
+    // per-frame turn step and moveSpeedScale_ into the walk/run speedModifier,
+    // exactly mirroring CatCharacter/index.tsx:272 (turn) and :257 (move).
+    // Only the human-input WebParity branch consumes them; autoplay and the
+    // legacy scheme ignore them.
+    float turnSensitivityScale_ = 1.0f;
+    float moveSpeedScale_       = 1.0f;
 
     // Gravity constant
     static constexpr float GRAVITY = -30.0f;  // m/s^2

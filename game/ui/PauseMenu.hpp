@@ -252,8 +252,8 @@ private:
     // value). Defaults are the web defaults (both 1.0). The callbacks push a
     // changed value out to the game systems; either may be unset (the slider
     // still moves and remembers its value, it just drives nothing).
-    float m_turnSensitivity = WebParity::kPauseTurnSensitivityDefault;
-    float m_moveSpeed       = WebParity::kPauseMoveSpeedDefault;
+    float m_turnSensitivity = CatGame::WebParity::kPauseTurnSensitivityDefault;
+    float m_moveSpeed       = CatGame::WebParity::kPauseMoveSpeedDefault;
     ValueCallback m_turnSensitivityCallback;
     ValueCallback m_moveSpeedCallback;
 

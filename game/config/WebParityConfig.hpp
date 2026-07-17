@@ -861,4 +861,136 @@ inline constexpr ColorSwatch kHudEnemyBarHigh{"enemy bar high",0xFF, 0x44, 0x44}
 inline constexpr ColorSwatch kHudEnemyBarMid {"enemy bar mid", 0xFF, 0x88, 0x44}; // tsx:492 #ff8844
 inline constexpr ColorSwatch kHudEnemyBarLow {"enemy bar low", 0xCC, 0x22, 0x22}; // tsx:492 #cc2222
 
+// ---------------------------------------------------------------------
+// Pause menu — reference: src/components/ui/PauseMenu.tsx (the in-run
+// pause modal) + its `.pause-*` CSS in src/styles/components/menus.css.
+//
+// WHY THIS BLOCK EXISTS: the pre-parity native pause screen was a gold
+// "PAUSED" title floating over five stacked grey buttons (Resume / Restart
+// Wave / Settings / Main Menu / Quit). The web pause face is a compact dark
+// MODAL CARD: a "#555→#333" title band reading "PAUSED", two gameplay
+// sliders (TURN SENSITIVITY, MOVEMENT SPEED), a read-only desktop CONTROLS
+// grid, and a green "Resume Game" + red "Quit Game" pair, closed by a
+// "Press ESC or P to resume" hint. The two sliders are FUNCTIONAL on the web
+// (they dispatch spinSensitivityChanged / moveSpeedChanged, which
+// CatCharacter/index.tsx:272 multiplies into TURN_SPEED and :257 into
+// MOVEMENT_SPEED) — so under parity the native pause menu wires the same two
+// multipliers into PlayerControlSystem (setTurnSensitivityScale /
+// setMoveSpeedScale) instead of shipping an inert slider. Colours are UI
+// CHROME (raw web sRGB bytes handed to ImGui's DrawList / widget style — the
+// same no-linear-decode path the menu/HUD chrome uses above), copy is the
+// exact web string, and both are pinned by test_web_parity_config.cpp so the
+// rebuilt PauseMenu can never silently drift from the reference.
+
+// Slider ranges + defaults — PauseMenu.tsx:98-101 (turn) / :125-127 (move).
+// The web <input type="range"> literals: turn 0.1..2.0, move 0.5..2.0, both
+// step 0.1, both defaulting to 1.0 (PauseMenu.tsx:10/15 — a fresh run with no
+// saved localStorage value). These ARE the multiplier scales fed to the
+// control system, so the defaults must be exactly 1.0 (a no-op scale).
+inline constexpr float kPauseTurnSensitivityMin     = 0.1f;  // tsx:98 min
+inline constexpr float kPauseTurnSensitivityMax     = 2.0f;  // tsx:99 max
+inline constexpr float kPauseTurnSensitivityStep    = 0.1f;  // tsx:100 step
+inline constexpr float kPauseTurnSensitivityDefault = 1.0f;  // tsx:10 default
+inline constexpr float kPauseMoveSpeedMin           = 0.5f;  // tsx:125 min
+inline constexpr float kPauseMoveSpeedMax           = 2.0f;  // tsx:126 max
+inline constexpr float kPauseMoveSpeedStep          = 0.1f;  // tsx:127 step
+inline constexpr float kPauseMoveSpeedDefault       = 1.0f;  // tsx:15 default
+
+// Copy — PauseMenu.tsx. The two button labels read "Resume Game" / "Quit
+// Game" in the JSX (:204/:210) but the `.pause-button` rule text-transforms
+// them to UPPERCASE (menus.css:154), so the RENDERED strings — the parity
+// target for a side-by-side screenshot — are stored uppercased here, exactly
+// like kStartGameLabel above.
+inline constexpr const char* kPauseTitle                = "PAUSED";           // tsx:85
+inline constexpr const char* kPauseTurnSensitivityLabel = "TURN SENSITIVITY"; // tsx:92
+inline constexpr const char* kPauseMovementSpeedLabel   = "MOVEMENT SPEED";   // tsx:118
+inline constexpr const char* kPauseControlsLabel        = "CONTROLS";         // tsx:144
+inline constexpr const char* kPauseSlowLabel            = "SLOW";             // tsx:95/121
+inline constexpr const char* kPauseFastLabel            = "FAST";             // tsx:108/134
+inline constexpr const char* kPauseResumeLabel          = "RESUME GAME";      // tsx:204 (uppercased)
+inline constexpr const char* kPauseQuitLabel            = "QUIT GAME";        // tsx:210 (uppercased)
+
+// Desktop CONTROLS grid rows — PauseMenu.tsx:177-192 (the `!isMobile` branch;
+// the native build only ships the desktop scheme). Each row is an action
+// label + a key chip.
+inline constexpr const char* kPauseControlMoveAction   = "Move";        // tsx:178
+inline constexpr const char* kPauseControlMoveKey      = "W A S D";     // tsx:179
+inline constexpr const char* kPauseControlRunAction    = "Run";         // tsx:182
+inline constexpr const char* kPauseControlRunKey       = "SHIFT";       // tsx:183
+inline constexpr const char* kPauseControlAttackAction = "Attack/Cast"; // tsx:186
+inline constexpr const char* kPauseControlAttackKey    = "SPACE";       // tsx:187
+inline constexpr const char* kPauseControlSlotsAction  = "Quick Slots"; // tsx:190
+inline constexpr const char* kPauseControlSlotsKey     = "1-9";         // tsx:191
+
+// Resume hint — PauseMenu.tsx:219 ("Press <ESC> or <P> to resume"). Split
+// into the plain words + the two key chips the web wraps in
+// `.pause-key-hint` spans, so the native hint renders the same chip look.
+inline constexpr const char* kPauseHintPrefix = "Press";     // tsx:219
+inline constexpr const char* kPauseHintEscKey = "ESC";       // tsx:219 chip
+inline constexpr const char* kPauseHintOr     = "or";        // tsx:219
+inline constexpr const char* kPauseHintPKey   = "P";         // tsx:219 chip
+inline constexpr const char* kPauseHintSuffix = "to resume"; // tsx:219
+
+// ---- Pause modal chrome colours (menus.css `.pause-*`) --------------
+// Full-screen dim behind the modal — rgba(0,0,0,0.85) (menus.css:8). The
+// 0.85 opacity is a HEAVY dim (the live world stays faintly visible behind
+// it); stored as the black it tints from plus the 0-255 alpha so the draw
+// site composites the exact web opacity.
+inline constexpr UiColor kPauseOverlayColor = {0x00, 0x00, 0x00}; // menus.css:8
+inline constexpr int     kPauseOverlayAlpha = 217;               // round(0.85*255)
+// Modal card gradient + border — menus.css:17 (145deg #2d2d2d→#1a1a1a) / :18
+// (3px #444).
+inline constexpr UiColor kPauseModalTop    = {0x2D, 0x2D, 0x2D}; // #2d2d2d
+inline constexpr UiColor kPauseModalBottom = {0x1A, 0x1A, 0x1A}; // #1a1a1a
+inline constexpr UiColor kPauseModalBorder = {0x44, 0x44, 0x44}; // #444
+// Title band — menus.css:25 (180deg #555→#333) / :26 (2px #666 bottom rule).
+// This is a LIGHTER band than the menu-card header (#444→#333); the extra
+// #555 top stop is what visually separates the pause modal from the menu card.
+inline constexpr UiColor kPauseTitleBarTop    = {0x55, 0x55, 0x55}; // #555
+inline constexpr UiColor kPauseTitleBarBottom = {0x33, 0x33, 0x33}; // #333
+inline constexpr UiColor kPauseTitleBarRule   = {0x66, 0x66, 0x66}; // #666
+inline constexpr UiColor kPauseTitleColor        = {0xFF, 0xFF, 0xFF}; // menus.css:32 #fff
+inline constexpr UiColor kPauseSectionTitleColor = {0xFF, 0xFF, 0xFF}; // menus.css:49 #fff
+// Control panel (slider row background) + controls grid share the same
+// inset — menus.css:57 (145deg #333→#222) / :58 (1px #555).
+inline constexpr UiColor kPauseControlPanelTop    = {0x33, 0x33, 0x33}; // #333
+inline constexpr UiColor kPauseControlPanelBottom = {0x22, 0x22, 0x22}; // #222
+inline constexpr UiColor kPauseControlPanelBorder = {0x55, 0x55, 0x55}; // #555
+// SLOW/FAST monospace labels — menus.css:70 (#bbb).
+inline constexpr UiColor kPauseSensitivityLabelColor = {0xBB, 0xBB, 0xBB}; // #bbb
+// Slider track (#555, menus.css:80), the filled portion + circular thumb
+// (#4a90e2 — the thumb menus.css:90, the left fill the inline gradient in
+// PauseMenu.tsx:105/131). ImGui styles the slider's FrameBg to the track and
+// the SliderGrab to this blue.
+inline constexpr UiColor kPauseSliderTrack = {0x55, 0x55, 0x55}; // #555
+inline constexpr UiColor kPauseSliderFill  = {0x4A, 0x90, 0xE2}; // #4a90e2
+inline constexpr UiColor kPauseSliderThumb = {0x4A, 0x90, 0xE2}; // #4a90e2
+// Value chip (the "1.0" readout) — menus.css:97 (#444 bg) / :98 (#fff text).
+inline constexpr UiColor kPauseValueChipBg   = {0x44, 0x44, 0x44}; // #444
+inline constexpr UiColor kPauseValueChipText = {0xFF, 0xFF, 0xFF}; // #fff
+// Controls grid — action label #ddd (menus.css:125), key chip #444 bg
+// (menus.css:130) / #fff text (menus.css:131).
+inline constexpr UiColor kPauseControlActionColor = {0xDD, 0xDD, 0xDD}; // #ddd
+inline constexpr UiColor kPauseControlKeyBg       = {0x44, 0x44, 0x44}; // #444
+inline constexpr UiColor kPauseControlKeyText     = {0xFF, 0xFF, 0xFF}; // #fff
+// Resume button — green gradient #22c55e→#16a34a (menus.css:159), #34d399
+// hover top (menus.css:165), #047857 drop shadow (menus.css:161).
+inline constexpr UiColor kPauseResumeTop    = {0x22, 0xC5, 0x5E}; // #22c55e
+inline constexpr UiColor kPauseResumeBottom = {0x16, 0xA3, 0x4A}; // #16a34a
+inline constexpr UiColor kPauseResumeHover  = {0x34, 0xD3, 0x99}; // #34d399
+inline constexpr UiColor kPauseResumeShadow = {0x04, 0x78, 0x57}; // #047857
+// Quit button — red gradient #ef4444→#dc2626 (menus.css:171), #f87171 hover
+// top (menus.css:177), #991b1b drop shadow (menus.css:173).
+inline constexpr UiColor kPauseQuitTop    = {0xEF, 0x44, 0x44}; // #ef4444
+inline constexpr UiColor kPauseQuitBottom = {0xDC, 0x26, 0x26}; // #dc2626
+inline constexpr UiColor kPauseQuitHover  = {0xF8, 0x71, 0x71}; // #f87171
+inline constexpr UiColor kPauseQuitShadow = {0x99, 0x1B, 0x1B}; // #991b1b
+// Instruction footer — top rule #444 (menus.css:183), text #aaa
+// (menus.css:186); the ESC/P key hints are #333 chips (menus.css:191) with
+// #fff text (menus.css:192).
+inline constexpr UiColor kPauseInstructionsColor = {0xAA, 0xAA, 0xAA}; // #aaa
+inline constexpr UiColor kPauseInstructionsRule  = {0x44, 0x44, 0x44}; // #444
+inline constexpr UiColor kPauseKeyHintBg         = {0x33, 0x33, 0x33}; // #333
+inline constexpr UiColor kPauseKeyHintText       = {0xFF, 0xFF, 0xFF}; // #fff
+
 } // namespace CatGame::WebParity

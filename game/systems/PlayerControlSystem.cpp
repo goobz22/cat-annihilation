@@ -227,7 +227,13 @@ void PlayerControlSystem::processMovementInput(float dt) {
         if (input_->isKeyDown(Engine::Input::Key::D)) {
             turnInput += 1.0f;
         }
-        const float newYaw = currentYaw + turnInput * WebParity::kPlayerTurnSpeed * dt;
+        // turnSensitivityScale_ is the pause-menu "TURN SENSITIVITY" slider,
+        // folded in exactly where the web does: CatCharacter/index.tsx:272
+        // computes rotationSpeed = TURN_SPEED * delta * spinSensitivity, so the
+        // scale multiplies the per-frame turn step. Default 1.0 => no change.
+        const float newYaw = currentYaw +
+                             turnInput * WebParity::kPlayerTurnSpeed *
+                             turnSensitivityScale_ * dt;
         if (turnInput != 0.0f) {
             transform->rotation =
                 Engine::Quaternion(Engine::vec3(0.0f, 1.0f, 0.0f), newYaw);
@@ -235,8 +241,16 @@ void PlayerControlSystem::processMovementInput(float dt) {
 
         const bool runHeld = input_->isKeyDown(Engine::Input::Key::LeftShift) ||
                              input_->isKeyDown(Engine::Input::Key::RightShift);
+        // moveSpeedScale_ is the pause-menu "MOVEMENT SPEED" slider. The web
+        // (CatCharacter/index.tsx:257) does speed = MOVEMENT_SPEED * delta *
+        // moveSpeedMultiplier and THEN multiplies runMultiplier on top for a
+        // sprint. speedModifier is the native run multiplier over the base
+        // walk speed, so multiplying the scale in here reproduces the same
+        // ordering: base * (run ? runMult : 1) * moveSpeedScale. Default 1.0 =>
+        // no change.
         movement->speedModifier =
-            runHeld ? (WebParity::kPlayerRunSpeed / WebParity::kPlayerWalkSpeed) : 1.0f;
+            (runHeld ? (WebParity::kPlayerRunSpeed / WebParity::kPlayerWalkSpeed) : 1.0f) *
+            moveSpeedScale_;
 
         float forwardInput = 0.0f;
         if (input_->isKeyDown(Engine::Input::Key::W)) {

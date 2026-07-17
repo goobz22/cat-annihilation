@@ -15,6 +15,11 @@
 
 namespace Game {
 
+// The pause-modal ranges, copy and chrome colours all come from the
+// web-parity table so PauseMenu can never drift from the web reference on its
+// own — see the "Pause menu" section of game/config/WebParityConfig.hpp.
+namespace WebParity = CatGame::WebParity;
+
 // Settings panel — same wiring shape as MainMenu. The two menus keep
 // independent open/closed flags (so closing the pause-menu settings
 // doesn't also close the main-menu settings the next time a different

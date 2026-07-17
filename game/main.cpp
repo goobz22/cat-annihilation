@@ -828,11 +828,14 @@ static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
     if (name == "enter") return Engine::Input::Key::Enter;
     if (name == "space") return Engine::Input::Key::Space;
     if (name == "escape") return Engine::Input::Key::Escape;
-    if (name == "w") return Engine::Input::Key::W;
-    if (name == "a") return Engine::Input::Key::A;
-    if (name == "s") return Engine::Input::Key::S;
-    if (name == "d") return Engine::Input::Key::D;
-    if (name == "r") return Engine::Input::Key::R;
+    // Any single letter maps generically (Key values are GLFW keycodes,
+    // which are contiguous for A..Z) — enumerating letters one-by-one is
+    // how `key:p` silently became Enter and a pause-resume probe failed
+    // against a working feature (2026-07-17).
+    if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
+        return static_cast<Engine::Input::Key>(
+            static_cast<int>(Engine::Input::Key::A) + (name[0] - 'a'));
+    }
     if (name.size() == 1 && name[0] >= '1' && name[0] <= '7') {
         return static_cast<Engine::Input::Key>(
             static_cast<int>(Engine::Input::Key::Num1) + (name[0] - '1'));

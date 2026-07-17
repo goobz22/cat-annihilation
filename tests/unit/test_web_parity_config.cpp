@@ -625,3 +625,100 @@ TEST_CASE("pre-game menu + death screen COPY and CHROME colours match the web",
     CHECK(sameUi(WebParity::kDeathStatsText,    0xF3, 0xF4, 0xF6)); // #f3f4f6 (:450)
     CHECK(sameUi(WebParity::kDeathHintColor,    0x9C, 0xA3, 0xAF)); // #9ca3af (:461)
 }
+
+TEST_CASE("pause modal ranges, copy and chrome colours match the web PauseMenu",
+          "[web-parity][menu][ui][pause]") {
+    // The 2026-07-17 pause-modal parity pins: the rebuilt native pause face
+    // must match src/components/ui/PauseMenu.tsx + its `.pause-*` CSS in
+    // src/styles/components/menus.css. The pre-rebuild native pause screen was
+    // a gold "PAUSED" title over five stacked grey buttons; the web is a dark
+    // modal card with two gameplay sliders, a desktop CONTROLS grid, and a
+    // green Resume / red Quit pair. Slider ranges/defaults, string identity,
+    // and exact web hex bytes are the contract the rebuilt PauseMenu renders
+    // against — a drift re-fails the build.
+    auto sameUi = [](const WebParity::UiColor& color, int r, int g, int b) {
+        return color.red == r && color.green == g && color.blue == b;
+    };
+
+    // ---- Slider ranges + defaults (PauseMenu.tsx:98-101 / :125-127) ----
+    // The two <input type="range"> literals. Both default to 1.0 — the value a
+    // fresh run shows, and (critically) the multiplier that leaves the control
+    // scheme untouched. A regressed default would silently change how a brand
+    // new game handles the moment it loads.
+    CHECK(WebParity::kPauseTurnSensitivityMin == 0.1f);   // tsx:98
+    CHECK(WebParity::kPauseTurnSensitivityMax == 2.0f);   // tsx:99
+    CHECK(WebParity::kPauseTurnSensitivityStep == 0.1f);  // tsx:100
+    CHECK(WebParity::kPauseTurnSensitivityDefault == 1.0f); // tsx:10
+    CHECK(WebParity::kPauseMoveSpeedMin == 0.5f);         // tsx:125
+    CHECK(WebParity::kPauseMoveSpeedMax == 2.0f);         // tsx:126
+    CHECK(WebParity::kPauseMoveSpeedStep == 0.1f);        // tsx:127
+    CHECK(WebParity::kPauseMoveSpeedDefault == 1.0f);     // tsx:15
+    // The move slider starts at 0.5, not 0.1 — the two ranges are distinct.
+    CHECK(WebParity::kPauseMoveSpeedMin != WebParity::kPauseTurnSensitivityMin);
+    // Both defaults sit inside their own range (a slider that can't reach its
+    // own default would be a UI bug).
+    CHECK(WebParity::kPauseTurnSensitivityDefault >= WebParity::kPauseTurnSensitivityMin);
+    CHECK(WebParity::kPauseTurnSensitivityDefault <= WebParity::kPauseTurnSensitivityMax);
+    CHECK(WebParity::kPauseMoveSpeedDefault >= WebParity::kPauseMoveSpeedMin);
+    CHECK(WebParity::kPauseMoveSpeedDefault <= WebParity::kPauseMoveSpeedMax);
+
+    // ---- Copy (PauseMenu.tsx) ----
+    CHECK(std::string(WebParity::kPauseTitle) == "PAUSED");                 // tsx:85
+    CHECK(std::string(WebParity::kPauseTurnSensitivityLabel) == "TURN SENSITIVITY"); // tsx:92
+    CHECK(std::string(WebParity::kPauseMovementSpeedLabel) == "MOVEMENT SPEED"); // tsx:118
+    CHECK(std::string(WebParity::kPauseControlsLabel) == "CONTROLS");       // tsx:144
+    CHECK(std::string(WebParity::kPauseSlowLabel) == "SLOW");               // tsx:95
+    CHECK(std::string(WebParity::kPauseFastLabel) == "FAST");               // tsx:108
+    // Button labels render UPPERCASE via text-transform (menus.css:154).
+    CHECK(std::string(WebParity::kPauseResumeLabel) == "RESUME GAME");      // tsx:204
+    CHECK(std::string(WebParity::kPauseQuitLabel) == "QUIT GAME");          // tsx:210
+    // Desktop controls grid (tsx:177-192).
+    CHECK(std::string(WebParity::kPauseControlMoveAction) == "Move");
+    CHECK(std::string(WebParity::kPauseControlMoveKey) == "W A S D");
+    CHECK(std::string(WebParity::kPauseControlRunKey) == "SHIFT");
+    CHECK(std::string(WebParity::kPauseControlAttackAction) == "Attack/Cast");
+    CHECK(std::string(WebParity::kPauseControlAttackKey) == "SPACE");
+    CHECK(std::string(WebParity::kPauseControlSlotsAction) == "Quick Slots");
+    CHECK(std::string(WebParity::kPauseControlSlotsKey) == "1-9");
+    // Resume hint (tsx:219) — the ESC/P key chips.
+    CHECK(std::string(WebParity::kPauseHintEscKey) == "ESC");
+    CHECK(std::string(WebParity::kPauseHintPKey) == "P");
+
+    // ---- Chrome colours (menus.css `.pause-*`) ----
+    // Dim overlay rgba(0,0,0,0.85) — the heavy dim over the live world.
+    CHECK(sameUi(WebParity::kPauseOverlayColor, 0x00, 0x00, 0x00)); // :8
+    CHECK(WebParity::kPauseOverlayAlpha == 217);                    // round(0.85*255)
+    // Modal card + border (:17-18) and the lighter title band (:25-26).
+    CHECK(sameUi(WebParity::kPauseModalTop,    0x2D, 0x2D, 0x2D));  // #2d2d2d
+    CHECK(sameUi(WebParity::kPauseModalBottom, 0x1A, 0x1A, 0x1A));  // #1a1a1a
+    CHECK(sameUi(WebParity::kPauseModalBorder, 0x44, 0x44, 0x44));  // #444
+    CHECK(sameUi(WebParity::kPauseTitleBarTop,    0x55, 0x55, 0x55)); // #555
+    CHECK(sameUi(WebParity::kPauseTitleBarBottom, 0x33, 0x33, 0x33)); // #333
+    CHECK(sameUi(WebParity::kPauseTitleBarRule,   0x66, 0x66, 0x66)); // #666
+    CHECK(sameUi(WebParity::kPauseTitleColor, 0xFF, 0xFF, 0xFF));   // #fff (:32)
+    // Slider — #555 track, #4a90e2 blue thumb/fill (:80 / :90).
+    CHECK(sameUi(WebParity::kPauseSliderTrack, 0x55, 0x55, 0x55));  // #555
+    CHECK(sameUi(WebParity::kPauseSliderThumb, 0x4A, 0x90, 0xE2));  // #4a90e2
+    CHECK(sameUi(WebParity::kPauseSliderFill,  0x4A, 0x90, 0xE2));  // #4a90e2
+    CHECK(sameUi(WebParity::kPauseValueChipBg, 0x44, 0x44, 0x44));  // #444 (:97)
+    // Controls grid text + key chips (:125 / :130).
+    CHECK(sameUi(WebParity::kPauseControlActionColor, 0xDD, 0xDD, 0xDD)); // #ddd
+    CHECK(sameUi(WebParity::kPauseControlKeyBg,       0x44, 0x44, 0x44)); // #444
+    // Green Resume (:159) and red Quit (:171) — the two signature buttons.
+    CHECK(sameUi(WebParity::kPauseResumeTop,    0x22, 0xC5, 0x5E)); // #22c55e
+    CHECK(sameUi(WebParity::kPauseResumeBottom, 0x16, 0xA3, 0x4A)); // #16a34a
+    CHECK(sameUi(WebParity::kPauseResumeShadow, 0x04, 0x78, 0x57)); // #047857
+    CHECK(sameUi(WebParity::kPauseQuitTop,      0xEF, 0x44, 0x44)); // #ef4444
+    CHECK(sameUi(WebParity::kPauseQuitBottom,   0xDC, 0x26, 0x26)); // #dc2626
+    CHECK(sameUi(WebParity::kPauseQuitShadow,   0x99, 0x1B, 0x1B)); // #991b1b
+    // The green resume and red quit must be genuinely different hues (a
+    // copy-paste that aliased one onto the other would defeat the whole
+    // green=go / red=leave affordance).
+    CHECK_FALSE(sameUi(WebParity::kPauseResumeTop,
+                       WebParity::kPauseQuitTop.red,
+                       WebParity::kPauseQuitTop.green,
+                       WebParity::kPauseQuitTop.blue));
+    // Instruction footer + key-hint chip (:186 / :191).
+    CHECK(sameUi(WebParity::kPauseInstructionsColor, 0xAA, 0xAA, 0xAA)); // #aaa
+    CHECK(sameUi(WebParity::kPauseKeyHintBg,         0x33, 0x33, 0x33)); // #333
+}

@@ -2585,12 +2585,25 @@ void CatAnnihilation::updatePlaying(float dt) {
 }
 
 void CatAnnihilation::updatePaused(float /*dt*/) {
-    // Check for restart input
+    // Web parity (PauseMenu.tsx:33): ESC or P RESUMES from pause. This must
+    // live HERE, not in handleInput — handleInput only runs from
+    // updatePlaying's updateSystems chain, so any resume logic placed there
+    // is dead code the moment the game is actually paused (the 2026-07-17
+    // headless probe caught exactly that: pause worked, resume never fired).
+    if constexpr (WebParity::kEnabled) {
+        if (input_->isKeyPressed(Engine::Input::Key::Escape) ||
+            input_->isKeyPressed(Engine::Input::Key::P)) {
+            unpause();
+        }
+        // No R-restart / Q-quit hotkeys under parity — the web pause exposes
+        // only the two modal buttons (Resume/Quit) plus ESC/P.
+        return;
+    }
+
+    // Pre-parity native flavor: R restarts the wave, Q quits to menu.
     if (input_->isKeyPressed(Engine::Input::Key::R)) {
         restart();
     }
-
-    // Check for quit to menu
     if (input_->isKeyPressed(Engine::Input::Key::Q)) {
         quitToMenu();
     }
