@@ -116,7 +116,6 @@ void GameUI::update(float deltaTime) {
         case GameState::GameOver:
         case GameState::Victory:
             m_hud->update(deltaTime);
-            m_endGameTimer += deltaTime;
             break;
     }
 }
@@ -151,13 +150,11 @@ void GameUI::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth, u
             break;
 
         case GameState::GameOver:
-            m_hud->render(uiPass, screenWidth, screenHeight);
-            renderGameOver(uiPass);
-            break;
-
         case GameState::Victory:
+            // Only the HUD (dimmed under the modal) is drawn here — the
+            // web-parity YOU DIED / end card is a Dear ImGui modal rendered by
+            // CatAnnihilation::renderEndScreenOverlay, the single end screen.
             m_hud->render(uiPass, screenWidth, screenHeight);
-            renderVictory(uiPass);
             break;
     }
 
@@ -178,11 +175,6 @@ void GameUI::setGameState(GameState state) {
 
     m_previousState = m_currentState;
     m_currentState = state;
-
-    // Reset state-specific timers
-    if (state == GameState::GameOver || state == GameState::Victory) {
-        m_endGameTimer = 0.0F;
-    }
 
     // Handle state-specific logic
     switch (state) {
@@ -267,15 +259,14 @@ void GameUI::handleInput() {
 
         case GameState::GameOver:
         case GameState::Victory:
-            // Any key to return to main menu after delay
-            if (m_endGameTimer >= 2.0F) {
-                if (m_input.isKeyPressed(Engine::Input::Key::Space) ||
-                    m_input.isKeyPressed(Engine::Input::Key::Enter) ||
-                    m_input.isMouseButtonPressed(Engine::Input::MouseButton::Left)) {
-                    m_audio.playMenuClick();
-                    setGameState(GameState::MainMenu);
-                }
-            }
+            // Intentionally no input handled here. The web death screen
+            // restarts the run on Space/click (GameOverScreen.tsx), NOT return
+            // to menu — and the authoritative handler is
+            // CatAnnihilation::updateGameOver (Space/Enter/R → restart, the
+            // TRY AGAIN modal button → restart, Esc/Q → menu). The old
+            // "any key → main menu after 2 s" branch here CONFLICTED with that
+            // restart (a single Space would both restart and try to leave), so
+            // it was removed with the rest of the duplicate end screen.
             break;
 
         default:
