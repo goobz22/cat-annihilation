@@ -123,8 +123,19 @@ void BinaryReader::read(void* data, size_t size) {
     }
 
     m_file.read(static_cast<char*>(data), size);
-    if (!m_file.good() && !m_file.eof()) {
-        throw std::runtime_error("BinaryReader: Failed to read data");
+    // Detect a SHORT read via gcount(), not the stream flags. A read that hits
+    // EOF before filling `size` sets BOTH failbit AND eofbit, so the old
+    // `!good() && !eof()` check was `true && !true` = false and silently
+    // accepted the truncation — read<T>() then returned its uninitialized
+    // `T value` (indeterminate/UB) and callers advanced as if the full read
+    // succeeded (2026-07-17 audit; reachable via readHeader's unguarded path,
+    // surfacing garbage save-slot metadata). gcount() is the count actually
+    // extracted by the last unformatted read; anything short of `size` means a
+    // truncated/corrupt file and must fail loudly (getSaveHeader/loadFromFile
+    // catch it and fall back to a clean default / load failure).
+    if (static_cast<size_t>(m_file.gcount()) != size) {
+        throw std::runtime_error(
+            "BinaryReader: short read (truncated or corrupt file)");
     }
     m_bytesRead += size;
 }

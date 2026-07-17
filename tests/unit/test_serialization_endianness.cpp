@@ -135,3 +135,34 @@ TEST_CASE("decompressData rejects an odd compressed size instead of over-reading
     delete[] compressed;
     delete[] roundtrip;
 }
+
+TEST_CASE("BinaryReader::read throws on a short read (truncated file) instead of returning garbage",
+          "[serialization][security][truncation]") {
+    // Round-3 audit (2026-07-17), MED. BinaryReader::read tested
+    // `if (!good() && !eof())`, but a read that hits EOF before filling `size`
+    // sets BOTH failbit and eofbit, so the condition was `true && !true` = false
+    // and the short read was SILENTLY accepted; read<T>() then returned its
+    // uninitialized `T value` (indeterminate — UB). This is reachable via
+    // getSaveHeader/readHeader (no magic/CRC gate), surfacing garbage save-slot
+    // metadata. The fix throws when fewer bytes than requested were extracted.
+    const auto tmpPath = std::filesystem::temp_directory_path() /
+                         "cat_annihilation_short_read.bin";
+    std::error_code cleanupErr;
+    std::filesystem::remove(tmpPath, cleanupErr);
+
+    {
+        // Only TWO bytes on disk — fewer than the 4 a uint32_t read wants.
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        const char twoBytes[2] = {0x11, 0x22};
+        out.write(twoBytes, sizeof(twoBytes));
+    }
+
+    {
+        BinaryReader reader(tmpPath.string());
+        // Post-fix: the short read at EOF throws. Pre-fix: it silently returns
+        // an indeterminate uint32_t, so this REQUIRE_THROWS fails first.
+        REQUIRE_THROWS(reader.read<uint32_t>());
+    }
+
+    std::filesystem::remove(tmpPath, cleanupErr);
+}
