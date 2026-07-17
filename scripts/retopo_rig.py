@@ -586,8 +586,12 @@ def refine_anatomy(mesh_obj, bbox, anatomy):
         column_counts.append(int(
             (np.linalg.norm(band_xy - centroid_xy, axis=1)
              < column_radius).sum()))
+    # 8% relative bar: legs differ hugely in girth (dog_fast's slim forelegs
+    # measured 126 against a 900+ hind column and a 15% bar false-dropped
+    # them), while genuine tail contacts measure ~0 — the bar only needs to
+    # separate "some leg" from "no leg".
     max_column = max(column_counts) if column_counts else 0
-    keep = [cc >= max(30, 0.15 * max_column) for cc in column_counts]
+    keep = [cc >= max(30, 0.08 * max_column) for cc in column_counts]
     dropped = [i for i, k in enumerate(keep) if not k]
     for i, ((centroid_xy, indices), cc) in enumerate(zip(clusters,
                                                          column_counts)):
@@ -852,22 +856,33 @@ def deformation_sanity(mesh_obj, arm_obj, diag):
         tail = np.array(arm_mat @ bone.tail_local, dtype=np.float64)
         rest_segments.append((head, tail))
 
-    # Per-vertex influence mask: which bones carry a real weight (>=0.1) on
-    # this vertex. Verts with no strong influence (blend-only regions) fall
-    # back to the full bone set rather than dividing by an empty mask.
+    # Per-vertex influence mask: which bones MEANINGFULLY drive this vertex.
+    # A bone qualifies at weight >= 0.25 ("owns a quarter of the vertex"),
+    # and each vertex's TOP-weight bone is always included regardless — so a
+    # genuinely escaped vertex (whose primary driver is misplaced) is always
+    # measured against that driver. The 0.25 bar exists because minor
+    # stabilizer influences are not a tracking promise: a thigh-crease vert
+    # 85% bound to the torso and 15% to the thigh correctly stays with the
+    # torso when the thigh swings, and grading it against the thigh produced
+    # false failures (dog_big 2.07 / ember_leader 1.82 on visually-clean
+    # rigs). Verts with no weights at all fall back to the full bone set.
     group_to_col = {}
     for group_index, group in enumerate(mesh_obj.vertex_groups):
         if group.name in bone_col:
             group_to_col[group_index] = bone_col[group.name]
-    influence = np.zeros((len(mesh_obj.data.vertices), len(bone_names)),
-                         dtype=bool)
+    weight_matrix = np.zeros((len(mesh_obj.data.vertices), len(bone_names)),
+                             dtype=np.float64)
     for vertex in mesh_obj.data.vertices:
         for group_entry in vertex.groups:
             col = group_to_col.get(group_entry.group)
-            if col is not None and group_entry.weight >= 0.10:
-                influence[vertex.index, col] = True
-    no_influence = ~influence.any(axis=1)
-    influence[no_influence, :] = True
+            if col is not None:
+                weight_matrix[vertex.index, col] = group_entry.weight
+    influence = weight_matrix >= 0.25
+    has_weights = weight_matrix.max(axis=1) > 0.0
+    top_bone = np.argmax(weight_matrix, axis=1)
+    influence[np.arange(len(top_bone))[has_weights],
+              top_bone[has_weights]] = True
+    influence[~has_weights, :] = True
 
     rest_dist_raw, rest_nearest = masked_min_distances(
         bone_distance_matrix(rest_pts, rest_segments), influence)
