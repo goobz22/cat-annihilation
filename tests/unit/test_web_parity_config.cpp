@@ -79,12 +79,16 @@ TEST_CASE("dog melee has no shared player i-frame under parity — a swarm is un
     // gate re-fails here.
 
     // Faithful replay of the FIXED (parity) melee application: no shared-i-frame
-    // gate, damage() through the component, then stamp kEnemyMeleeIFrameSeconds
-    // (0 s) — matching EnemyAISystem.cpp under WebParity::kEnabled with no shield.
+    // gate, damage() through the component, then — ONLY IF THE HIT LANDED —
+    // stamp kEnemyMeleeIFrameSeconds (0 s). Matches EnemyAISystem.cpp under
+    // WebParity::kEnabled with no shield, including the `hitLanded` guard that
+    // preserves a deliberate external i-frame (e.g. a Nine-Lives revive grace).
     auto applyDogMeleeParity = [](HealthComponent& player, float damage) {
         player.lastDamageType = DamageType::Physical;
-        player.damage(damage);
-        player.invincibilityTimer = WebParity::kEnemyMeleeIFrameSeconds;
+        const bool hitLanded = player.damage(damage);
+        if (hitLanded) {
+            player.invincibilityTimer = WebParity::kEnemyMeleeIFrameSeconds;
+        }
     };
 
     // Faithful replay of the PRE-PARITY native application: the shared-i-frame
@@ -146,6 +150,19 @@ TEST_CASE("dog melee has no shared player i-frame under parity — a swarm is un
         // The 75 DPS ceiling: only the first dog's 15 lands, the other four
         // are gated by the shared window.
         CHECK(player.currentHealth == 85.0f);
+    }
+
+    SECTION("a deliberate external i-frame (Nine-Lives revive grace) survives a dog swing") {
+        // HealthSystem grants a 1.0 s invincibility after a Nine-Lives revive
+        // (HealthSystem.cpp:372). Dropping the shared-i-frame gate under parity
+        // must NOT collaterally cancel that grace: because the blow is refused
+        // by damage()'s own i-frame check (returns false / did not land), the
+        // fix leaves the timer intact instead of zeroing it.
+        HealthComponent player = freshPlayer();
+        player.invincibilityTimer = 1.0f;  // post-revive grace
+        applyDogMeleeParity(player, WebParity::kEnemyAttackDamage);
+        CHECK(player.currentHealth == 100.0f);     // no damage got through
+        CHECK(player.invincibilityTimer == 1.0f);  // grace preserved, not zeroed
     }
 }
 
