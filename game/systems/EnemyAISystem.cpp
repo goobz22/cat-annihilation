@@ -288,8 +288,20 @@ void EnemyAISystem::transitionToState(EnemyComponent& enemy, AIState newState) {
             // Start chasing
             break;
         case AIState::Attacking:
-            // Reset attack cooldown
-            enemy.attackCooldownTimer = 0.0f;
+            // Do NOT reset attackCooldownTimer here. The per-dog attack cooldown
+            // is a RATE LIMIT that must only be re-armed by an actual fire
+            // (updateAttackingState sets it to attackCooldown after a swing).
+            // Zeroing it on state ENTRY let a dog bypass the web's 1.0 s floor:
+            // with the parity hysteresis band (enter Attacking at dist<=1.2,
+            // leave at dist>1.44) plus zero enemy melee i-frames, kiting the dog
+            // out and back in re-cleared the cooldown and re-fired 15 dmg well
+            // inside 1.0 s (2026-07-17 Round-3 audit). The web gates every swing
+            // on currentTime-lastAttackTime>=1000ms, written ONLY on a fire
+            // (LocalEnemySystem.tsx) — a strict per-dog floor independent of the
+            // state machine. attackCooldownTimer initializes to 0 (EnemyComponent
+            // .hpp) and decrements every frame in ALL states (updateEnemyAI), so
+            // a dog's FIRST attack still fires immediately and the remaining
+            // cooldown survives a kite. Pinned by scripts/lint-cooldown-reset-shape.ts.
             break;
         case AIState::Dead:
             // Begin death

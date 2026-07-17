@@ -119,6 +119,20 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-pause-parity-guards.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-cooldown-reset-shape asserts no state-transition function re-arms a
+// per-actor cooldown timer (the 2026-07-17 enemy attack double-fire class): a
+// rate limit may only be re-armed by the rate-limited action, never on state
+// entry, or kiting bypasses the cooldown floor.
+stages.push(
+  runStage('lint-cooldown-reset-shape:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-cooldown-reset-shape.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-cooldown-reset-shape', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-cooldown-reset-shape.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
