@@ -323,6 +323,21 @@ TEST_CASE("environment (sway, lighting, shadows, tree collision) matches the web
     // its +amplitude peak. This catches an axis swap or a dropped amplitude.
     CHECK(WebParity::treeSwayRotationX(0.0f, 0.0f) == 0.0f);
     CHECK(WebParity::treeSwayRotationZ(0.0f, 0.0f) == 0.01f);
+    // Real motion over time — the fixed native bug was a STATIC transform with
+    // no time term, so the X sway MUST change as the clock advances (sin(0)=0
+    // at t=0, sin(0.5)≈0.479 at t=1). And the z axis multiplies 0.7 into the
+    // ALREADY 0.5-scaled time (cos(0.7)=0.7648 at t=2), NOT into raw elapsed
+    // (cos(1.4)=0.170) — guarding the stale audit paraphrase. Deeper coverage
+    // lives in test_web_parity_environment.cpp; these run here too because this
+    // file is already wired into the test build.
+    CHECK(std::fabs(WebParity::treeSwayRotationX(0.0f, 1.0f) -
+                    WebParity::treeSwayRotationX(0.0f, 0.0f)) > 1e-4f);
+    CHECK(std::fabs(WebParity::treeSwayRotationX(0.0f, 1.0f) -
+                    static_cast<float>(std::sin(0.5) * 0.01)) < 1e-5f);
+    CHECK(std::fabs(WebParity::treeSwayRotationZ(0.0f, 2.0f) -
+                    static_cast<float>(std::cos(0.7) * 0.01)) < 1e-5f);
+    CHECK(std::fabs(WebParity::treeSwayRotationZ(0.0f, 2.0f) -
+                    static_cast<float>(std::cos(1.4) * 0.01)) > 1e-4f);
 
     // Ambient — BasicScene.tsx:195 <ambientLight intensity={0.5} />.
     CHECK(WebParity::kAmbientLightIntensity == 0.5f);
