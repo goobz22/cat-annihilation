@@ -10,6 +10,9 @@
 
 #include "imgui.h"
 
+#include <cmath>   // std::round — snap the slider to the web's 0.1 step
+#include <cstdio>  // std::snprintf — one-decimal value chip
+
 namespace Game {
 
 // Settings panel — same wiring shape as MainMenu. The two menus keep
