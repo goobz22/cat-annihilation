@@ -515,14 +515,13 @@ def bake_texture(source_obj, retopo_obj, tex_size, diag):
 # build_armature exposes for exactly this purpose — rq's own detection logic
 # is not modified.
 
-def cluster_ground_contacts(points, ground_band_count, cluster_threshold):
-    """Greedy XY clustering of the lowest-`ground_band_count` verts.
-    Returns [(centroid_xy ndarray, vert_indices list), ...] sorted by size.
-    Greedy running-centroid clustering is sufficient here because paw
-    contacts are compact islands separated by air at ground level."""
-    order = np.argsort(points[:, 2])[:ground_band_count]
+def greedy_cluster_xy(points, vert_indices, cluster_threshold):
+    """Greedy XY clustering of the given vert indices. Returns
+    [(centroid_xy ndarray, vert_indices list), ...] sorted by size. Greedy
+    running-centroid clustering is sufficient here because paw contacts are
+    compact islands separated by air."""
     clusters = []  # [xy_sum, count, indices]
-    for vert_index in order:
+    for vert_index in vert_indices:
         xy = points[vert_index, :2]
         for cluster in clusters:
             if np.linalg.norm(cluster[0] / cluster[1] - xy) < cluster_threshold:
@@ -571,9 +570,10 @@ def refine_anatomy(mesh_obj, bbox, anatomy):
     body_length = bbox["body_length"]
 
     band_count = max(60, int(count * 0.03))
-    clusters = cluster_ground_contacts(
-        points, band_count, cluster_threshold=0.15 * max(body_length,
-                                                         bbox["body_width"]))
+    band_order = np.argsort(points[:, 2])[:band_count]
+    ground_band_top = float(points[band_order[-1], 2])
+    cluster_threshold = 0.15 * max(body_length, bbox["body_width"])
+    clusters = greedy_cluster_xy(points, band_order, cluster_threshold)
 
     # Leg-column density test per cluster.
     column_radius = 0.08 * body_length
@@ -616,9 +616,114 @@ def refine_anatomy(mesh_obj, bbox, anatomy):
                       f"({new_paw[0]:.3f},{new_paw[1]:.3f})")
                 anatomy[paw_name] = Vector(new_paw)
 
-    # Attach symmetrization about the body lateral midline.
+    # Refinement 1b — degenerate-side paw recovery. A mid-stride sculpt
+    # (dog_big: three paws planted, the fourth RAISED, so one side has a
+    # single ground contact near the quadrant boundary) makes the quadrant
+    # split invent two nearly-coincident paws at mid-body; both of that
+    # side's leg chains then collapse onto one vertical column and heat
+    # diffusion cross-binds them (measured ratio 7 on dog_big's run). Detect
+    # the collapsed side by comparing per-side paw separations, then rebuild
+    # it from its REAL contacts: the planted cluster, plus a raised-paw
+    # cluster searched for in the elevated band just above the ground band;
+    # any paw still missing mirrors its opposite-side counterpart across the
+    # body midline (torsos are symmetric even when stances are not).
     lat_mid = 0.5 * (np.array(anatomy['hip_center']) @ side
                      + np.array(anatomy['chest_center']) @ side)
+
+    def fw_of(xyz):
+        return float((np.asarray(xyz, dtype=np.float64) - origin) @ forward)
+
+    def lat_of_xy(xy):
+        return float(np.array((xy[0], xy[1], 0.0)) @ side)
+
+    def side_of_xy(xy):
+        return 'L' if lat_of_xy(xy) > lat_mid else 'R'
+
+    def mirror_across_midline(point):
+        point = np.asarray(point, dtype=np.float64).copy()
+        lateral = float(point @ side)
+        return point - side * (2.0 * (lateral - lat_mid))
+
+    separation = {}
+    for body_side in ('L', 'R'):
+        separation[body_side] = abs(
+            fw_of(anatomy[f'paw_front_{body_side}'])
+            - fw_of(anatomy[f'paw_back_{body_side}']))
+
+    for bad_side, good_side in (('L', 'R'), ('R', 'L')):
+        if separation[bad_side] >= 0.4 * separation[good_side]:
+            continue
+        print(f"[retopo_rig] side {bad_side} paw separation "
+              f"{separation[bad_side]:.3f} < 40% of side {good_side}'s "
+              f"{separation[good_side]:.3f} -> rebuilding side {bad_side}")
+
+        # Real contacts on the bad side: leg-backed ground clusters...
+        candidates = []  # (fw, world_xyz)
+        for (centroid_xy, indices), is_leg in zip(clusters, keep):
+            if is_leg and side_of_xy(centroid_xy) == bad_side:
+                paw_z = float(points[indices, 2].min())
+                pos = np.array((centroid_xy[0], centroid_xy[1], paw_z))
+                candidates.append((fw_of(pos), pos))
+        planted_xy = [c_xy for (c_xy, _), k in zip(clusters, keep) if k]
+
+        # ...plus a possible RAISED paw in the band just above ground level
+        # (a mid-stride paw hangs below 15% of body height). It must not sit
+        # over a planted cluster (that column is the planted leg itself) and
+        # must have a leg column above it (excludes a drooping tail tip).
+        elevated = np.nonzero(
+            (points[:, 2] > ground_band_top)
+            & (points[:, 2] <= ground_z + 0.15 * body_height))[0]
+        elevated = [vi for vi in elevated
+                    if side_of_xy(points[vi, :2]) == bad_side]
+        for centroid_xy, indices in greedy_cluster_xy(points, elevated,
+                                                      cluster_threshold):
+            if len(indices) < 15:
+                continue
+            if any(np.linalg.norm(centroid_xy - p) < cluster_threshold
+                   for p in planted_xy):
+                continue
+            column = int((np.linalg.norm(band_xy - centroid_xy, axis=1)
+                          < column_radius).sum())
+            if column < 30:
+                continue
+            paw_z = float(points[indices, 2].min())
+            pos = np.array((centroid_xy[0], centroid_xy[1], paw_z))
+            candidates.append((fw_of(pos), pos))
+            print(f"[retopo_rig]   raised-paw candidate on side {bad_side}: "
+                  f"({pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}) "
+                  f"leg_column={column}")
+
+        front_key = f'paw_front_{bad_side}'
+        back_key = f'paw_back_{bad_side}'
+        if len(candidates) >= 2:
+            candidates.sort(key=lambda c: -c[0])
+            anatomy[front_key] = Vector(candidates[0][1])
+            anatomy[back_key] = Vector(candidates[-1][1])
+        elif len(candidates) == 1:
+            # One real contact: give it to whichever end it matches best
+            # (nearest opposite-side paw in the forward direction) and
+            # mirror the other end from the good side.
+            fw_candidate, pos = candidates[0]
+            front_good = anatomy[f'paw_front_{good_side}']
+            back_good = anatomy[f'paw_back_{good_side}']
+            if abs(fw_candidate - fw_of(front_good)) <= \
+                    abs(fw_candidate - fw_of(back_good)):
+                anatomy[front_key] = Vector(pos)
+                anatomy[back_key] = Vector(mirror_across_midline(back_good))
+            else:
+                anatomy[back_key] = Vector(pos)
+                anatomy[front_key] = Vector(mirror_across_midline(front_good))
+        else:
+            # No usable contacts at all: mirror the whole side.
+            anatomy[front_key] = Vector(
+                mirror_across_midline(anatomy[f'paw_front_{good_side}']))
+            anatomy[back_key] = Vector(
+                mirror_across_midline(anatomy[f'paw_back_{good_side}']))
+        print(f"[retopo_rig] rebuilt {front_key}="
+              f"{tuple(round(v, 3) for v in anatomy[front_key])} {back_key}="
+              f"{tuple(round(v, 3) for v in anatomy[back_key])}")
+
+    # Refinement 2 — attach symmetrization about the body lateral midline.
     for left_name, right_name, center_name in (
         ('shoulder_L', 'shoulder_R', 'chest_center'),
         ('thigh_L', 'thigh_R', 'hip_center'),
