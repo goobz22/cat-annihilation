@@ -10,7 +10,11 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <string>
+#include <vector>
 
 namespace Game {
 
@@ -437,96 +441,91 @@ void MainMenu::handleInput() {
 // Private Methods
 // ============================================================================
 
-void MainMenu::updateButtons() {
-    // Update button hover states based on mouse position
-    Engine::f64 mouseX = 0.0;
-    Engine::f64 mouseY = 0.0;
-    m_input.getMousePosition(mouseX, mouseY);
+namespace {
 
-    int32_t previousHoveredIndex = m_hoveredButtonIndex;
-    m_hoveredButtonIndex = -1;
-
-    for (size_t i = 0; i < m_buttons.size(); ++i) {
-        auto& button = m_buttons[i];
-
-        // Check if mouse is over button
-        bool isOver = mouseX >= button.position[0] &&
-                      mouseX <= button.position[0] + button.size[0] &&
-                      mouseY >= button.position[1] &&
-                      mouseY <= button.position[1] + button.size[1];
-
-        button.hovered = isOver && button.enabled;
-
-        if (button.hovered) {
-            m_hoveredButtonIndex = static_cast<int32_t>(i);
-
-            // Play hover sound on first hover
-            if (previousHoveredIndex != m_hoveredButtonIndex) {
-                m_audio.playMenuHover();
-            }
-        }
-    }
+// Pack a web sRGB UiColor into an ImGui colour. The optional alpha
+// reproduces the CSS rgba() opacity the web uses on translucent panels /
+// borders. Chrome colours are handed to ImGui RAW (no srgb->linear decode)
+// — see the color-space note in WebParityConfig.hpp — so this is a straight
+// byte copy plus the alpha.
+ImU32 toImCol(const WebParity::UiColor& color, float alpha = 1.0F) {
+    return IM_COL32(color.red, color.green, color.blue,
+                    static_cast<int>(alpha * 255.0F + 0.5F));
 }
 
+// The web card / mode-card / panel fills are 145deg gradients, but ImGui's
+// DrawList can round a rect OR gradient-fill it, never both. For those
+// rounded surfaces we fill with the MIDPOINT of the two gradient stops —
+// visually indistinguishable from the subtle #2d2d2d→#1a1a1a-class ramps at
+// this scale, and it preserves the rounded corners the card look depends on.
+// (The one surface where a true gradient reads — the full-screen, un-rounded
+// navy backdrop — uses AddRectFilledMultiColor in render() instead.)
+ImU32 midFill(const WebParity::UiColor& top, const WebParity::UiColor& bottom,
+              float alpha = 1.0F) {
+    return IM_COL32((top.red + bottom.red) / 2,
+                    (top.green + bottom.green) / 2,
+                    (top.blue + bottom.blue) / 2,
+                    static_cast<int>(alpha * 255.0F + 0.5F));
+}
+
+// Word-wrap `text` to lines that each fit within maxWidth at (font, size).
+// Used for the mode-card description paragraphs, which the web centres and
+// wraps (text-align:center inside a fixed card). ImGui's AddText can wrap but
+// only LEFT-aligns; splitting into lines here lets the caller centre each
+// one, matching the web. A single word longer than maxWidth is kept whole on
+// its own line rather than dropped.
+std::vector<std::string> wrapToWidth(const ImFont* font, float size,
+                                     const std::string& text, float maxWidth) {
+    std::vector<std::string> lines;
+    std::string current;
+    size_t index = 0;
+    while (index < text.size()) {
+        const size_t space = text.find(' ', index);
+        const std::string word =
+            text.substr(index, space == std::string::npos ? std::string::npos : space - index);
+        const std::string trial = current.empty() ? word : current + " " + word;
+        if (current.empty() ||
+            font->CalcTextSizeA(size, FLT_MAX, 0.0F, trial.c_str()).x <= maxWidth) {
+            current = trial;
+        } else {
+            lines.push_back(current);
+            current = word;
+        }
+        if (space == std::string::npos) {
+            break;
+        }
+        index = space + 1;
+    }
+    if (!current.empty()) {
+        lines.push_back(current);
+    }
+    return lines;
+}
+
+} // namespace
+
 void MainMenu::renderBackground(CatEngine::Renderer::UIPass& uiPass) {
-    // Dark gradient background
+    // Flat navy base fill only. The web menu's real backdrop is a three-stop
+    // navy gradient with NO star specks (menus.css:1120); that gradient — and
+    // the card on top of it — are drawn with the ImGui DrawList inside
+    // render(). This UIPass quad is just the fallback that keeps the screen
+    // navy (never black) on the harness path where no ImGui layer is
+    // attached. The pre-rebuild 50-star field + bottom gradient overlay had
+    // no web analog and are gone.
     CatEngine::Renderer::UIPass::QuadDesc bgQuad;
     bgQuad.x = 0.0F;
     bgQuad.y = 0.0F;
     bgQuad.width = static_cast<float>(m_screenWidth);
     bgQuad.height = static_cast<float>(m_screenHeight);
-    bgQuad.r = 0.05F;
-    bgQuad.g = 0.05F;
-    bgQuad.b = 0.12F;
+    // Middle gradient stop (#16213e) so the flat fallback reads as the same
+    // navy family as the gradient's centre rather than either extreme.
+    bgQuad.r = static_cast<float>(WebParity::kMenuBgMid.red) / 255.0F;
+    bgQuad.g = static_cast<float>(WebParity::kMenuBgMid.green) / 255.0F;
+    bgQuad.b = static_cast<float>(WebParity::kMenuBgMid.blue) / 255.0F;
     bgQuad.a = 1.0F;
     bgQuad.depth = 0.0F;
     bgQuad.texture = nullptr;
     uiPass.DrawQuad(bgQuad);
-
-    // Animated stars/particles
-    constexpr int starCount = 50;
-    float animOffset = std::sin(m_backgroundAnimTimer) * 20.0F;
-
-    for (int i = 0; i < starCount; ++i) {
-        auto seedX = static_cast<float>(i * 37);
-        auto seedY = static_cast<float>(i * 53);
-
-        float x = std::fmod(seedX, static_cast<float>(m_screenWidth));
-        float y = std::fmod(seedY + animOffset, static_cast<float>(m_screenHeight));
-        if (y < 0.0F) {
-            y += static_cast<float>(m_screenHeight);
-        }
-
-        float alpha = (std::sin((m_backgroundAnimTimer * 2.0F) + static_cast<float>(i)) + 1.0F) * 0.25F;
-        float size = 2.0F + (static_cast<float>(i % 3) * 1.0F);
-
-        CatEngine::Renderer::UIPass::QuadDesc star;
-        star.x = x - (size / 2.0F);
-        star.y = y - (size / 2.0F);
-        star.width = size;
-        star.height = size;
-        star.r = 1.0F;
-        star.g = 1.0F;
-        star.b = 1.0F;
-        star.a = alpha;
-        star.depth = 0.05F;
-        star.texture = nullptr;
-        uiPass.DrawQuad(star);
-    }
-
-    // Subtle gradient overlay at bottom
-    CatEngine::Renderer::UIPass::QuadDesc gradientOverlay;
-    gradientOverlay.x = 0.0F;
-    gradientOverlay.y = static_cast<float>(m_screenHeight) * 0.7F;
-    gradientOverlay.width = static_cast<float>(m_screenWidth);
-    gradientOverlay.height = static_cast<float>(m_screenHeight) * 0.3F;
-    gradientOverlay.r = 0.1F;
-    gradientOverlay.g = 0.05F;
-    gradientOverlay.b = 0.15F;
-    gradientOverlay.a = 0.5F;
-    gradientOverlay.depth = 0.06F;
-    gradientOverlay.texture = nullptr;
-    uiPass.DrawQuad(gradientOverlay);
 }
 
 void MainMenu::renderModeSelectPage(float width, float height) {
