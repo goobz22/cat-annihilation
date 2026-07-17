@@ -75,7 +75,12 @@ using Engine::vec3;
 
 namespace {
 
-constexpr uint32_t kPropertySeed = 0x4FD80100u;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Per-section salts (kPropertySeed ^ N) below keep
+// each generator independent; the override shifts the whole family together.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property camera_frustum"));
 
 // Build a forward-looking camera VP matrix.
 //   eye at (0, 0, 0), looking down -Z, world-up = +Y, fov = 60°,
