@@ -938,7 +938,7 @@ def render_previews(mesh_obj, arm_obj, out_dir, base_name):
 # Self-contained fallback rig + gait (only used if rig_quadruped import failed)
 # ---------------------------------------------------------------------------
 
-def smooth_skin_weights(mesh_obj, factor=0.5, repeat=3):
+def smooth_skin_weights(mesh_obj, factor=0.6, repeat=6):
     """Blur the skin weights across adjacent vertices, then re-limit to 4
     influences and renormalise. WHY: on the bulky variants the thin spine bones
     sit deep inside a thick body, so heat weighting leaves sharp, locally-wrong
