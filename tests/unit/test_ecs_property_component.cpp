@@ -269,7 +269,7 @@ TEST_CASE("ComponentPool property: random churn matches std::map ground truth",
     ComponentPool<ScalarComponent> pool;
     std::map<uint64_t, int> oracle;
 
-    std::mt19937 rng(0xC0FFEEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_component:0xC0FFEE")));
     std::uniform_int_distribution<int> opCoin(0, 99);
     std::uniform_int_distribution<int> valueDist(-1'000'000, 1'000'000);
 
@@ -353,7 +353,7 @@ TEST_CASE("ComponentPool property: 1000-entity bulk add then remove leaves pool 
     // swap-on-remove path heavily (every removal except the last triggers
     // a swap).
     std::vector<Entity> removalOrder = handles;
-    std::mt19937 rng(0x12345678u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_component:0x12345678")));
     std::shuffle(removalOrder.begin(), removalOrder.end(), rng);
 
     for (size_t i = 0; i < removalOrder.size(); ++i) {
