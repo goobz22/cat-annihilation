@@ -85,7 +85,7 @@ TEST_CASE("Entity: fuzz pack/unpack with random uint32 pairs",
     // 5,000 random (index, generation) pairs. If any pair fails to round-trip
     // through the bit-pack we have an Entity-layout bug — the kind that
     // would corrupt every saved handle in scene files.
-    std::mt19937 rng(0xCA7F00Du);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_entity:0xCA7F00D")));
     std::uniform_int_distribution<uint32_t> dist(0, UINT32_MAX);
 
     for (int iteration = 0; iteration < 5000; ++iteration) {
@@ -298,7 +298,7 @@ TEST_CASE("EntityManager property: aliveCount tracks ground truth under churn",
     std::vector<Entity> aliveHandles;
     std::vector<Entity> historicalHandles; // includes destroyed
 
-    std::mt19937 rng(0xBABE1234u);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_entity:0xBABE1234")));
     std::bernoulli_distribution createCoin(0.65); // bias toward create
 
     for (int step = 0; step < 1000; ++step) {
@@ -347,7 +347,7 @@ TEST_CASE("EntityManager property: recycled handle never collides with creator",
     // of the destroyed ones and gameplay code that kept a stale pointer
     // would silently retarget itself onto the new entity.
     EntityManager manager;
-    std::mt19937 rng(0xDEADC0DEu);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_entity:0xDEADC0DE")));
 
     std::vector<Entity> aliveHandles;
     std::set<uint64_t> everSeen;
@@ -439,7 +439,7 @@ TEST_CASE("EntityManager: 10k create/destroy stream leaves count consistent",
     // in roughly even measure.
     EntityManager manager;
     std::vector<Entity> aliveHandles;
-    std::mt19937 rng(0xFEEDF00Du);
+    std::mt19937 rng(static_cast<unsigned>(CatTest::DeterministicSeed("test_ecs_property_entity:0xFEEDF00D")));
 
     for (int step = 0; step < 10000; ++step) {
         bool create = aliveHandles.empty() || (rng() & 3) != 0; // ~75% create
