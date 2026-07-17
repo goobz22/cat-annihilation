@@ -46,9 +46,17 @@ Semicolon-separated, executed in order:
 | `quit` | end the run cleanly |
 
 `expect:` queries: `state` (MainMenu/Playing/Paused/GameOver/Victory),
-`wave`, `enemiesRemaining`, `enemiesKilled`, `playerHealth`, `playerAlive`,
-`level`. Unknown queries return a sentinel that never matches — typos fail
-loudly.
+`wave`, `enemiesRemaining`, `enemiesKilled`, `playerHealth`,
+`playerMaxHealth`, `playerAlive`, `level`, `playerX`/`playerY`/`playerZ`
+(world position — movement/walk-speed oracles), `cameraX`/`cameraY`/`cameraZ`
+(camera rig geometry). Unknown queries return a sentinel that never matches —
+typos fail loudly.
+
+Proven probe patterns (all in `build-ninja/headless/`): movement/turn parity
+(`hold:w,2` → `expect:playerZ<=-4`), camera rig (`expect:cameraY>=7.9`),
+progression e2e (250 s `--autoplay` soak → `expect:level>=2` +
+`expect:playerMaxHealth>=120`), restart semantics, wind-sway pixel-diff on
+two `screenshot:` frames 1.2 s apart.
 
 Clicks inject at BOTH layers the game reads: `Engine::Input`'s post-poll
 override queues (gameplay) and ImGui's event queue (menus), with a
