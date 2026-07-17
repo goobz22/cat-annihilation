@@ -208,3 +208,49 @@ TEST_CASE("Animator: mid-transition play() snapshots intermediate pose",
     REQUIRE(earlyNewTransitionX > 20.0f);
     REQUIRE(earlyNewTransitionX < 80.0f);
 }
+
+TEST_CASE("Animator: a non-looping clip HOLDS its last frame at the end, not frame 0",
+          "[animator]") {
+    // Round-3 audit (2026-07-17), HIGH. Animation::sample unconditionally
+    // wrapped time with normalizeTime(time, /*loop=*/true), so even after
+    // Animator::updateAnimation clamped a non-looping clip's cursor to
+    // duration and stopped playback, the sample wrapped duration->0 (fmod
+    // (d,d)==0) and the pose snapped to the FIRST keyframe. A finished
+    // attack / a death pose / a seated idle all visibly popped back to the
+    // standing first frame instead of holding their final pose.
+    //
+    // Clip translates root (0,0,0) -> (10,0,0) over 0.4s. After running well
+    // past the end as a NON-looping state, the held pose MUST be the last
+    // keyframe (10,0,0), not the first (0,0,0).
+    auto skeleton = makeSingleBoneSkeleton(vec3(0.0f, 0.0f, 0.0f));
+    auto clip = makeLinearTranslationClip("attack", 0.4f,
+                                          vec3(0.0f, 0.0f, 0.0f),
+                                          vec3(10.0f, 0.0f, 0.0f));
+    Animator animator;
+    animator.setSkeleton(skeleton);
+    animator.addState(AnimationState("attack", clip, 0.0f, /*loop=*/false));
+
+    animator.play("attack");
+    // Step well past the 0.4s duration (also clears any transition blend).
+    for (int i = 0; i < 10; ++i) {
+        animator.update(0.1f);
+    }
+
+    const auto& pose = animator.getCurrentPose();
+    REQUIRE(pose.size() == 1u);
+    // Pre-fix: ~0.0 (wrapped to frame 0). Post-fix: 10.0 (held last frame).
+    REQUIRE(pose[0].position.x == Approx(10.0f).margin(0.01f));
+
+    // Positive control: the SAME clip as a LOOPING state must still wrap.
+    // At an accumulated cursor the loop keeps advancing; after 1.0s total on
+    // a 0.4s clip, fmod(1.0,0.4)=0.2 -> lerp -> (5,0,0). This guards against
+    // a fix that simply disables looping everywhere.
+    Animator looping;
+    looping.setSkeleton(makeSingleBoneSkeleton(vec3(0.0f, 0.0f, 0.0f)));
+    looping.addState(AnimationState("walk", clip, 0.0f, /*loop=*/true));
+    looping.play("walk");
+    for (int i = 0; i < 10; ++i) {
+        looping.update(0.1f);  // 1.0s total; fmod(1.0,0.4)=0.2 -> x≈5
+    }
+    REQUIRE(looping.getCurrentPose()[0].position.x == Approx(5.0f).margin(0.5f));
+}
