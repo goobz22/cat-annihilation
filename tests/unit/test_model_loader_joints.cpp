@@ -24,6 +24,7 @@
 
 #include "assets/ModelLoader.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -70,6 +71,26 @@ struct GlbSpec {
     // matrix carries translation x = -(j+1) — distinctive per slot so a test
     // can prove each IBM landed on the node skin.joints[j] points at.
     bool includeIbms = false;
+
+    // When true, node 1 ("j1") carries an explicit column-major `matrix`
+    // property instead of the default (no matrix -> identity localTransform).
+    // Exercises the ExtractNodes matrix branch. `nodeMatrix` is stored in
+    // glTF's required layout — COLUMN-MAJOR, element (row,col) at index
+    // col*4+row (glTF 2.0 §3.7.3.1) — and is serialized in that same order.
+    // The default value is deliberately ASYMMETRIC with a distinct
+    // translation column: a symmetric or identity matrix is transpose-
+    // invariant and would pass even a loader that transposes on load, so it
+    // could never catch the transpose bug this fixture is here to pin.
+    bool includeNodeMatrix = false;
+    std::array<float, 16> nodeMatrix = {
+        // column 0            column 1            column 2            column 3
+        2.f, 0.f, 0.f, 0.f,  0.f, 3.f, 0.f, 0.f,  5.f, 0.f, 4.f, 0.f,  7.f, 8.f, 9.f, 1.f,
+        // Notes on why these values catch a transpose:
+        //   - index 8 (column 2, row 0) = 5 is off-diagonal; its mirror
+        //     (column 0, row 2, index 2) = 0, so a transpose is observable.
+        //   - indices 12/13/14 = translation (7,8,9) live in the LAST COLUMN;
+        //     a transposed load scatters them into the bottom ROW instead.
+    };
 };
 
 void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
@@ -138,11 +159,27 @@ void writeTestGlb(const std::filesystem::path& path, const GlbSpec& spec) {
     }
     skinJson += "]";
     if (spec.includeIbms) skinJson += ",\"inverseBindMatrices\":4";
+
+    // Node 1 ("j1") optionally carries an explicit `matrix`. The 16 floats
+    // are serialized in the SAME order GlbSpec stores them, which IS glTF's
+    // required column-major layout — so the on-disk JSON round-trips through
+    // ExtractNodes exactly as the spec intends, with no re-index here.
+    std::string node1Json = "{\"name\":\"j1\"";
+    if (spec.includeNodeMatrix) {
+        node1Json += ",\"matrix\":[";
+        for (size_t element = 0; element < spec.nodeMatrix.size(); ++element) {
+            if (element) node1Json += ",";
+            node1Json += std::to_string(spec.nodeMatrix[element]);
+        }
+        node1Json += "]";
+    }
+    node1Json += "}";
+
     std::string json = std::string("{")
         + "\"asset\":{\"version\":\"2.0\"},"
         + "\"scene\":0,"
         + "\"scenes\":[{\"nodes\":[0]}],"
-        + "\"nodes\":[{\"name\":\"root\",\"children\":[1,2,3]},{\"name\":\"j1\"},{\"name\":\"j2\"},{\"name\":\"j3\"}],"
+        + "\"nodes\":[{\"name\":\"root\",\"children\":[1,2,3]}," + node1Json + ",{\"name\":\"j2\"},{\"name\":\"j3\"}],"
         + "\"skins\":[{" + skinJson + "}],"
         + "\"meshes\":[{\"name\":\"tri\",\"primitives\":[{"
         + "\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],"
@@ -324,4 +361,56 @@ TEST_CASE("skin inverseBindMatrices scatter onto the nodes skin.joints names",
     CHECK(model->nodes[3].inverseBindMatrix[3][0] == Approx(-2.0f));  // slot 1
     CHECK(model->nodes[1].inverseBindMatrix[3][0] == Approx(-3.0f));  // slot 2
     CHECK(model->nodes[0].inverseBindMatrix[3][0] == Approx(-4.0f));  // slot 3
+}
+
+TEST_CASE("node matrix loads column-major without transposing", "[model-loader][nodes]") {
+    // THE BUG THIS PINS (found 2026-07-17 in the parity audit): ExtractNodes
+    // read the glTF node `matrix` as node.localTransform[c][r] = mat[r*4+c],
+    // which TRANSPOSES the matrix. glTF 2.0 §3.7.3.1 stores `matrix` as a
+    // 16-element COLUMN-MAJOR array (element (row,col) at index col*4+row),
+    // and glm::mat4 is column-major with mat[col][row] indexing, so the
+    // correct copy is localTransform[col][row] = mat[col*4+row].
+    //
+    // Every shipped asset that carries a node matrix carries the IDENTITY
+    // matrix (props) while the rigs use TRS with no matrix, and
+    // transpose(I) == I — so no shipped asset is mis-loaded today, but the
+    // first asset authored with a real (rotated/translated) node matrix
+    // would have loaded a corrupted bind pose that feeds skinning. The
+    // fixture matrix is ASYMMETRIC with translation (7,8,9) in its last
+    // column precisely so the transpose is observable: a symmetric matrix
+    // would pass a broken loader unchanged.
+    GlbSpec spec;
+    spec.includeNodeMatrix = true;  // asymmetric matrix on node 1 ("j1")
+    TempGlb glb("cat_test_node_matrix.glb", spec);
+
+    auto model = CatEngine::ModelLoader::Load(glb.path.string());
+
+    REQUIRE(model->nodes.size() == 4);
+    const glm::mat4& transform = model->nodes[1].localTransform;
+
+    // Translation lives in the LAST COLUMN of a column-major matrix, i.e.
+    // localTransform[3][0..2]. The transposed loader put these three values
+    // into the bottom ROW (localTransform[0..2][3]) instead, so each of
+    // these fails on the old code (it read 0 there).
+    CHECK(transform[3][0] == Approx(7.0f));  // translation.x
+    CHECK(transform[3][1] == Approx(8.0f));  // translation.y
+    CHECK(transform[3][2] == Approx(9.0f));  // translation.z
+
+    // The asymmetric off-diagonal: glTF index 8 = (row 0, column 2) = 5.
+    // A transpose would land it at localTransform[0][2] and leave [2][0]=0.
+    CHECK(transform[2][0] == Approx(5.0f));
+
+    // The bottom row must stay [0,0,0,1] for an affine node matrix. The
+    // transposed loader wrote translation into [0][3]/[1][3]/[2][3], so this
+    // block also fails on the old code.
+    CHECK(transform[0][3] == Approx(0.0f));
+    CHECK(transform[1][3] == Approx(0.0f));
+    CHECK(transform[2][3] == Approx(0.0f));
+    CHECK(transform[3][3] == Approx(1.0f));
+
+    // Diagonal scale terms are transpose-invariant, but assert them so a
+    // wholesale mis-read (e.g. off-by-one flattening) is also caught.
+    CHECK(transform[0][0] == Approx(2.0f));
+    CHECK(transform[1][1] == Approx(3.0f));
+    CHECK(transform[2][2] == Approx(4.0f));
 }

@@ -1255,10 +1255,30 @@ void ModelLoader::ExtractNodes(const GLTFData& data, Model& model) {
 
         // Transform
         if (nodeJson.contains("matrix")) {
+            // glTF 2.0 §3.7.3.1 stores a node's `matrix` as a 16-element
+            // COLUMN-MAJOR array: the element at logical (row, col) lives at
+            // flat index col*4 + row. glm::mat4 is ALSO column-major and its
+            // operator[] selects a COLUMN, so `localTransform[col][row]` names
+            // that same logical element. The correct, layout-preserving copy is
+            // therefore localTransform[col][row] = mat[col*4 + row] — a straight
+            // memcpy-order transfer, NOT a re-index.
+            //
+            // WHY this deserves a comment (and a pinned regression test): the
+            // previous code read mat[row*4 + col], which silently TRANSPOSED
+            // every non-identity node matrix. It went unnoticed because every
+            // `matrix` a shipped asset actually carries is the identity (props
+            // use identity node matrices; the rigs use TRS with no matrix at
+            // all), and transpose(I) == I. The first asset authored with a real
+            // node matrix — any rotation or a non-origin translation — would
+            // have loaded a corrupted bind pose: e.g. translation, which glTF
+            // stores in the last column (indices 12/13/14), would have been
+            // scattered into the bottom row instead. node.localTransform feeds
+            // the skeleton bind pose (see CatEntity/DogEntity fromMatrix), so a
+            // transpose here corrupts skinning downstream.
             const auto& mat = nodeJson["matrix"];
-            for (int r = 0; r < 4; ++r) {
-                for (int c = 0; c < 4; ++c) {
-                    node.localTransform[c][r] = mat[r * 4 + c];
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    node.localTransform[column][row] = mat[column * 4 + row];
                 }
             }
         } else {
