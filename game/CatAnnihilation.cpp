@@ -693,6 +693,23 @@ void CatAnnihilation::initializeUI() {
     pauseMenu_->setQuitCallback([]() {
         // Handled by main loop
     });
+    // Web-parity gameplay sliders → PlayerControlSystem multipliers. The pause
+    // modal's "TURN SENSITIVITY" / "MOVEMENT SPEED" sliders push their new
+    // value here, mirroring the web's spinSensitivityChanged / moveSpeedChanged
+    // events that CatCharacter/index.tsx folds into TURN_SPEED / MOVEMENT_SPEED.
+    // Null-guarded because the player control system is created in initSystems()
+    // and this UI wiring runs alongside it; a null system just means the slider
+    // still moves and remembers its value but drives nothing until wired.
+    pauseMenu_->setTurnSensitivityChangedCallback([this](float scale) {
+        if (playerControlSystem_ != nullptr) {
+            playerControlSystem_->setTurnSensitivityScale(scale);
+        }
+    });
+    pauseMenu_->setMoveSpeedChangedCallback([this](float scale) {
+        if (playerControlSystem_ != nullptr) {
+            playerControlSystem_->setMoveSpeedScale(scale);
+        }
+    });
     if (imguiLayer_ != nullptr) {
         pauseMenu_->setImGuiLayer(imguiLayer_);
     }
@@ -1693,8 +1710,13 @@ void CatAnnihilation::handleInput() {
         gameUI_->handleInput();
     }
 
-    // Check for pause
-    if (input_->isKeyPressed(Engine::Input::Key::Escape)) {
+    // Check for pause. Web parity (PauseMenu.tsx:33): the pause toggles on ESC
+    // OR P. This is the AUTHORITATIVE handler — it drives the real
+    // pause()/unpause() and setState() mirrors the result back into GameUI, so
+    // adding P here (rather than in GameUI::handleInput, which cannot also
+    // update this class's state) keeps the two state machines from desyncing.
+    if (input_->isKeyPressed(Engine::Input::Key::Escape) ||
+        input_->isKeyPressed(Engine::Input::Key::P)) {
         if (currentState_ == GameState::Playing) {
             pause();
         } else if (currentState_ == GameState::Paused) {
