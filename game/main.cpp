@@ -52,6 +52,7 @@
 #include "imgui.h"
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -93,6 +94,17 @@ struct CommandLineArgs {
     // --hidden + --frame-dump it verifies menu flows (click Survival →
     // Customize page → START GAME) with zero desktop presence.
     std::string inputScriptText;
+
+    // --dump-dir <dir>: where input-script `screenshot:` captures land
+    // (default "."). Separate from --frame-dump so a script can take many
+    // named checkpoints AND still get the final exit frame.
+    std::string dumpDir = ".";
+
+    // --state-log <path>: machine-readable twin of the human heartbeat
+    // line — one JSON object per second (plus one per game-state
+    // transition) with state/wave/enemies/hp/level/fps. Headless runs get
+    // a timeline that scripts can assert on, instead of only an exit frame.
+    std::string stateLogPath;
 
     // --max-frames <N>: if > 0, break the main loop cleanly after rendering
     // this many frames. Used by nightly smoke runs so the binary exits with
@@ -372,6 +384,14 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.inputScriptText = argv[++i];
             }
+        } else if (arg == "--dump-dir") {
+            if (i + 1 < argc) {
+                args.dumpDir = translateMsysPath(argv[++i]);
+            }
+        } else if (arg == "--state-log") {
+            if (i + 1 < argc) {
+                args.stateLogPath = translateMsysPath(argv[++i]);
+            }
         } else if (arg == "--max-frames") {
             if (i + 1 < argc) {
                 args.maxFrames = static_cast<uint32_t>(std::atoi(argv[++i]));
@@ -563,7 +583,11 @@ void printHelp() {
     std::cout << "  --autoplay, -a             Skip main menu, start in arcade mode\n";
     std::cout << "  --hidden                   Never show or focus the window (automated runs)\n";
     std::cout << "  --input-script \"<cmds>\"    Headless interaction driver; semicolon commands:\n";
-    std::cout << "                             wait:<s> | click:<x>,<y> (normalized 0-1) | key:<name> | quit\n";
+    std::cout << "                             wait:<s> | click:<x>,<y> (normalized 0-1) | key:<name> |\n";
+    std::cout << "                             hold:<key>,<s> | screenshot:<name> | log:<msg> |\n";
+    std::cout << "                             expect:<query><op><value> (exit 4 on FAIL) | quit\n";
+    std::cout << "  --dump-dir <dir>           Directory for input-script screenshot: captures (default .)\n";
+    std::cout << "  --state-log <path>         Write per-second + per-transition game-state JSONL to <path>\n";
     std::cout << "  --max-frames <N>           Exit cleanly after rendering N frames (0 = no cap)\n";
     std::cout << "  --exit-after-seconds <S>   Exit cleanly after S seconds (0 = no cap)\n";
     std::cout << "  --log-file <path>          Mirror Logger output to <path> (in addition to console)\n";
@@ -604,25 +628,163 @@ void printHelp() {
 // queues) and ImGui's event queue (menus are ImGui widgets).
 //
 // Grammar: semicolon-separated commands, executed in order.
-//   wait:<seconds>     pause the cursor for S seconds
-//   click:<x>,<y>      move + left-click at NORMALIZED window coords [0,1]
-//   key:<name>         tap a key (enter, space, escape, w/a/s/d, 1..7)
-//   quit               end the run cleanly
-// Example: --input-script "wait:2;click:0.5,0.38;wait:1;click:0.63,0.62;wait:20;quit"
+//   wait:<seconds>        pause the script for S seconds
+//   click:<x>,<y>         move + left-click at NORMALIZED window coords [0,1]
+//   key:<name>            tap a key (enter, space, escape, r, w/a/s/d, 1..7)
+//   hold:<key>,<seconds>  hold a key down for S seconds (drive the cat)
+//   screenshot:<name>     capture the last-presented frame to <dump-dir>/<name>.ppm
+//   log:<message>         emit a marker line into the engine log
+//   expect:<q><op><val>   assert live game state; op is = >= <= ; any FAIL
+//                         makes the process exit 4 (queries: state, wave,
+//                         enemiesRemaining, enemiesKilled, playerHealth,
+//                         playerAlive, level)
+//   quit                  end the run cleanly
+// Example:
+//   --input-script "wait:3;screenshot:menu;click:0.5,0.364;wait:1;
+//                   expect:state=MainMenu;click:0.55,0.605;wait:2;
+//                   expect:state=Playing;hold:w,3;wait:10;quit"
 struct InputScript {
     struct Command {
-        enum class Type { Wait, Click, Key, Quit } type = Type::Wait;
+        enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect, Quit }
+            type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
         Engine::Input::Key key = Engine::Input::Key::Enter;
+        // Screenshot name, Log message, or Expect "<query><op><value>" —
+        // Expect keeps the raw token so PASS/FAIL lines echo exactly what
+        // the script author wrote.
+        std::string text;
     };
     std::vector<Command> commands;
     size_t nextCommand = 0;
     float waitTimer = 0.0F;
     int clickPhase = 0;  // 0 = idle, counts frames through move/press/release
+    int expectFailures = 0;  // process exits 4 if any expect FAILed
 
     bool active() const { return nextCommand < commands.size(); }
 };
+
+// Everything a script step may need to observe or poke. Bundled so adding a
+// capability (a new query, a new side effect) grows ONE struct instead of
+// every call-site signature.
+struct InputScriptContext {
+    Engine::Input& input;
+    Engine::Window& window;
+    CatEngine::Renderer::Renderer* renderer = nullptr;
+    CatGame::CatAnnihilation* game = nullptr;
+    std::string dumpDir = ".";
+};
+
+// Shared by the heartbeat log, the state-log JSONL emitter, and expect:
+// queries — one authoritative enum→name mapping so a grep for "GameOver"
+// matches all three surfaces.
+static const char* gameStateName(CatGame::GameState state) {
+    switch (state) {
+        case CatGame::GameState::MainMenu: return "MainMenu";
+        case CatGame::GameState::Playing:  return "Playing";
+        case CatGame::GameState::Paused:   return "Paused";
+        case CatGame::GameState::GameOver: return "GameOver";
+        case CatGame::GameState::Victory:  return "Victory";
+    }
+    return "Unknown";
+}
+
+// Resolve an expect:/state-log query against live game state. Returns the
+// value as a string (numbers unformatted, booleans "true"/"false") so the
+// comparator can try numeric first and fall back to exact string match.
+// Unknown queries return a sentinel that can never equal a real value —
+// a typo'd query FAILS loudly instead of silently passing.
+static std::string inputScriptQueryValue(const std::string& query,
+                                         CatGame::CatAnnihilation* game) {
+    if (!game) return "<no-game>";
+    if (query == "state") return gameStateName(game->getGameState());
+    if (query == "wave" || query == "enemiesRemaining") {
+        const auto* waveSystem = game->getWaveSystem();
+        if (!waveSystem) return "<no-wave-system>";
+        return std::to_string(query == "wave" ? waveSystem->getCurrentWave()
+                                              : waveSystem->getEnemiesRemaining());
+    }
+    if (query == "enemiesKilled") return std::to_string(game->getEnemiesKilled());
+    if (query == "level") {
+        const auto* leveling = game->getLevelingSystem();
+        return leveling ? std::to_string(leveling->getLevel()) : "<no-leveling>";
+    }
+    if (query == "playerHealth" || query == "playerAlive") {
+        // ECS lookup, never a cached pointer — the player entity is
+        // re-created on restart and a cached HealthComponent would dangle.
+        const auto* health = game->getECS().getComponent<CatGame::HealthComponent>(
+            game->getPlayerEntity());
+        if (!health) return "<no-health-component>";
+        if (query == "playerAlive") {
+            return (health->currentHealth > 0.0F && !health->isDead) ? "true"
+                                                                     : "false";
+        }
+        return std::to_string(static_cast<int>(health->currentHealth));
+    }
+    return "<unknown-query:" + query + ">";
+}
+
+// Evaluate one expect token ("state=Playing", "wave>=2"). Numeric compare
+// when both sides parse as numbers; exact string equality otherwise (>=/<=
+// on non-numeric values is a script bug and fails).
+static bool evaluateInputScriptExpect(const std::string& token,
+                                      CatGame::CatAnnihilation* game,
+                                      std::string& detail) {
+    size_t opPos = token.find(">=");
+    std::string op = ">=";
+    if (opPos == std::string::npos) { opPos = token.find("<="); op = "<="; }
+    if (opPos == std::string::npos) { opPos = token.find('=');  op = "=";  }
+    if (opPos == std::string::npos) {
+        detail = "malformed (no operator): " + token;
+        return false;
+    }
+    const std::string query = token.substr(0, opPos);
+    const std::string want = token.substr(opPos + op.size());
+    const std::string actual = inputScriptQueryValue(query, game);
+    detail = query + op + want + " (actual: " + actual + ")";
+
+    char* actualEnd = nullptr;
+    char* wantEnd = nullptr;
+    const double actualNumber = std::strtod(actual.c_str(), &actualEnd);
+    const double wantNumber = std::strtod(want.c_str(), &wantEnd);
+    const bool bothNumeric = actualEnd != actual.c_str() && *actualEnd == '\0' &&
+                             wantEnd != want.c_str() && *wantEnd == '\0';
+    if (op == ">=") return bothNumeric && actualNumber >= wantNumber;
+    if (op == "<=") return bothNumeric && actualNumber <= wantNumber;
+    return bothNumeric ? actualNumber == wantNumber : actual == want;
+}
+
+// --state-log emitter: one JSON object per line. The machine-readable twin
+// of the human heartbeat log line — same signals, but parseable, flushed
+// per line (a wrapper may kill the process; the timeline written so far
+// must survive), and emitted on every game-state TRANSITION as well as the
+// 1 Hz tick so a state that lasts under a second (e.g. an instant
+// Playing→GameOver) can never slip between samples.
+static void writeStateLogLine(std::ofstream& out, double tSeconds,
+                              uint64_t frame, float fps, const char* event,
+                              CatGame::CatAnnihilation* game) {
+    out << "{\"t\":" << tSeconds << ",\"frame\":" << frame
+        << ",\"fps\":" << fps << ",\"event\":\"" << event << "\""
+        << ",\"state\":\"" << gameStateName(game->getGameState()) << "\"";
+    if (const auto* waveSystem = game->getWaveSystem()) {
+        out << ",\"wave\":" << waveSystem->getCurrentWave()
+            << ",\"enemiesRemaining\":" << waveSystem->getEnemiesRemaining();
+    }
+    out << ",\"kills\":" << game->getEnemiesKilled();
+    if (const auto* health = game->getECS().getComponent<CatGame::HealthComponent>(
+            game->getPlayerEntity())) {
+        out << ",\"hp\":" << health->currentHealth
+            << ",\"maxHp\":" << health->maxHealth << ",\"alive\":"
+            << ((health->currentHealth > 0.0F && !health->isDead) ? "true"
+                                                                  : "false");
+    }
+    if (const auto* leveling = game->getLevelingSystem()) {
+        out << ",\"level\":" << leveling->getLevel()
+            << ",\"xp\":" << leveling->getXP();
+    }
+    out << "}\n";
+    out.flush();
+}
 
 static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
     if (name == "enter") return Engine::Input::Key::Enter;
@@ -632,6 +794,7 @@ static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
     if (name == "a") return Engine::Input::Key::A;
     if (name == "s") return Engine::Input::Key::S;
     if (name == "d") return Engine::Input::Key::D;
+    if (name == "r") return Engine::Input::Key::R;
     if (name.size() == 1 && name[0] >= '1' && name[0] <= '7') {
         return static_cast<Engine::Input::Key>(
             static_cast<int>(Engine::Input::Key::Num1) + (name[0] - '1'));
@@ -666,6 +829,22 @@ static InputScript parseInputScript(const std::string& text) {
         } else if (token.rfind("key:", 0) == 0) {
             command.type = InputScript::Command::Type::Key;
             command.key = inputScriptKeyFromName(token.substr(4));
+        } else if (token.rfind("hold:", 0) == 0) {
+            command.type = InputScript::Command::Type::Hold;
+            const std::string args = token.substr(5);
+            const size_t comma = args.find(',');
+            command.key = inputScriptKeyFromName(args.substr(0, comma));
+            command.a = comma == std::string::npos ? 1.0F
+                                                   : std::stof(args.substr(comma + 1));
+        } else if (token.rfind("screenshot:", 0) == 0) {
+            command.type = InputScript::Command::Type::Screenshot;
+            command.text = token.substr(11);
+        } else if (token.rfind("log:", 0) == 0) {
+            command.type = InputScript::Command::Type::Log;
+            command.text = token.substr(4);
+        } else if (token.rfind("expect:", 0) == 0) {
+            command.type = InputScript::Command::Type::Expect;
+            command.text = token.substr(7);
         } else {
             Engine::Logger::warn("[input-script] unknown command '" + token + "' skipped");
             continue;
@@ -676,8 +855,7 @@ static InputScript parseInputScript(const std::string& text) {
 }
 
 static void runInputScriptStep(InputScript& script, float dt,
-                               Engine::Input& input, Engine::Window& window,
-                               bool& running) {
+                               InputScriptContext& context, bool& running) {
     if (!script.active()) return;
     auto& command = script.commands[script.nextCommand];
     using Type = InputScript::Command::Type;
@@ -694,14 +872,16 @@ static void runInputScriptStep(InputScript& script, float dt,
             // Three phases spread over frames so ImGui sees a real
             // press→hold→release sequence (its buttons activate on the
             // release edge over the same item the press started on).
-            const double px = static_cast<double>(command.a) * window.getWidth();
-            const double py = static_cast<double>(command.b) * window.getHeight();
-            input.injectCursorPos(px, py);
+            const double px =
+                static_cast<double>(command.a) * context.window.getWidth();
+            const double py =
+                static_cast<double>(command.b) * context.window.getHeight();
+            context.input.injectCursorPos(px, py);
             ImGuiIO& io = ImGui::GetIO();
             io.AddMousePosEvent(static_cast<float>(px), static_cast<float>(py));
             if (script.clickPhase == 2) {
                 io.AddMouseButtonEvent(0, true);
-                input.injectMouseTap(Engine::Input::MouseButton::Left, 2);
+                context.input.injectMouseTap(Engine::Input::MouseButton::Left, 2);
             } else if (script.clickPhase == 5) {
                 io.AddMouseButtonEvent(0, false);
             }
@@ -715,10 +895,59 @@ static void runInputScriptStep(InputScript& script, float dt,
             break;
         }
         case Type::Key:
-            input.injectKeyTap(command.key, 2);
+            context.input.injectKeyTap(command.key, 2);
             Engine::Logger::info("[input-script] key tap");
             ++script.nextCommand;
             break;
+        case Type::Hold:
+            // Re-inject a 1-frame tap every frame for the duration. The
+            // injection queue holds at most two entries per key this way
+            // (last frame's entry emits its release edge just as the new
+            // entry re-asserts the hold), so the game sees one continuous
+            // key-down and exactly one release edge when the hold ends.
+            context.input.injectKeyTap(command.key, 1);
+            script.waitTimer += dt;
+            if (script.waitTimer >= command.a) {
+                script.waitTimer = 0.0F;
+                ++script.nextCommand;
+                Engine::Logger::info("[input-script] held key for " +
+                                     std::to_string(command.a) + "s");
+            }
+            break;
+        case Type::Screenshot: {
+            // Captures the LAST-PRESENTED frame — the script runs at the
+            // top of the loop, so this is "what was on screen when the
+            // script reached this point", which is what an assertion about
+            // the preceding commands wants.
+            const std::string path =
+                context.dumpDir + "/" + command.text + ".ppm";
+            if (context.renderer &&
+                context.renderer->CaptureSwapchainToPPM(path)) {
+                Engine::Logger::info("[input-script] screenshot '" + path + "'");
+            } else {
+                Engine::Logger::error("[input-script] screenshot FAILED: '" +
+                                      path + "'");
+            }
+            ++script.nextCommand;
+            break;
+        }
+        case Type::Log:
+            Engine::Logger::info("[input-script] marker: " + command.text);
+            ++script.nextCommand;
+            break;
+        case Type::Expect: {
+            std::string detail;
+            const bool passed =
+                evaluateInputScriptExpect(command.text, context.game, detail);
+            if (passed) {
+                Engine::Logger::info("[input-script] EXPECT PASS: " + detail);
+            } else {
+                Engine::Logger::error("[input-script] EXPECT FAIL: " + detail);
+                ++script.expectFailures;
+            }
+            ++script.nextCommand;
+            break;
+        }
         case Type::Quit:
             Engine::Logger::info("[input-script] quit — ending run");
             running = false;
@@ -1275,10 +1504,30 @@ int main(int argc, char* argv[]) {
     // Headless interaction driver (--input-script). Parsed once here so a
     // malformed script fails loudly at startup, not mid-run.
     InputScript inputScript = parseInputScript(cmdArgs.inputScriptText);
+    InputScriptContext scriptContext{input, window, renderer.get(), game.get(),
+                                     cmdArgs.dumpDir};
     if (inputScript.active()) {
         Engine::Logger::info("[input-script] " +
                              std::to_string(inputScript.commands.size()) +
                              " commands queued");
+    }
+
+    // --state-log: JSONL timeline sink. Truncate-on-open — each run owns its
+    // file (unlike --log-file's append) because the consumer is a per-run
+    // test harness, not a longitudinal sweep log.
+    std::ofstream stateLog;
+    CatGame::GameState stateLogLastState = CatGame::GameState::MainMenu;
+    double stateLogTickClock = 0.0;
+    double runClockSeconds = 0.0;
+    if (!cmdArgs.stateLogPath.empty()) {
+        stateLog.open(cmdArgs.stateLogPath, std::ios::trunc);
+        if (stateLog.is_open()) {
+            Engine::Logger::info("[state-log] writing to '" +
+                                 cmdArgs.stateLogPath + "'");
+        } else {
+            Engine::Logger::error("[state-log] cannot open '" +
+                                  cmdArgs.stateLogPath + "'");
+        }
     }
 
     // F3 toggles the ImGui profiler overlay. Off by default because the
@@ -1345,11 +1594,32 @@ int main(int argc, char* argv[]) {
         // exactly as under a real mouse — see runInputScriptStep's
         // docblock for the command grammar and the why.
         if (inputScript.active()) {
-            runInputScriptStep(inputScript, deltaTime, input, window, running);
+            runInputScriptStep(inputScript, deltaTime, scriptContext, running);
         }
 
         // Update input
         input.update();
+
+        // State-log timeline. Runs at the top of the frame, so a transition
+        // is recorded on the frame AFTER it happened — one frame of latency
+        // is irrelevant at 1 Hz sampling, and top-of-frame placement keeps
+        // the emitter next to the script driver that consumes it.
+        runClockSeconds += static_cast<double>(deltaTime);
+        if (stateLog.is_open() && game) {
+            stateLogTickClock += static_cast<double>(deltaTime);
+            const auto observedState = game->getGameState();
+            const bool stateChanged = observedState != stateLogLastState;
+            if (stateChanged || stateLogTickClock >= 1.0) {
+                const float instantFps =
+                    deltaTime > 0.0F ? 1.0F / deltaTime : 0.0F;
+                writeStateLogLine(stateLog, runClockSeconds,
+                                  totalRenderedFrames, instantFps,
+                                  stateChanged ? "transition" : "tick",
+                                  game.get());
+                stateLogTickClock = 0.0;
+                stateLogLastState = observedState;
+            }
+        }
 
 #if defined(CAT_ENGINE_SHADER_HOT_RELOAD)
         // Shader hot-reload poll. Throttled to ~4 Hz internally, so the
@@ -1620,6 +1890,18 @@ int main(int argc, char* argv[]) {
     Engine::Logger::info("===========================================");
     Engine::Logger::info("  CAT ANNIHILATION - Shutdown Complete");
     Engine::Logger::info("===========================================");
+
+    // Machine verdict for --input-script expect: assertions. Exit code 4 is
+    // distinct from the crash-ish codes wrappers already special-case
+    // (1 = init failure, 3 = second-instance refusal), so a harness can
+    // tell "the game ran fine but the ASSERTIONS failed" from "the game
+    // itself broke" without parsing the log.
+    if (inputScript.expectFailures > 0) {
+        Engine::Logger::error("[input-script] " +
+                              std::to_string(inputScript.expectFailures) +
+                              " expect assertion(s) FAILED — exiting 4");
+        return 4;
+    }
 
     return 0;
 }
