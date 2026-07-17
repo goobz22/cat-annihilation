@@ -14,6 +14,12 @@
 
 #include "config/WebParityConfig.hpp"
 #include "systems/xp_tables.hpp"
+// HealthComponent is a header-only, all-inline struct (no engine linkage
+// beyond the DamageType enum in status_effects.hpp, which is already on the
+// test build's include path). It lets the melee-i-frame parity regression
+// below drive the REAL damage()/isInvincible() semantics EnemyAISystem calls,
+// without linking the ECS-coupled EnemyAISystem/HealthSystem TUs.
+#include "components/HealthComponent.hpp"
 
 using namespace CatGame;
 
@@ -52,6 +58,11 @@ TEST_CASE("enemy combat profile matches the web dog", "[web-parity]") {
     // exceed any distance reachable in a survival run and idle must be 0.
     CHECK(WebParity::kEnemyAggroRange > 1000.0f);
     CHECK(WebParity::kEnemyIdleWait == 0.0f);
+    // gameStore.ts:671-693 (damagePlayer) — the web has NO shared player
+    // i-frame on enemy melee, so the parity target is literally zero. The
+    // native pre-parity build stamped 0.2 s here (a 75 DPS swarm cap); parity
+    // neutralizes it. See the melee-i-frame regression TEST_CASE below.
+    CHECK(WebParity::kEnemyMeleeIFrameSeconds == 0.0f);
 }
 
 TEST_CASE("spawn ring and wave pacing match the web literals", "[web-parity]") {
