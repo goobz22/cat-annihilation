@@ -124,9 +124,13 @@ void Input::update() {
         }
     }
 
-    // Reset scroll delta (updated via callback)
-    m_scrollX = 0.0;
-    m_scrollY = 0.0;
+    // NOTE: scroll delta is NOT reset here. The scrollCallback fires during
+    // window.pollEvents(), which the main loop runs BEFORE input.update();
+    // resetting here (the pre-2026-07-17 behaviour) zeroed the just-captured
+    // delta before the game's own update() — which runs AFTER input.update()
+    // — could ever read it, so getScrollDelta() always returned 0. The reset
+    // now lives in clearScrollDelta(), called at the top of the frame BEFORE
+    // pollEvents, so the value survives from the callback to the consumer.
 
     // Update gamepad state
     for (u32 gamepadId = 0; gamepadId < MAX_GAMEPADS; ++gamepadId) {
@@ -205,6 +209,14 @@ void Input::getMouseDelta(f64& dx, f64& dy) const {
 void Input::getScrollDelta(f64& dx, f64& dy) const {
     dx = m_scrollX;
     dy = m_scrollY;
+}
+
+void Input::clearScrollDelta() {
+    // Call once per frame at the TOP of the loop, before window.pollEvents()
+    // dispatches the scroll callback. See the note in update() for why the
+    // reset lives here and not in update().
+    m_scrollX = 0.0;
+    m_scrollY = 0.0;
 }
 
 void Input::setCursorDisabled(bool disabled) {

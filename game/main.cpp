@@ -1670,6 +1670,13 @@ int main(int argc, char* argv[]) {
         // Update timer and get delta time
         deltaTime = static_cast<float>(timer.Update());
 
+        // Clear the per-frame scroll delta BEFORE polling: window.pollEvents()
+        // dispatches the scroll callback that sets it, and input.update() +
+        // game->update() below consume it. Resetting inside update() (the old
+        // behaviour) wiped the value before any consumer read it. See
+        // Input::clearScrollDelta().
+        input.clearScrollDelta();
+
         // Poll events
         window.pollEvents();
 

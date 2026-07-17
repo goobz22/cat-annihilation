@@ -282,6 +282,14 @@ public:
      */
     void getScrollDelta(f64& dx, f64& dy) const;
 
+    // Reset the per-frame scroll delta. MUST be called at the top of the
+    // frame BEFORE window.pollEvents() (which dispatches the scroll
+    // callback), so the captured delta survives to getScrollDelta()
+    // consumers running after Input::update(). See Input.cpp for the full
+    // ordering rationale (the reset used to be inside update(), which zeroed
+    // the delta before any consumer could read it).
+    void clearScrollDelta();
+
     /**
      * @brief Set mouse cursor mode
      * @param disabled true to disable and hide cursor
