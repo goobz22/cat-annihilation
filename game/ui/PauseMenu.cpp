@@ -19,6 +19,30 @@ namespace Game {
 // so edits in either screen persist and stay in sync.
 namespace {
 
+// Pack a web sRGB UiColor into an ImGui colour. Pause-modal chrome is handed
+// to ImGui RAW (no srgb->linear decode) — the same UI-chrome path the menu /
+// HUD colours use (see the color-space note in WebParityConfig.hpp) — so this
+// is a straight byte copy plus an optional CSS rgba() alpha. Mirrors the
+// identical helper in MainMenu.cpp; kept file-local (each UI TU owns its own)
+// rather than exported, since it is a two-line packing detail, not shared API.
+ImU32 toImCol(const WebParity::UiColor& color, float alpha = 1.0F) {
+    return IM_COL32(color.red, color.green, color.blue,
+                    static_cast<int>(alpha * 255.0F + 0.5F));
+}
+
+// ImGui's DrawList can round a rect OR gradient-fill it, never both. The web
+// pause modal / control panels are subtle 145deg gradients on ROUNDED boxes,
+// so we fill with the MIDPOINT of the two stops — visually indistinguishable
+// from the #2d2d2d→#1a1a1a-class ramps at this scale while keeping the rounded
+// corners the card look depends on. Same trick as MainMenu.cpp's midFill.
+ImU32 midFill(const WebParity::UiColor& top, const WebParity::UiColor& bottom,
+              float alpha = 1.0F) {
+    return IM_COL32((top.red + bottom.red) / 2,
+                    (top.green + bottom.green) / 2,
+                    (top.blue + bottom.blue) / 2,
+                    static_cast<int>(alpha * 255.0F + 0.5F));
+}
+
 bool& pausePanelOpenFlag() {
     static bool open = false;
     return open;
@@ -295,6 +319,16 @@ void PauseMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
     const float width = static_cast<float>(screenWidth);
     const float height = static_cast<float>(screenHeight);
 
+    // Under web parity the pause face is the rebuilt dark modal (the web
+    // PauseMenu.tsx card), which owns its own dim overlay, sliders, controls
+    // grid and Resume/Quit buttons. The legacy stacked-button layout below is
+    // preserved verbatim for the !kEnabled native-flavor branch. This is a
+    // compile-time branch (kEnabled is constexpr) so only one path is built.
+    if constexpr (WebParity::kEnabled) {
+        renderWebParityModal(width, height);
+        return;
+    }
+
     // ------------------------------------------------------------- Dim overlay
     // Full-screen transparent window that darkens the 3D scene behind.
     ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
@@ -433,6 +467,18 @@ void PauseMenu::render(CatEngine::Renderer::UIPass& uiPass, uint32_t screenWidth
 
 void PauseMenu::handleInput() {
     if (!m_initialized) {
+        return;
+    }
+
+    // Under web parity every pause-menu interaction lives in the ImGui widgets
+    // built by renderWebParityModal (the sliders + Resume/Quit buttons handle
+    // their own mouse hit-testing), and ESC/P resume is owned by the
+    // authoritative CatAnnihilation::handleInput. Running the legacy keyboard
+    // navigation here would drive the hidden legacy m_buttons vector (Restart /
+    // Settings / Main Menu / Quit) — e.g. Enter would fire a Restart-Wave
+    // confirmation the parity modal never shows — so this handler is a no-op
+    // under parity. The full legacy path below is kept for !kEnabled.
+    if constexpr (WebParity::kEnabled) {
         return;
     }
 
