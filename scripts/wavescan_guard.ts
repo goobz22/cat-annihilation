@@ -21,7 +21,7 @@
 // Usage: bun scripts/wavescan_guard.ts [--budget 110]
 
 import { execFileSync } from "child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 
 const repoRoot = dirname(import.meta.dir);
@@ -31,6 +31,13 @@ const budget = process.argv.includes("--budget")
     ? Number(process.argv[process.argv.indexOf("--budget") + 1])
     : 110;
 
+// CLEAN SLATE, always: the engine opens --log-file in APPEND mode, so a
+// reused directory accumulates every previous run's log. The guard's first
+// flake was exactly that — it matched run #1's "popup shown" timestamp
+// against run #2's screenshots and reported the panel missing while it was
+// on screen. Stale PPMs would similarly satisfy the pixel scan against the
+// wrong run.
+rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
 // 1-second screenshot cadence across the whole budget: the wave-1 clear time
@@ -54,7 +61,11 @@ execFileSync("bun", [
 // Which shots landed inside the popup window? The engine logs the popup
 // lifecycle; screenshots log their own timestamps in the same file.
 const log = readFileSync(join(outDir, "run.log"), "utf8");
-const shownAt = log.match(/(\d+:\d+:\d+\.\d+)\].*complete popup shown/)?.[1];
+// Last match, defensively — the clean-slate wipe above makes the log
+// single-run, but if that ever regresses the LAST popup of the log is the
+// one closest to the screenshots on disk.
+const shownMatches = [...log.matchAll(/(\d+:\d+:\d+\.\d+)\].*complete popup shown/g)];
+const shownAt = shownMatches.at(-1)?.[1];
 if (!shownAt) {
     console.log("FAIL (inconclusive): wave 1 never cleared inside the budget — rerun (autoplay RNG) or raise --budget");
     process.exit(1);
