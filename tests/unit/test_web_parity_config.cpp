@@ -166,6 +166,58 @@ TEST_CASE("dog melee has no shared player i-frame under parity — a swarm is un
     }
 }
 
+TEST_CASE("melee weapon-XP fires once per swing, not per tolerance-window frame",
+          "[web-parity][melee][xp]") {
+    // The melee swing block is admitted by a 2-3 frame tolerance window, so
+    // it re-runs against the SAME dog on frames 2-3 — now i-framed from
+    // frame 1. CombatSystem::applyDamage returns whether damage LANDED, and
+    // processMeleeAttacks gates its enriched, XP-awarding onHitCallback_ on
+    // that return (2026-07-17 correctness audit). This replays that exact
+    // gate against the real HealthComponent i-frame semantics: it counts an
+    // XP award ONLY on a frame where damage actually landed. Without the
+    // gate (award every frame the block runs) the count would be 3, not 1 —
+    // the weapon-XP inflation the fix removes.
+    HealthComponent dog;
+    dog.maxHealth = 100.0f;
+    dog.currentHealth = 100.0f;
+    dog.invincibilityDuration = 0.5f;  // i-frame opened by a landed hit
+
+    // Faithful replay of the FIXED processMeleeAttacks per-frame logic:
+    //   bool landed = applyDamage(...);   // == dog.damage() under the hood
+    //   if (!landed) return;              // no combo, no enriched callback
+    //   ++xpAwards;                        // the enriched callback -> +XP
+    int xpAwards = 0;
+    auto meleeFrameGated = [&](float dmg) {
+        dog.lastDamageType = DamageType::Physical;
+        const bool landed = dog.damage(dmg);  // applyDamage's damageApplied
+        if (!landed) {
+            return;  // gate: i-framed re-hit awards nothing
+        }
+        ++xpAwards;  // one enriched onHitCallback_ -> one addWeaponXP
+    };
+
+    // Three tolerance-window frames on the same dog within one swing.
+    meleeFrameGated(WebParity::kEnemyAttackDamage);  // frame 1: lands
+    meleeFrameGated(WebParity::kEnemyAttackDamage);  // frame 2: i-framed
+    meleeFrameGated(WebParity::kEnemyAttackDamage);  // frame 3: i-framed
+
+    CHECK(xpAwards == 1);                 // exactly one award per swing
+    CHECK(dog.currentHealth == 85.0f);    // exactly one 15-damage hit landed
+
+    // Contrast oracle: the pre-fix UNGATED logic (award on every frame the
+    // block ran, ignoring whether damage landed) would have scored 3.
+    HealthComponent dog2;
+    dog2.maxHealth = 100.0f;
+    dog2.currentHealth = 100.0f;
+    dog2.invincibilityDuration = 0.5f;
+    int ungatedAwards = 0;
+    for (int frame = 0; frame < 3; ++frame) {
+        dog2.damage(WebParity::kEnemyAttackDamage);  // return ignored (the bug)
+        ++ungatedAwards;                              // callback fired regardless
+    }
+    CHECK(ungatedAwards == 3);  // documents the 3× inflation the gate removes
+}
+
 TEST_CASE("spawn ring and wave pacing match the web literals", "[web-parity]") {
     CHECK(WebParity::kSpawnDistanceMin == 8.0f);      // LocalEnemySystem.tsx:526
     CHECK(WebParity::kSpawnDistanceMax == 15.0f);     // LocalEnemySystem.tsx:526

@@ -424,7 +424,14 @@ private:
     // EntityDeathEvent → CatAnnihilation::onEntityDeath) can recover the
     // killing-blow type for the per-element death-burst dispatcher, and is
     // also stamped onto HitInfo.damageType for the per-element hit-burst path.
-    void applyDamage(
+    // Returns true iff damage actually landed (target existed, was not
+    // invincible/i-framed). Callers gate their enriched, XP-awarding
+    // onHitCallback_ + combo-commit on this so a no-op i-frame tick — e.g.
+    // the 2nd/3rd frame of the melee tolerance window hitting the same
+    // already-i-framed dog — does not award weapon XP or build combo a
+    // second time (2026-07-17 correctness audit). The generic Unspecified
+    // callback fired INSIDE applyDamage is VFX-only and already damage-gated.
+    bool applyDamage(
         CatEngine::Entity attacker,
         CatEngine::Entity target,
         float damage,

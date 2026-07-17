@@ -727,8 +727,26 @@ void CombatSystem::processMeleeAttacks() {
                     // future fire-sword enchantment would override this with
                     // an explicit DamageType; the default keeps the legacy
                     // white-yellow hit-burst on every melee swing.
-                    applyDamage(attacker, target, finalDamage,
-                                targetTransform->position, DamageType::Physical);
+                    const bool damageLanded =
+                        applyDamage(attacker, target, finalDamage,
+                                    targetTransform->position, DamageType::Physical);
+
+                    // Gate everything XP/combo-bearing on whether damage
+                    // actually landed. The melee tolerance window (the outer
+                    // `attackCooldown >= cooldownDuration - tolerance` gate)
+                    // deliberately spans 2-3 frames so a slightly-late tick
+                    // still registers the swing, but that means this block
+                    // RE-RUNS on frames 2-3 against the SAME dog — which is
+                    // now i-framed from frame 1, so applyDamage returns false.
+                    // Without this gate the enriched onHitCallback_ below
+                    // fired on every one of those frames, and the game-layer
+                    // handler awards +kWeaponXpPerHit per fire — inflating
+                    // weapon XP 2-3× per swing (2026-07-17 correctness audit).
+                    // Skipping combo + callback on a no-op tick makes each
+                    // swing award XP and build combo exactly once.
+                    if (!damageLanded) {
+                        return; // i-framed re-hit this frame — no XP, no combo
+                    }
 
                     // Commit the queued combo step on the FIRST landed hit of
                     // this swing. The hit-gate is what turns the combo system
@@ -894,8 +912,19 @@ void CombatSystem::updateProjectiles(float dt) {
                     // by carrying a DamageType field on the Projectile struct
                     // and forwarding it here. The default keeps the legacy
                     // white-yellow hit-burst on arrow strikes.
-                    applyDamage(projectile.owner, target, finalDamage,
-                                projectile.position, DamageType::Physical);
+                    const bool projectileLanded =
+                        applyDamage(projectile.owner, target, finalDamage,
+                                    projectile.position, DamageType::Physical);
+
+                    // Same i-frame gate as the melee path: an arrow striking
+                    // an already-i-framed target lands zero damage, so it must
+                    // not award weapon XP or build combo. (Projectiles are
+                    // single-hit — removed on collision — so this mainly
+                    // guards the rare same-frame multi-target overlap, but the
+                    // gate keeps the XP contract identical to melee.)
+                    if (!projectileLanded) {
+                        return; // i-framed target — no XP, no combo
+                    }
 
                     // Commit the queued combo step on the projectile's first
                     // landed hit. Matches the melee path: pre-fix
@@ -981,7 +1010,7 @@ bool CombatSystem::checkProjectileHit(
     return distanceSquared <= (hitRadius * hitRadius);
 }
 
-void CombatSystem::applyDamage(
+bool CombatSystem::applyDamage(
     CatEngine::Entity attacker,
     CatEngine::Entity target,
     float damage,
@@ -991,7 +1020,7 @@ void CombatSystem::applyDamage(
     // Get target health component
     auto* health = ecs_->getComponent<HealthComponent>(target);
     if (!health) {
-        return;
+        return false;
     }
 
     // Stamp the damage type onto the target's HealthComponent BEFORE the
@@ -1011,7 +1040,7 @@ void CombatSystem::applyDamage(
     bool damageApplied = health->damage(damage);
 
     if (!damageApplied) {
-        return; // Target was invincible
+        return false; // Target was invincible / i-framed — no XP, no combo
     }
 
     // Bump the target's hit-flinch visual pulse so the renderer leans the
@@ -1058,6 +1087,8 @@ void CombatSystem::applyDamage(
             onKillCallback_(attacker, target);
         }
     }
+
+    return true; // damage landed
 }
 
 float CombatSystem::randomFloat(float min, float max) {
