@@ -2897,8 +2897,7 @@ void CatAnnihilation::restart() {
     // starts the next one unable to revive at all (2026-07-17 audit). This is
     // the same run-scoped-reset invariant WaveSystem::reset() upholds above.
     if (levelingSystem_ != nullptr) {
-        // TEMP-DISABLED-FOR-FAILFIRST-PROOF
-        // levelingSystem_->resetRevive();
+        levelingSystem_->resetRevive();
     }
 
     // Reset game statistics

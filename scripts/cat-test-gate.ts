@@ -264,6 +264,32 @@ if (!quick && stages[stages.length - 1]!.ok) {
       '--timeout', '90',
     ], { timeoutMs: 3 * 60_000 }),
   )
+
+  // Nine Lives re-arm regression (2026-07-17 audit): the leveling system
+  // survives a restart (level/XP/abilities carry over, matching the web's
+  // localStorage-restored reload), but the per-run `nineLivesUsed` latch must
+  // NOT — the web's reload-based restart re-initializes it to false, so the
+  // one-time revive is available again next run. `spendrevive` injects the
+  // "ability earned, revive spent" end-state (reaching level 15 headlessly is
+  // impractical); after the restart the revive must be armed again. Pre-fix,
+  // reset lived only in WaveSystem::reset() and this window FAILED (reviveArmed
+  // stayed false). `-- --` is not needed: spendrevive is an input-script verb.
+  const nineLivesScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:2', 'expect:state=Playing',
+    'spendrevive', 'expect:reviveArmed=false',
+    'hold:w,2', 'wait:20', 'expect:state=GameOver', 'expect:playerAlive=false',
+    'key:r', 'wait:5', 'expect:state=Playing', 'expect:reviveArmed=true',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('nine-lives-rearm', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', nineLivesScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-ninelives'),
+      '--timeout', '90',
+    ], { timeoutMs: 3 * 60_000 }),
+  )
 }
 
 const overallOk = stages.every((s) => s.ok)

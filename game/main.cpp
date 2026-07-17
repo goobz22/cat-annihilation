@@ -585,7 +585,7 @@ void printHelp() {
     std::cout << "  --input-script \"<cmds>\"    Headless interaction driver; semicolon commands:\n";
     std::cout << "                             wait:<s> | click:<x>,<y> (normalized 0-1) | key:<name> |\n";
     std::cout << "                             hold:<key>,<s> | screenshot:<name> | log:<msg> |\n";
-    std::cout << "                             expect:<query><op><value> (exit 4 on FAIL) | quit\n";
+    std::cout << "                             expect:<query><op><value> (exit 4 on FAIL) | spendrevive | quit\n";
     std::cout << "  --dump-dir <dir>           Directory for input-script screenshot: captures (default .)\n";
     std::cout << "  --state-log <path>         Write per-second + per-transition game-state JSONL to <path>\n";
     std::cout << "  --max-frames <N>           Exit cleanly after rendering N frames (0 = no cap)\n";
@@ -637,8 +637,10 @@ void printHelp() {
 //   expect:<q><op><val>   assert live game state; op is = >= <= ; any FAIL
 //                         makes the process exit 4 (queries: state, wave,
 //                         enemiesRemaining, enemiesKilled, playerHealth,
-//                         playerMaxHealth, playerAlive, level,
+//                         playerMaxHealth, playerAlive, level, reviveArmed,
 //                         playerX/Y/Z, cameraX/Y/Z)
+//   spendrevive           test-support: grant Nine Lives + mark its revive
+//                         spent, so a restart's re-arm (reviveArmed) is testable
 //   quit                  end the run cleanly
 // Example:
 //   --input-script "wait:3;screenshot:menu;click:0.5,0.364;wait:1;
@@ -646,7 +648,8 @@ void printHelp() {
 //                   expect:state=Playing;hold:w,3;wait:10;quit"
 struct InputScript {
     struct Command {
-        enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect, Quit }
+        enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect,
+                          SpendRevive, Quit }
             type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
@@ -709,6 +712,15 @@ static std::string inputScriptQueryValue(const std::string& query,
     if (query == "level") {
         const auto* leveling = game->getLevelingSystem();
         return leveling ? std::to_string(leveling->getLevel()) : "<no-leveling>";
+    }
+    if (query == "reviveArmed") {
+        // Nine Lives oracle: true when the cat has the ability AND its one
+        // revive is still available (canRevive()). Lets a script prove that a
+        // restart re-arms a spent revive — the run-scoped-reset invariant that
+        // WaveSystem::reset() upholds for waves and resetRevive() upholds here.
+        const auto* leveling = game->getLevelingSystem();
+        if (!leveling) return "<no-leveling>";
+        return leveling->canRevive() ? "true" : "false";
     }
     if (query == "playerHealth" || query == "playerMaxHealth" ||
         query == "playerAlive") {
@@ -922,6 +934,14 @@ static InputScript parseInputScript(const std::string& text) {
         } else if (token.rfind("expect:", 0) == 0) {
             command.type = InputScript::Command::Type::Expect;
             command.text = token.substr(7);
+        } else if (token == "spendrevive") {
+            // Test-support: grant the Level-15 Nine Lives ability and mark its
+            // one revive already SPENT, so a regression can prove that a
+            // restart re-arms it (the 2026-07-17 audit bug). Reaching level 15
+            // legitimately in a headless run is impractical, so this seam
+            // injects the exact end-state the bug depends on. Inert outside a
+            // driven run — like expect:/log:, it only fires from --input-script.
+            command.type = InputScript::Command::Type::SpendRevive;
         } else {
             Engine::Logger::warn("[input-script] unknown command '" + token + "' skipped");
             continue;
@@ -1021,6 +1041,26 @@ static void runInputScriptStep(InputScript& script, float dt,
             } else {
                 Engine::Logger::error("[input-script] EXPECT FAIL: " + detail);
                 ++script.expectFailures;
+            }
+            ++script.nextCommand;
+            break;
+        }
+        case Type::SpendRevive: {
+            // Force the leveling system into "Nine Lives earned, revive spent"
+            // so the following restart's re-arm is observable. Must run while
+            // in Playing (after the first startNewGame→restart), otherwise that
+            // first restart would clear the flag before the script sees it.
+            if (context.game != nullptr &&
+                context.game->getLevelingSystem() != nullptr) {
+                auto& stats = context.game->getLevelingSystem()->getStatsRef();
+                stats.abilities.nineLives = true;
+                stats.abilities.nineLivesUsed = true;
+                Engine::Logger::info(
+                    "[input-script] spendrevive — Nine Lives granted + marked "
+                    "spent (reviveArmed should now be false)");
+            } else {
+                Engine::Logger::error(
+                    "[input-script] spendrevive FAILED: no leveling system");
             }
             ++script.nextCommand;
             break;
