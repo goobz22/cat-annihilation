@@ -3,6 +3,7 @@
 
 #include "../../engine/core/Input.hpp"
 #include "../../engine/renderer/passes/UIPass.hpp"
+#include "../config/WebParityConfig.hpp"  // pause-slider defaults (kPause*Default)
 #include <functional>
 #include <vector>
 #include <string>
@@ -103,6 +104,32 @@ public:
         m_quitCallback = std::move(callback);
     }
 
+    /**
+     * @brief Callback taking a single float — used by the two web-parity
+     *        gameplay sliders to push a new multiplier out to the game systems.
+     */
+    using ValueCallback = std::function<void(float)>;
+
+    /**
+     * @brief Set the callback invoked whenever the "TURN SENSITIVITY" slider
+     *        moves. The float is the new spin-sensitivity multiplier (web:
+     *        the spinSensitivityChanged event, PauseMenu.tsx:46). Wire it to
+     *        PlayerControlSystem::setTurnSensitivityScale.
+     */
+    void setTurnSensitivityChangedCallback(ValueCallback callback) {
+        m_turnSensitivityCallback = std::move(callback);
+    }
+
+    /**
+     * @brief Set the callback invoked whenever the "MOVEMENT SPEED" slider
+     *        moves. The float is the new move-speed multiplier (web: the
+     *        moveSpeedChanged event, PauseMenu.tsx:52). Wire it to
+     *        PlayerControlSystem::setMoveSpeedScale.
+     */
+    void setMoveSpeedChangedCallback(ValueCallback callback) {
+        m_moveSpeedCallback = std::move(callback);
+    }
+
     // ========================================================================
     // Confirmation Dialog
     // ========================================================================
@@ -177,6 +204,17 @@ private:
     void renderConfirmationDialog(CatEngine::Renderer::UIPass& uiPass);
 
     /**
+     * @brief Render the web-parity pause modal (the dark card with the two
+     *        gameplay sliders, the desktop CONTROLS grid, and the green
+     *        Resume / red Quit buttons). Built entirely with the Dear ImGui
+     *        DrawList + real ImGui widgets so mouse clicks and slider drags
+     *        work; only reached when WebParity::kEnabled is true.
+     * @param width  Screen width in pixels.
+     * @param height Screen height in pixels.
+     */
+    void renderWebParityModal(float width, float height);
+
+    /**
      * @brief Show confirmation dialog
      * @param message Confirmation message
      * @param onConfirm Callback if user confirms
@@ -207,6 +245,17 @@ private:
     ButtonCallback m_settingsCallback;
     ButtonCallback m_mainMenuCallback;
     ButtonCallback m_quitCallback;
+
+    // Web-parity slider state + change callbacks. The two multipliers persist
+    // across pause/resume (the web reads them from localStorage; the native
+    // build holds them here so re-opening the pause menu shows the last-set
+    // value). Defaults are the web defaults (both 1.0). The callbacks push a
+    // changed value out to the game systems; either may be unset (the slider
+    // still moves and remembers its value, it just drives nothing).
+    float m_turnSensitivity = WebParity::kPauseTurnSensitivityDefault;
+    float m_moveSpeed       = WebParity::kPauseMoveSpeedDefault;
+    ValueCallback m_turnSensitivityCallback;
+    ValueCallback m_moveSpeedCallback;
 
     // Confirmation dialog
     bool m_confirmationActive = false;
