@@ -2887,6 +2887,19 @@ void CatAnnihilation::restart() {
         waveSystem_->reset();
     }
 
+    // Re-arm the Nine Lives revive. The leveling system deliberately SURVIVES
+    // a restart (level/XP/abilities carry over, matching the web build, which
+    // restores them from localStorage on its reload-based restart), but its
+    // per-run `nineLivesUsed` latch must NOT: the web's restart is a full page
+    // reload that re-initializes the store with nineLivesUsed=false, so the
+    // one-time revive is available again on the fresh run. Without this the
+    // native keeps the flag set and a player who spent their revive last run
+    // starts the next one unable to revive at all (2026-07-17 audit). This is
+    // the same run-scoped-reset invariant WaveSystem::reset() upholds above.
+    if (levelingSystem_ != nullptr) {
+        levelingSystem_->resetRevive();
+    }
+
     // Reset game statistics
     gameTime_ = 0.0F;
     enemiesKilled_ = 0;
@@ -2961,6 +2974,14 @@ void CatAnnihilation::quitToMenu() {
     // correct on its own.
     if (waveSystem_ != nullptr) {
         waveSystem_->reset();
+    }
+
+    // Re-arm the Nine Lives revive on the way back to the menu too (same
+    // run-scoped-reset rationale as restart() — a subsequent New Game must not
+    // inherit a spent revive latch). startNewGame() routes through restart(),
+    // which also re-arms; this keeps quitToMenu correct on its own.
+    if (levelingSystem_ != nullptr) {
+        levelingSystem_->resetRevive();
     }
 
     // Reset statistics
