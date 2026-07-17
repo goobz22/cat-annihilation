@@ -39,10 +39,21 @@ under parity) · shield right-click block model · spell 1 s cooldown (web spamm
 (native-only) · low-health vignette (kept: better feedback).
 
 **Remaining OPEN (parity):** real-time shadows in survival (web casts/receives
-shadow maps; native survival shaders are pure Lambert — P2, constants staged in
-WebParityConfig) · native Lambert vs three.js PBR falloff (cosmetic, accepted for
-now) · dog restart-wave anomaly seen once under space-spam (unreproduced with R;
-low priority).
+shadow maps; native survival shaders are pure Lambert — implementation IN
+PROGRESS 2026-07-17, constants staged in WebParityConfig) · native Lambert vs
+three.js PBR falloff (cosmetic, accepted for now).
+
+**Runtime-verified 2026-07-17 (headless probes, after the sweep landed):**
+- Lighting: post-fix frames are visibly brighter (screenshots
+  `build-ninja/headless/lightprobe/`); tree band shows 375 changed pixels over
+  1.2 s while an empty control band shows 0 — the wind sway is really moving.
+- Progression e2e: 250 s autoplay soak — 21 kills × 5 XP = 105 ≥ the web L2
+  threshold 104 → level 2 → maxHealth 100→120 (+20/level), 1 XP carried over,
+  cat alive in wave 3. Exact web-curve match, all via expect: assertions
+  (`build-ninja/headless/levelsoak3/`).
+- Restart: both R and space-spam restarts from GameOver reset to wave 1 /
+  100 HP cleanly (2 probes). The one-time "wave 2 after restart" sighting
+  predates the combat fixes and does not reproduce at HEAD — CLOSED.
 
 ## Fix log (2026-07-16 campaign)
 
