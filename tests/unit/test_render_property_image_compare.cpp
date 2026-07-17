@@ -48,7 +48,11 @@ using CatEngine::Renderer::ImageCompare::SSIM;
 
 namespace {
 
-constexpr uint32_t kPropertySeed = 0xC0DE0042u;
+// Seed routed through CatTest::DeterministicSeed (reproducible default,
+// CAT_TEST_SEED-overridable). Generator type + distributions unchanged.
+#include "test_seed.hpp"
+const uint32_t kPropertySeed =
+    static_cast<uint32_t>(CatTest::DeterministicSeed("render property image_compare"));
 
 // Build a random image with bytes drawn uniformly from [0, 255]. Used as
 // the "structured noise" baseline — every pixel is independent so SSIM's
