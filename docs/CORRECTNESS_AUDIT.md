@@ -206,3 +206,36 @@ run's EXPECT FAIL lines poisoned the current verdict (a passing run printed
 FAIL) — stale artifacts are now cleared before launch.
 
 Gate now **20 stages** (9 lints); unit suite 7,724,757 assertions / 1241 cases.
+
+## 2026-07-18 — Round 8 (5 subsystems: render-shadows-lighting, physics-impulse, gamestate-flow, elemental-magic-reachable, hud-secondary)
+
+Workflow `cat-audit-round8`. **Three subsystems returned zero candidates** —
+shadow-cascade/clustered-lighting math, sequential-impulse physics, and the
+game-state machine flow. elemental-magic's one candidate (fireball travel-time
+lead overshooting approaching dogs) was refuted: the lead term is provably zero
+because enemy `MovementComponent.velocity` is never populated (the chase
+integrates `transform->position` directly), so the AOE detonates at the dog's
+true position. **1 CONFIRMED, fixed:**
+
+| # | Sev | Bug | Fix | Commit |
+|---|-----|-----|-----|--------|
+| 1 | MED | Weapon-skill XP bar stuck EMPTY for skill level ≥ 2: the HUD card copies the web WeaponSkills.tsx formula (subtracts the CUMULATIVE level floor), but native's LevelingSystem stores WITHIN-level XP (subtract-and-carry) and fed it raw — `into` went negative (level 2: empty until the last ~15 XP; level ≥ 3: floor 279 > per-level 163 → `need` < 0 → empty the whole level). | `WebParity::cumulativeWeaponSkillXp()` converts native's representation to the web contract at the feed seam (under `kEnabled` the card gets cumulative xp + `weaponXpForLevel(level+1)`); the XP text now matches the web's cumulative display too. Regression replicates the HUD's exact fill math over both feeds, pins the pre-fix wrong result as a contrast oracle; fail-first proven. | (hud-skill) |
+
+### Also landed this round
+
+- **The queued Round-6/7 LOW combat-parity class (bow + spell vs the enemy
+  sword-gate window) — fixed as a class.** `HealthComponent::damageIgnoringIFrame()`
+  (transparent to the window: neither blocked by it nor arming it, remaining
+  sword window preserved); both CombatSystem damage entry points take
+  `ignoreTargetIFrame` (sword keeps `damage()` so its 500 ms gate still works);
+  the bow projectile path + `applySpellDamage` pass `WebParity::kEnabled`, and
+  the projectile `isInvincible` early-out is parity-gated. Unit-pinned on the
+  real HealthComponent (two quick arrows both land; an arrow inside the sword
+  window lands AND preserves it; the sword gate itself still refuses a sword
+  re-hit) + structural pins in the extended `lint-combat-projectile-parity`.
+- **Second instance of the no-visible-windows class:** the operator saw
+  `unit_tests.exe` pop a console (bare-exe invocation from the shell). All
+  suite runs now go through `scripts/run_unit_tests.ts` (windowsHide), mirroring
+  `headless_run.ts` for the game; recorded in the memory rule.
+
+Unit suite 7,724,785 assertions / 1243 cases; gate 20 stages (9 lints).
