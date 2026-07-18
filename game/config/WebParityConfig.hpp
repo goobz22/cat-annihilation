@@ -282,6 +282,21 @@ inline float weaponXpForLevel(int level) {
     return static_cast<float>(std::floor(total / 2.5));
 }
 
+// Convert native's subtract-and-carry weapon-skill XP (skill->xp is the
+// WITHIN-level remainder after each level-up) to the web's CUMULATIVE absolute
+// total (gameStore.ts keeps weaponSkills.*.xp cumulative and xpToNextLevel =
+// calculateXPForLevel(level+1), also cumulative). The HUD weapon-skill card
+// copies the web WeaponSkills.tsx formula VERBATIM, which subtracts the
+// level's cumulative floor — feeding it within-level values drove the fill
+// negative and the bar stuck EMPTY for every skill level >= 2 (2026-07-18
+// audit: at level 3 the floor 279 exceeds the per-level 163, need < 0, pct 0
+// for the whole level). Feed the card through this so the web formula's
+// inputs match its contract. Under parity the elemental (Water) skill runs
+// the same web curve (xp_tables), so the same conversion applies to it.
+inline float cumulativeWeaponSkillXp(int level, int withinLevelXp) {
+    return weaponXpForLevel(level) + static_cast<float>(withinLevelXp);
+}
+
 // ---------------------------------------------------------------------
 // Pre-game menu — reference: src/components/ui/GameModeSelection.tsx
 // (the mode-select page + the "Customize Your Cat" screen the web shows

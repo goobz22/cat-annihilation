@@ -1679,8 +1679,27 @@ void CatAnnihilation::updateUI(float dt) {
                     skill = &skills.bow;
                 }
                 if (skill != nullptr) {
-                    activeHud.setActiveWeaponSkill(skill->level, skill->xp,
-                                                   skill->xpToNextLevel);
+                    if constexpr (WebParity::kEnabled) {
+                        // The HUD card copies the web WeaponSkills.tsx formula
+                        // VERBATIM, whose inputs are CUMULATIVE absolute XP
+                        // totals (gameStore keeps weaponSkills.*.xp cumulative;
+                        // xpToNextLevel = calculateXPForLevel(level+1)). Native
+                        // stores WITHIN-level values (subtract-and-carry), and
+                        // feeding those raw drove the fill negative — the bar
+                        // stuck EMPTY for every skill level >= 2 (2026-07-18
+                        // audit). Convert to the web contract at the seam.
+                        // The Water elemental skill runs the same web curve
+                        // under parity, so the same conversion applies.
+                        activeHud.setActiveWeaponSkill(
+                            skill->level,
+                            static_cast<int>(WebParity::cumulativeWeaponSkillXp(
+                                skill->level, skill->xp)),
+                            static_cast<int>(WebParity::weaponXpForLevel(
+                                skill->level + 1)));
+                    } else {
+                        activeHud.setActiveWeaponSkill(skill->level, skill->xp,
+                                                       skill->xpToNextLevel);
+                    }
                 }
             }
 

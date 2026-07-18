@@ -974,3 +974,57 @@ TEST_CASE("enemy sword gate does not throttle arrows/spells under parity",
         CHECK(dog.currentHealth == 75.0f);
     }
 }
+
+TEST_CASE("weapon-skill HUD bar receives cumulative XP so the web formula fills correctly",
+          "[web-parity][hud][skill-bar]") {
+    // Round-8 audit (2026-07-18), MED. The HUD weapon-skill card copies the web
+    // WeaponSkills.tsx fill formula VERBATIM: it subtracts the level's
+    // CUMULATIVE floor (weaponXpForLevel(level)) from the fed xp/xpToNextLevel.
+    // That is correct for the web, whose store keeps those values cumulative —
+    // but native's LevelingSystem stores WITHIN-level values (subtract-and-
+    // carry), and feeding them raw drove the fill negative: at level 3 the
+    // floor (279) exceeds the per-level requirement (163), need < 0, and the
+    // bar stuck EMPTY for the entire level. cumulativeWeaponSkillXp converts
+    // native's representation to the web contract at the feed seam.
+    //
+    // This replicates the HUD's exact fill math (HUD.cpp renderWeaponSkillCard)
+    // over both feeds, pinning the audit's arithmetic.
+    auto hudFillPct = [](int level, int fedXp, int fedNext) {
+        const float curLevelXp = (level <= 1) ? 0.0f : WebParity::weaponXpForLevel(level);
+        const float need = static_cast<float>(fedNext) - curLevelXp;
+        const float into = static_cast<float>(fedXp) - curLevelXp;
+        return (need > 0.0f) ? std::clamp(into / need, 0.0f, 1.0f) : 0.0f;
+    };
+
+    // Curve anchors (web calculateXPForLevel/2.5 cumulative sums).
+    REQUIRE(WebParity::weaponXpForLevel(2) == 132.0f);
+    REQUIRE(WebParity::weaponXpForLevel(3) == 279.0f);
+
+    SECTION("level 2, 50 XP into the level -> ~34% fill (web arithmetic)") {
+        const int cumXp = static_cast<int>(WebParity::cumulativeWeaponSkillXp(2, 50));
+        const int cumNext = static_cast<int>(WebParity::weaponXpForLevel(3));
+        CHECK(cumXp == 182);
+        // need = 279-132 = 147 (the per-level requirement), into = 50.
+        CHECK(hudFillPct(2, cumXp, cumNext) == Approx(50.0f / 147.0f).epsilon(0.001));
+    }
+    SECTION("level 3 fills through the level (pre-fix it was 0 the whole level)") {
+        const int cumNext = static_cast<int>(WebParity::weaponXpForLevel(4));
+        const float early = hudFillPct(3, static_cast<int>(WebParity::cumulativeWeaponSkillXp(3, 20)), cumNext);
+        const float late = hudFillPct(3, static_cast<int>(WebParity::cumulativeWeaponSkillXp(3, 150)), cumNext);
+        CHECK(early > 0.05f);
+        CHECK(late > early);
+        CHECK(late < 1.0f);
+    }
+    SECTION("the documented bug: feeding native WITHIN-level values yields a stuck-empty bar") {
+        // Level 3 with 100 within-level XP and the per-level requirement 163
+        // (what the native store holds): need = 163-279 < 0 -> pct 0. This is
+        // the pre-fix wrong result, kept as the contrast oracle.
+        const int perLevelNeed = static_cast<int>(WebParity::weaponXpForLevel(4) -
+                                                  WebParity::weaponXpForLevel(3));
+        CHECK(hudFillPct(3, 100, perLevelNeed) == 0.0f);
+    }
+    SECTION("level 1 needs no floor and fills from zero") {
+        CHECK(hudFillPct(1, 66, static_cast<int>(WebParity::weaponXpForLevel(2)))
+              == Approx(0.5f).epsilon(0.001));
+    }
+}
