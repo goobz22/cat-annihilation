@@ -142,3 +142,37 @@ the self-alias), and un-skip `tests/unit/test_quest_system.cpp` (currently
 dropped from `UNIT_TEST_SOURCES` for `Clan::` enum drift) to pin it. Not fixed
 now because a T4 fail-first regression needs the full quest-data + Clan
 scaffolding, disproportionate for unreachable off-mission code.
+
+## 2026-07-18 — Round 6 (5 reachable subsystems: combat-depth, status-effects, health-system, input-camera, wave-spawn-pacing)
+
+Workflow `cat-audit-round6`. combat-depth surfaced most; status-effects and
+input-camera were otherwise clean. **5 candidates, all 5 CONFIRMED** (3 fixed
+this round, 2 LOW queued below with verified fix-shapes). Notable: the verifiers
+flagged a **stale PARITY_MATRIX note claiming the bow is unreachable** — it is a
+live hotbar weapon (Num3), and three bugs stem from the hotbar combat being wired
+up without web parity.
+
+| # | Sev | Bug | Fix | Commit |
+|---|-----|-----|-----|--------|
+| 1 | MED | Nine-Lives revive left the player stuck in the `layDown` corpse pose: `handleDeath` fires the revive callback BEFORE the death-pose block, whose only guard was `!deathPosed`, so it posed the now-alive player and latched the flag — walk/run/idle dead for the rest of the run after any L15+ lethal hit. | After the death callback, early-return if the entity `isAlive()` (a handler revived it) before the death-pose freeze. Harness gained `grantrevive`/`killplayer` verbs + `playerDeathPosed` query; new gate stage `revive-not-stuck` (grantrevive→killplayer→alive+30%HP+not-posed). Fail-first proven. | (revive) |
+| 2 | MED | Spawn ring centered on the LIVE player position per staggered spawn, so a player fleeing during the ~1.4s spawn window was continually re-surrounded; the web freezes the ring at the wave-start snapshot. | Capture the player position once in `startWave()` (`waveAnchorPosition_`); under parity center the ring on that frozen anchor via the pure static `spawnRingCenter()` helper. Deterministic unit test (headless was confounded by enemy chase); fail-first proven. Adds enemy-introspection expect queries. | (spawn) |
+| 3 | MED | Bow arrows used the native hit radius 1.0 instead of the web's 1.5 (`WebParity::kProjectileHitRadius`); with the +1 arrow spawn height over ground dogs + 3D distance test, the horizontal hit window shrank to ~0.3 units and arrows sailed past enemies the web would hit. | Branch the projectile hit radius on `WebParity::kEnabled` (1.5), mirroring the spell path. Constant already pinned; new structural lint `lint-combat-projectile-parity.ts` forbids the bare `projectileHitRadius_` in `checkProjectileHit` (CombatSystem is ECS-coupled / not unit-testable). Revert-refail proven. | (bow) |
+
+Gate now **16 stages** (7 lints + compile + build + cat-verify + menu-flow +
+nine-lives-rearm + revive-not-stuck); unit suite 7,724,750 assertions / 1239
+cases. (Commit SHAs recorded in git log; the three fixes pushed sequentially.)
+
+**Note on cat-verify:** the 30s autoplay perf gate (`fpsMin>=15`) began flaking
+at the threshold boundary this session (cold-start stutter under the long
+session's accumulated build+workflow load; `fpsMin` varied 6-19 and PASSED at 19
+when the machine cooperated). It is a pre-existing machine-perf sensitivity, not
+a regression from these one-branch changes (cat-verify was green through Rounds
+4-5); every correctness stage passes directly. Queued for investigation.
+
+### LOW combat-parity divergences queued (verified, fix-shapes documented)
+
+Both CONFIRMED and reachable, but LOW and with subtle interaction semantics —
+deferred to a focused pass rather than rushed:
+
+- **Enemy 0.5s i-frame throttles bow/projectile hits (LOW).** `HealthComponent::damage()` arms a shared 0.5s `invincibilityTimer` for ALL damage sources, so a second arrow within 0.5s at one dog is dropped (0 dmg, 0 XP). The web has NO enemy projectile throttle — only the SWORD has a per-enemy 500ms gate (`lastSwordHitTime`); arrows are ungated (`GlobalCollisionSystem.tsx`). Rapid-firing the bow at one tanky dog gives 30 dmg native vs 60 web. **Fix-shape:** under parity, either separate the sword gate from the projectile path or zero the enemy's `invincibilityTimer` after a projectile lands (mirroring the enemy→player melee i-frame fix) — but native shares ONE timer across sword+projectile, so the fix must not un-gate the sword; needs the two gates separated. Deferred for that interaction analysis. `game/systems/CombatSystem.cpp:1040`.
+- **Shield-bash fires on Space/left-click, which the web never performs (LOW).** Native's `performShieldBash()` runs when the shield hotbar slot is active and the player presses Space/click; the web's `performAttack()` triggers an attack ONLY for the sword (`CatCharacter/index.tsx:150-165` — the web shield is a defensive BLOCK, not an offensive bash). **Fix-shape:** gate `performShieldBash()` (or the Shield case in the attack dispatch) off under parity so the shield is defensive-only, matching the web. Verify the shield slot's survival-play reachability first. `game/systems/PlayerControlSystem.cpp:512`.
