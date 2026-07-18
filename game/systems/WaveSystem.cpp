@@ -462,7 +462,7 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
     // to the live position if no anchor was captured (e.g. the non-parity path
     // or a wave that started with no player).
     const Engine::vec3 ringCenter =
-        (false && WebParity::kEnabled && waveAnchorValid_) ? waveAnchorPosition_  // TEMP-REVERT-REFAIL
+        (WebParity::kEnabled && waveAnchorValid_) ? waveAnchorPosition_
                                                   : playerTransform->position;
     Engine::vec3 spawnPos = ringCenter + offset;
 
