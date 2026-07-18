@@ -23,7 +23,7 @@
 //   *.ppm/*.png   every screenshot: checkpoint, PNG auto-converted
 //   exit.ppm/.png final frame (--frame-dump)
 
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "fs";
 import { spawnSync } from "child_process";
 import { join, dirname, resolve } from "path";
 import { convertPpmToPng } from "./ppm_to_png";
@@ -68,6 +68,19 @@ if (!outDir) {
 // relative --out would silently split the artifacts between two trees.
 outDir = resolve(outDir);
 mkdirSync(outDir, { recursive: true });
+
+// Wipe stale artifacts from a REUSED out dir before launching. The verdict is
+// computed by grepping run.log for EXPECT lines and parsing state.jsonl — a
+// leftover run.log from a previous invocation of the same out dir injects the
+// OLD run's EXPECT FAIL/PASS lines into THIS run's verdict (2026-07-18: a
+// passing run printed FAIL because the summarizer counted a stale failure from
+// the prior run in the same dir; wavescan_guard hit the same class earlier).
+for (const name of readdirSync(outDir)) {
+    if (name === "run.log" || name === "state.jsonl" ||
+        name.endsWith(".ppm") || name.endsWith(".png")) {
+        rmSync(join(outDir, name), { force: true });
+    }
+}
 
 // ---- launch ----------------------------------------------------------------
 const engineArgs = [
