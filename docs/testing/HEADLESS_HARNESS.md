@@ -68,8 +68,15 @@ travel; a straight walk at spawn heading cannot see it), **Nine Lives re-arm**
 `expect:reviveArmed=true`), **revive-not-stuck** (`grantrevive` → `killplayer`
 → `expect:playerAlive=true` + `expect:playerHealth>=25` +
 `expect:playerDeathPosed=false` — the revived cat must not be frozen in the
-`layDown` corpse pose), progression e2e (250 s `--autoplay` soak →
-`expect:level>=2` + `expect:playerMaxHealth>=120`), restart semantics,
+`layDown` corpse pose), progression e2e (250 s `--autoplay` soak — under web
+parity expect `wave>=2` + `enemiesKilled>=10`; the strong oracle is
+`xp == kills*5` (web `addCatXP(5)` per kill; level 2 needs 104 XP ≈ 21 kills)
+and the run typically ENDS in GameOver (the parity-uncapped swarm kills the
+AI around wave 3 — measured quiet-machine baseline: 17 kills / wave 3 / 85 XP;
+the old `level>=2` + `playerMaxHealth>=120` expectations were pre-parity
+400-HP-cat calibration, retired 2026-07-18). NOTE: soak numbers are
+LOAD-SENSITIVE — a machine grinding builds/reviews halves the AI's kills
+(7 vs 17); soak only on a quiet machine), restart semantics,
 wind-sway pixel-diff on two `screenshot:` frames 1.2 s apart.
 
 Clicks inject at BOTH layers the game reads: `Engine::Input`'s post-poll

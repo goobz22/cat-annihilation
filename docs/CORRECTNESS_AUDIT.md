@@ -282,3 +282,17 @@ concurrent load (10-agent Opus audit workflows + full ninja rebuilds + review
 agents saturating CPU/disk while the 30 s autoplay ran). Conclusion:
 environmental contention, not a regression; the nightly openclaw runs (idle
 machine) are the representative measurement. No gate change — thresholds stay.
+
+### 250s autoplay progression soak — investigated end-to-end, parity-exact (closed)
+
+Two runs. Load-poisoned (review agents grinding, fps min 2.3): died t=47.5s,
+wave 2, 7 kills. Quiet machine (fps 38-75): fought to **wave 3, 17 kills,
+xp=85** before the parity-uncapped swarm won. Verdict: **not a bug** —
+(1) `xp == kills × 5` exactly (web `addCatXP(5)` per kill; level 2 needs
+104 XP ≈ 21 kills), so `lvl 1` at 17 kills is parity-EXACT; (2) survival to
+~wave 3 is parity difficulty (100 HP cat, no player i-frame, uncapped swarm
+melee — the retired `level>=2`/`maxHealth>=120` soak expectations were
+calibrated for the pre-parity 400 HP cat and are updated in
+HEADLESS_HARNESS.md); (3) the 2.4× kill gap between the two runs quantifies
+the load-sensitivity (same class as the cat-verify fpsMin flake): soak only on
+a quiet machine.
