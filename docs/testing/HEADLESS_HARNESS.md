@@ -147,6 +147,27 @@ samples).
 | 3 | another instance already running (single-instance mutex) |
 | 4 | ran fine, but ≥1 `expect:` assertion FAILED |
 
+## Per-state golden images — `scripts/golden_states.ts`
+
+```
+bun scripts/golden_states.ts            # capture + compare vs baselines
+bun scripts/golden_states.ts --update   # re-baseline after an INTENDED visual change
+bun scripts/golden_states.ts --selftest # comparator self-proof
+```
+
+One canonical screenshot per game state (menu / customize / playing / pause /
+gameover), captured at 1920×1080 (where the click coords are calibrated) and
+box-downsampled 3× to 640×360 baselines in `tests/golden/states/` (~690 KB
+each). Comparator = global MAE + worst 32-px-block MAE with per-state
+thresholds: the menus are byte-DETERMINISTIC run-to-run (measured 0.00), live
+scenes carry loose thresholds (dog spawn radii are random) that still catch
+gross breakage (black frame, missing overlay, color explosion) — measured
+run-to-run variance: playing global 1.4 / block 21 vs thresholds 20 / 120.
+**On-demand / nightly probe, NOT a per-commit gate stage**: swapchain output is
+GPU/driver-specific, so baselines are only valid on the machine that produced
+them (same policy as the ctest smoke golden, which WARN-skips without a
+candidate).
+
 ## Related
 
 - `bun scripts/cat-test-gate.ts --json` — the canonical build+autoplay gate

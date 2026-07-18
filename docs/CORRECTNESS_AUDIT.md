@@ -355,3 +355,14 @@ in-play defects.
   z=−18.05 in 1.5 s (≈ exactly 2× the baseline speed-6 walk) — the slider
   provably drives real movement, not just its displayed value. Both pause
   sliders are now runtime-verified end-to-end.
+
+### Per-state golden images shipped (frontier iteration 3)
+
+`scripts/golden_states.ts`: one canonical screenshot per game state
+(menu/customize/playing/pause/gameover), captured at the calibrated 1920×1080
+and 3×-downsampled to 640×360 baselines in `tests/golden/states/`. Comparator
+(global MAE + worst-block MAE, per-state thresholds, selftest-proven) measured
+the menus **byte-deterministic run-to-run (0.00)** and live scenes at ~1.4/21
+vs 20/120 thresholds; a wrong-baseline swap trips it (8.74/89.6). On-demand /
+nightly probe (GPU/driver-specific baselines — deliberately not a per-commit
+gate stage).
