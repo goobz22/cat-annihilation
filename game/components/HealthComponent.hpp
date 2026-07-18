@@ -67,6 +67,30 @@ struct HealthComponent {
      * @param amount Amount of damage to apply
      * @return true if damage was applied (not invincible)
      */
+    /**
+     * Apply damage that is TRANSPARENT to the invincibility window: it is
+     * neither blocked by an active window nor arms a new one (the pre-existing
+     * window is restored afterward, however much of it remains).
+     *
+     * Why (2026-07-18 audit, web parity): the shared invincibilityTimer is
+     * native's equivalent of the web's per-enemy SWORD gate (500 ms
+     * lastSwordHitTime). The web applies NO enemy-side cooldown to arrows or
+     * spell impacts — every projectile hit lands and leaves the sword gate
+     * untouched. Native routed all sources through damage(), so a second
+     * arrow within 0.5 s (or a spell right after a sword hit) was silently
+     * absorbed. Bow/spell paths call this under WebParity::kEnabled; the
+     * sword path keeps damage() so its gate still works. The DOT ticks in
+     * elemental_magic hand-rolled this exact save/zero/restore idiom first —
+     * this makes it first-class and unit-testable.
+     */
+    bool damageIgnoringIFrame(float amount) {
+        const float savedWindow = invincibilityTimer;
+        invincibilityTimer = 0.0f;
+        const bool applied = damage(amount);
+        invincibilityTimer = savedWindow;
+        return applied;
+    }
+
     bool damage(float amount) {
         // Check invincibility
         if (invincibilityTimer > 0.0f) {
