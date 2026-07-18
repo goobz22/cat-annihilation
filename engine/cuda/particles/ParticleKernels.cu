@@ -1,5 +1,6 @@
 #include "ParticleKernels.cuh"
 #include "SimplexNoise.hpp"  // Header-only, __host__ __device__ simplex noise
+#include "ParticleFade.hpp"  // Header-only, __host__ __device__ alpha fade (CPU-unit-tested)
 #include "../CudaError.hpp"  // CUDA_CHECK throws CudaException on non-success
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -451,12 +452,16 @@ __global__ void updateParticles(
     // Update lifetime
     lifetime -= deltaTime;
 
-    // Lifetime-based effects
-    float lifetimeRatio = clamp(lifetime / maxLifetime, 0.0f, 1.0f);
-
-    // Fade out alpha
+    // Fade out alpha. The stored color is the PERSISTED value from last frame,
+    // so a bare `color.w *= ratio` compounds the fade geometrically (a running
+    // product of every past ratio) and bursts vanished at ~25% of their
+    // lifetime (2026-07-18 audit). fadedAlpha applies the telescoping
+    // ratio-of-ratios update so the stored alpha is always
+    // baseAlpha * currentRatio — the intended linear fade — with no extra SoA
+    // storage. Shared host/device with the CPU unit test (ParticleFade.hpp).
     float4 color = particles.colors[idx];
-    color.w *= lifetimeRatio; // Fade alpha
+    color.w = CatEngine::CUDA::fade::fadedAlpha(color.w, lifetime,
+                                                maxLifetime, deltaTime);
 
     // Scale over lifetime (optional, controlled by emitter)
     // float size = particles.sizes[idx];

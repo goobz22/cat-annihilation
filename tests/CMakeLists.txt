@@ -138,6 +138,13 @@ set(UNIT_TEST_SOURCES
     # determinism, isotropy, and detail::FastFloor / DotGrad / kGrad3
     # contracts that the in-game particle turbulence field depends on.
     unit/test_simplex_noise.cpp
+    # ParticleFade is header-only (engine/cuda/particles/ParticleFade.hpp),
+    # __host__ __device__ via PARTICLE_FADE_HD — the exact per-frame alpha-fade
+    # function the CUDA update kernel executes, compiled for the host here.
+    # Pins the telescoping invariant (stored alpha == baseAlpha * lifetimeRatio)
+    # that fixed the 2026-07-18 compounding-fade bug (bursts vanishing at ~25%
+    # of their lifetime).
+    unit/test_particle_fade.cpp
     # RibbonTrail is header-only (engine/cuda/particles/RibbonTrail.hpp) and
     # depends only on engine math (Vector — vec2/vec3/vec4) + STL. Same
     # CUDA-free, header-shared rationale as SimplexNoise: the math is the
