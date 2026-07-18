@@ -254,6 +254,16 @@ private:
     int enemiesSpawned_ = 0;
     float spawnTimer_ = 0.0f;
 
+    // Web-parity spawn-ring anchor: the player position captured ONCE at
+    // wave start. The web builds the whole encircling ring off a single
+    // playerPosition snapshot (LocalEnemySystem.tsx spawnWave) and only defers
+    // the reveal, so the ring is frozen at the wave-start location; native
+    // spawns are staggered (~0.2 s each) and previously re-read the LIVE player
+    // position per spawn, so the ring chased a fleeing player (2026-07-18
+    // audit). Cached in startWave(), consumed by getSpawnPosition() under parity.
+    Engine::vec3 waveAnchorPosition_{0.0f, 0.0f, 0.0f};
+    bool waveAnchorValid_ = false;
+
     // Enemy tracking
     std::vector<CatEngine::Entity> spawnedEnemies_;
 
