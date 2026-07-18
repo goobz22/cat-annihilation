@@ -176,3 +176,33 @@ deferred to a focused pass rather than rushed:
 
 - **Enemy 0.5s i-frame throttles bow/projectile hits (LOW).** `HealthComponent::damage()` arms a shared 0.5s `invincibilityTimer` for ALL damage sources, so a second arrow within 0.5s at one dog is dropped (0 dmg, 0 XP). The web has NO enemy projectile throttle — only the SWORD has a per-enemy 500ms gate (`lastSwordHitTime`); arrows are ungated (`GlobalCollisionSystem.tsx`). Rapid-firing the bow at one tanky dog gives 30 dmg native vs 60 web. **Fix-shape:** under parity, either separate the sword gate from the projectile path or zero the enemy's `invincibilityTimer` after a projectile lands (mirroring the enemy→player melee i-frame fix) — but native shares ONE timer across sword+projectile, so the fix must not un-gate the sword; needs the two gates separated. Deferred for that interaction analysis. `game/systems/CombatSystem.cpp:1040`.
 - **Shield-bash fires on Space/left-click, which the web never performs (LOW).** Native's `performShieldBash()` runs when the shield hotbar slot is active and the player presses Space/click; the web's `performAttack()` triggers an attack ONLY for the sword (`CatCharacter/index.tsx:150-165` — the web shield is a defensive BLOCK, not an offensive bash). **Fix-shape:** gate `performShieldBash()` (or the Shield case in the attack dispatch) off under parity so the shield is defensive-only, matching the web. Verify the shield slot's survival-play reachability first. `game/systems/PlayerControlSystem.cpp:512`.
+
+## 2026-07-18 — Round 7 (5 fresh subsystems: save-write-path, cuda-particles, ecs-core, audio-3d, combo-system)
+
+Workflow `cat-audit-round7`. **ecs-core came back CLEAN** (the foundational
+entity/component/query code holds up) and the save WRITE path's two candidates
+were correctly refuted as durability-HARDENING gaps (power-loss fsync ordering;
+unchecked final flush on a contrived full-disk window) — real improvements but
+not in-play defects; both belong on ENGINE_BACKLOG. The combo-overflow candidate
+was refuted as dormant (no entity ever receives a ComboComponent — noted as a
+future wiring landmine). **6 candidates, 2 CONFIRMED, both fixed:**
+
+| # | Sev | Bug | Fix | Commit |
+|---|-----|-----|-----|--------|
+| 1 | MED | OpenAL listener initialized once at the world origin and never repositioned — the three world-positioned combat sounds (enemy death/hit, projectile hit) attenuated under `AL_INVERSE_DISTANCE_CLAMPED` by distance-from-SPAWN, so a fight 25 units out played at ~1/25 gain with wrong panning (CAT_AUDIO=1 config). | `GameAudio::setListenerPose(position, forward)` forwards to the engine listener; the per-frame audio update calls it with the player position + camera forward. Structural lint `lint-audio-listener-tracking.ts` pins both halves (definition forwards to `getListener()`; game loop calls it); revert-refail proven. | (listener) |
+| 2 | LOW | Particle alpha fade compounded per frame (`color.w *= ratio` against the persisted color) — a running product of every past ratio instead of `baseAlpha * ratio`; every death/hit burst vanished at ~25% of its lifetime (~1e-5 by 0.4s of a 1.5s burst). | Telescoping ratio-of-ratios update (`w_k = w_{k-1} · r_k/r_{k-1}`, exact by telescoping, no new SoA storage) in the new header-only `__host__ __device__` `ParticleFade.hpp` (SimplexNoise pattern) — the CPU unit test links the SAME function nvcc builds into the kernel. `test_particle_fade.cpp` pins the linear invariant; fail-first proven. | (fade) |
+
+### Out-of-band this round (operator directive)
+
+**"cat annihilation runs cmd prompt... make it run in the background."** Every
+harness child spawn (the console-subsystem game exe, ninja, bun, git, and
+openclaw cat-verify's literal `cmd /c mkdir`) popped a visible console window —
+`--hidden` only hides the GAME window. Fixed with `windowsHide: true` on every
+spawn site in `scripts/` + the openclaw driver (`cmd /c mkdir` → `fs.mkdirSync`);
+class pinned by the gate-wired `lint-windows-hide.ts` and recorded in the
+never-visible-test-windows memory. Also fixed a real harness bug caught live:
+`headless_run.ts` reused out dirs without wiping stale `run.log`, so a prior
+run's EXPECT FAIL lines poisoned the current verdict (a passing run printed
+FAIL) — stale artifacts are now cleared before launch.
+
+Gate now **20 stages** (9 lints); unit suite 7,724,757 assertions / 1241 cases.
