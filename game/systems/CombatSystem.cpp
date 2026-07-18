@@ -2,6 +2,7 @@
 #include "../components/GameComponents.hpp"
 #include "../components/combat_components.hpp"
 #include "../components/MeshComponent.hpp"
+#include "../config/WebParityConfig.hpp"
 #include "../../engine/ecs/ECS.hpp"
 #include "../../engine/math/Math.hpp"
 #include <cmath>
@@ -894,8 +895,18 @@ void CombatSystem::updateProjectiles(float dt) {
                     return;
                 }
 
-                // Check collision
-                if (checkProjectileHit(projectile.position, transform->position, projectileHitRadius_)) {
+                // Check collision. Under web parity use kProjectileHitRadius
+                // (1.5) — the web gates every projectile hit on distance < 1.5
+                // (GlobalCollisionSystem.tsx), and the sibling spell path already
+                // consumes this constant. The bow's CombatSystem path was left
+                // at the native 1.0, which — combined with the +1 arrow spawn
+                // height over ground-anchored dogs and the 3D distance test —
+                // shrank the horizontal hit window to ~0.3 units and made arrows
+                // sail past enemies the web build would hit (2026-07-18 audit).
+                const float hitRadius = WebParity::kEnabled
+                                            ? WebParity::kProjectileHitRadius
+                                            : projectileHitRadius_;
+                if (checkProjectileHit(projectile.position, transform->position, hitRadius)) {
                     // Check for block
                     float finalDamage = projectile.damage;
                     bool wasBlocked = false;
