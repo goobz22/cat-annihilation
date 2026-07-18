@@ -4,6 +4,7 @@
 #include "../../engine/audio/AudioEngine.hpp"
 #include "../../engine/audio/AudioSource.hpp"
 #include "../config/GameConfig.hpp"
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -38,6 +39,25 @@ public:
      * @param deltaTime Time since last frame in seconds
      */
     void update(float deltaTime);
+
+    /**
+     * @brief Track the OpenAL listener to the player each frame.
+     *
+     * The engine initializes the listener ONCE at the world origin and nothing
+     * repositioned it afterward, so the three world-positioned combat sounds
+     * (enemy death / enemy hit / projectile hit) attenuated by distance from
+     * (0,0,0) instead of distance from the cat — a fight far from spawn was
+     * near-silent while a fight near spawn was loud regardless of where the
+     * player stood (2026-07-18 audit). Call once per frame with the player's
+     * world position and the camera forward so AL_INVERSE_DISTANCE_CLAMPED
+     * attenuation and stereo panning are computed from the player's actual
+     * point of view. Pinned by scripts/lint-audio-listener-tracking.ts.
+     *
+     * @param position World-space listener position (the player)
+     * @param forward  Normalized look direction (the camera forward)
+     */
+    void setListenerPose(const std::array<float, 3>& position,
+                         const std::array<float, 3>& forward);
 
     /**
      * @brief Apply audio settings from config

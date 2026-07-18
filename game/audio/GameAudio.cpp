@@ -67,6 +67,24 @@ void GameAudio::update(float deltaTime) {
     m_audioEngine.update();
 }
 
+void GameAudio::setListenerPose(const std::array<float, 3>& position,
+                                const std::array<float, 3>& forward) {
+    if (!m_initialized) {
+        return;
+    }
+
+    // Track the OpenAL listener to the player. Attenuation is
+    // AL_INVERSE_DISTANCE_CLAMPED (gain ~ referenceDistance/distance), so the
+    // listener MUST sit where the player is — the engine's one-time origin init
+    // left it at (0,0,0) forever, making enemy death/hit sounds attenuate by
+    // distance-from-origin: a fight 25 units from spawn played at ~1/25 gain
+    // even with the dog dying at the cat's feet (2026-07-18 audit). The up
+    // vector stays world-up; the game has no camera roll.
+    auto& listener = m_audioEngine.getListener();
+    listener.setPosition(position);
+    listener.setOrientation(forward, {0.0f, 1.0f, 0.0f});
+}
+
 void GameAudio::applySettings(const AudioSettings& settings) {
     auto& mixer = m_audioEngine.getMixer();
 

@@ -176,6 +176,21 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-combat-projectile-parity.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-audio-listener-tracking pins the stationary-listener fix (2026-07-18):
+// GameAudio::setListenerPose must exist, forward to the engine listener, and be
+// called per-frame by the game loop — else positional combat SFX attenuate from
+// the world origin instead of the player. Audio is OpenAL-backed / not
+// unit-testable.
+stages.push(
+  runStage('lint-audio-listener-tracking:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-audio-listener-tracking.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-audio-listener-tracking', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-audio-listener-tracking.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
