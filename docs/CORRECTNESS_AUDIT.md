@@ -90,3 +90,25 @@ regression.
 | 5 | LOW | Native enemies have no separation/flocking, so dogs stack on the identical player-seek point; the web applies a boid separation force (radius 1.5, force 3.0) so its dogs spread into a ring. Visual-only divergence (PARITY_MATRIX OPEN P2); `BalanceConfig SEPARATION_RADIUS` exists but is unused. | Add `kEnemySeparationRadius=1.5`/`kEnemySeparationForce=3.0` (web literals) + a boid separation force summed over neighbors, added to the seek velocity under `kEnabled` (matches web `moveX += separationX*delta`). Regression pins the constants + the pure `separationContribution` math (falloff, planar, div-0 guard). Closes PARITY_MATRIX enemy-separation P2. | 4e42828 |
 
 All fixes: gate green (now **9 stages**: 4 lints [pause-parity + cooldown-reset, each with its selftest] + compile + build + cat-verify + menu-flow + nine-lives-rearm) + unit suite (7,724,738 assertions / 1237 cases) green at each commit. Two new class-detection lints this round (`lint-cooldown-reset-shape.ts`) and the save-load hardening moves the engine toward loading untrusted `.catsave` data without UB.
+
+## 2026-07-17 — Round 4 (5 more un-audited subsystems: audio, day-night, projectile-lifetime, combo/weapon-skills, wave-transition/victory)
+
+Workflow `cat-audit-round4` (aggregation fixed vs Round 3). 3 candidates
+surfaced, **all 3 CONFIRMED**, 0 refuted. day-night, projectile-lifetime, and
+wave-transition came back clean. Two of the three were the SAME class (skill
+level caps not reconciled with the web's 99-max), so per T8 the class was
+enumerated — which surfaced a THIRD instance (the cat main level cap) the audit
+finders never flagged.
+
+| # | Sev | Bug | Fix | Commit |
+|---|-----|-----|-----|--------|
+| 1 | MED | Cross-faded gameplay music is permanently silenced by any later volume/mute change: `crossFadeMusic` set the fade-in track's gain to 0 BEFORE `mixer.registerSource`, which snapshots `originalGain = getGain()` = 0, so `updateSourceVolume` then recomputes `0 * effectiveVolume = 0` forever. Only transitioned tracks poisoned; gated behind `CAT_AUDIO=1`. | Register the source while it is at its full baseline gain (1.0), THEN apply the fade-in gain. Structural lint `lint-music-register-order.ts` (audio is OpenAL-backed / not unit-testable) pins that `registerSource` precedes the fade-in `setGain(0)`; --selftest, gate-wired; revert-refail proven. | 29bb47b |
+| 2 | MED | Weapon skill hard-capped at level 20 vs the web's 99 — sword damage pins at 230 (`40+(lvl-1)*10`) and the HUD skill bar freezes while the web keeps climbing. | Part of the class fix below. | e59ec43 |
+| 3 | MED | Elemental-magic skill hard-capped at level 15 vs the web's 99 (`weaponSkills.magic[element]` levels unbounded to 99, gameStore.ts:805-812). | Part of the class fix below. | e59ec43 |
+| — | (class) | **Enumerating #2+#3 per T8 surfaced a THIRD instance the finders missed: the cat MAIN level was capped at 50 vs the web's 99** (`xp_tables.hpp` itself documents "1-99 under web parity"). | Add `WebParity::kMaxLevel=99`; route every cap through a named constant (`kMaxCatLevel`/`kMaxWeaponSkillLevel`/`kMaxElementalSkillLevel`, each = `kMaxLevel` under parity, native fallbacks 50/20/15). Class lint `lint-skill-level-cap.ts` forbids any bare-literal skill cap in `leveling_system.cpp`; regression drives all three tracks to 99; fail-first proven. | e59ec43 |
+
+All fixes: gate green (now **13 stages**: 6 lints + compile + build + cat-verify + menu-flow + nine-lives-rearm) + unit suite (7,724,744 assertions / 1238 cases) green. Two new class-detection lints this round (`lint-skill-level-cap.ts`, `lint-music-register-order.ts`). The class-first discipline paid off literally — the cat-level cap would have shipped as a silent parity divergence had the class not been enumerated.
+
+### Coverage gap queued (R14)
+
+`tests/unit/test_leveling_system.cpp` is a full LevelingSystem suite (XP, stats, ability unlocks, regen, nine-lives, weapon/elemental skills) that is **NOT in `UNIT_TEST_SOURCES`** — it never compiles or runs. Activating it (and fixing any drifted assertions) would add real coverage over exactly the areas Round 4 touched. Tracked as a follow-up.
