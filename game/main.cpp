@@ -632,6 +632,9 @@ void printHelp() {
 // Grammar: semicolon-separated commands, executed in order.
 //   wait:<seconds>        pause the script for S seconds
 //   click:<x>,<y>         move + left-click at NORMALIZED window coords [0,1]
+//   drag:<x1>,<y1>,<x2>,<y2>[,<s>]  press at start, interpolate to end over
+//                         s seconds (default 0.25), release — drives ImGui
+//                         SLIDERS, which a discrete click: cannot move
 //   key:<name>            tap a key (enter, space, escape, r, w/a/s/d, 1..7)
 //   hold:<key>,<seconds>  hold a key down for S seconds (drive the cat)
 //   screenshot:<name>     capture the last-presented frame to <dump-dir>/<name>.ppm
@@ -640,7 +643,7 @@ void printHelp() {
 //                         makes the process exit 4 (queries: state, wave,
 //                         enemiesRemaining, enemiesKilled, playerHealth,
 //                         playerMaxHealth, playerAlive, level, reviveArmed,
-//                         playerDeathPosed,
+//                         playerDeathPosed, turnSensitivityScale, moveSpeedScale,
 //                         playerX/Y/Z, cameraX/Y/Z)
 //   spendrevive           test-support: grant Nine Lives + mark its revive
 //                         spent, so a restart's re-arm (reviveArmed) is testable
@@ -651,11 +654,17 @@ void printHelp() {
 //                   expect:state=Playing;hold:w,3;wait:10;quit"
 struct InputScript {
     struct Command {
-        enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect,
+        enum class Type { Wait, Click, Drag, Key, Hold, Screenshot, Log, Expect,
                           SpendRevive, GrantRevive, KillPlayer, Quit }
             type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
+        // Drag end-point + duration (a/b hold the start, like Click). A drag
+        // is press-at-start → interpolate → release-at-end, which is what
+        // ImGui SLIDERS need (a discrete click: can't move them).
+        float dragEndX = 0.0F;
+        float dragEndY = 0.0F;
+        float dragSeconds = 0.25F;
         Engine::Input::Key key = Engine::Input::Key::Enter;
         // Screenshot name, Log message, or Expect "<query><op><value>" —
         // Expect keeps the raw token so PASS/FAIL lines echo exactly what
@@ -724,6 +733,16 @@ static std::string inputScriptQueryValue(const std::string& query,
         const auto* leveling = game->getLevelingSystem();
         if (!leveling) return "<no-leveling>";
         return leveling->canRevive() ? "true" : "false";
+    }
+    if (query == "turnSensitivityScale" || query == "moveSpeedScale") {
+        // Pause-menu slider oracles: the live scales the sliders configure on
+        // PlayerControlSystem. With the drag: verb these make the
+        // pause→adjust→resume→re-pause persistence journey assertable.
+        const auto* playerControl = game->getPlayerControlSystem();
+        if (!playerControl) return "<no-player-control>";
+        return std::to_string(query == "turnSensitivityScale"
+                                  ? playerControl->getTurnSensitivityScale()
+                                  : playerControl->getMoveSpeedScale());
     }
     if (query == "playerDeathPosed") {
         // Death-pose oracle: the player's MeshComponent::deathPosed latch. A
@@ -960,6 +979,36 @@ static InputScript parseInputScript(const std::string& text) {
                                       token + "' — skipped");
                 continue;
             }
+        } else if (token.rfind("drag:", 0) == 0) {
+            // drag:<x1>,<y1>,<x2>,<y2>[,<seconds>] — press at the normalized
+            // start point, interpolate the cursor to the end point over the
+            // duration (default 0.25 s), release. The only way to drive ImGui
+            // sliders headlessly (a discrete click: cannot move them).
+            command.type = InputScript::Command::Type::Drag;
+            const std::string coords = token.substr(5);
+            std::vector<std::string> parts;
+            size_t begin = 0;
+            while (begin <= coords.size()) {
+                const size_t comma = coords.find(',', begin);
+                parts.push_back(coords.substr(
+                    begin, comma == std::string::npos ? std::string::npos
+                                                      : comma - begin));
+                if (comma == std::string::npos) break;
+                begin = comma + 1;
+            }
+            const bool coordsOk =
+                parts.size() >= 4 &&
+                parseInputScriptFloat(parts[0], command.a) &&
+                parseInputScriptFloat(parts[1], command.b) &&
+                parseInputScriptFloat(parts[2], command.dragEndX) &&
+                parseInputScriptFloat(parts[3], command.dragEndY) &&
+                (parts.size() < 5 ||
+                 parseInputScriptFloat(parts[4], command.dragSeconds));
+            if (!coordsOk || command.dragSeconds <= 0.0F) {
+                Engine::Logger::error("[input-script] bad drag args in '" +
+                                      token + "' — skipped");
+                continue;
+            }
         } else if (token.rfind("key:", 0) == 0) {
             command.type = InputScript::Command::Type::Key;
             command.key = inputScriptKeyFromName(token.substr(4));
@@ -1051,6 +1100,63 @@ static void runInputScriptStep(InputScript& script, float dt,
                 Engine::Logger::info("[input-script] clicked (" +
                                      std::to_string(command.a) + ", " +
                                      std::to_string(command.b) + ")");
+            }
+            break;
+        }
+        case Type::Drag: {
+            // Press → interpolate → release, spread over frames like Click's
+            // 3-phase machine, so ImGui's slider drag logic sees a real
+            // continuous grab. Both injection layers are fed each frame (the
+            // same dual-layer contract as Click): ImGui io for the widgets,
+            // Engine::Input for any gameplay reader. Phases: 0-1 settle the
+            // cursor at the start, 2 press, 3 interpolate for dragSeconds
+            // (waitTimer-driven), 4 release, 5-7 settle so the release edge is
+            // consumed before the next command runs.
+            ImGuiIO& io = ImGui::GetIO();
+            const float width = static_cast<float>(context.window.getWidth());
+            const float height = static_cast<float>(context.window.getHeight());
+            float normX = command.a;
+            float normY = command.b;
+            if (script.clickPhase == 3) {
+                script.waitTimer += dt;
+                const float progress =
+                    std::min(script.waitTimer / command.dragSeconds, 1.0F);
+                normX = command.a + (command.dragEndX - command.a) * progress;
+                normY = command.b + (command.dragEndY - command.b) * progress;
+            } else if (script.clickPhase > 3) {
+                normX = command.dragEndX;
+                normY = command.dragEndY;
+            }
+            const double px = static_cast<double>(normX) * width;
+            const double py = static_cast<double>(normY) * height;
+            context.input.injectCursorPos(px, py);
+            io.AddMousePosEvent(static_cast<float>(px), static_cast<float>(py));
+
+            if (script.clickPhase == 2) {
+                io.AddMouseButtonEvent(0, true);
+                context.input.injectMouseTap(Engine::Input::MouseButton::Left, 2);
+                ++script.clickPhase;
+            } else if (script.clickPhase == 3) {
+                // Keep the engine-side button asserted through the drag (same
+                // per-frame re-injection idiom as Hold). ImGui already latches
+                // its own button state from the single press event above.
+                context.input.injectMouseTap(Engine::Input::MouseButton::Left, 1);
+                if (script.waitTimer >= command.dragSeconds) {
+                    script.waitTimer = 0.0F;
+                    ++script.clickPhase;
+                }
+            } else if (script.clickPhase == 4) {
+                io.AddMouseButtonEvent(0, false);
+                ++script.clickPhase;
+            } else if (++script.clickPhase > 7) {
+                script.clickPhase = 0;
+                ++script.nextCommand;
+                Engine::Logger::info(
+                    "[input-script] dragged (" + std::to_string(command.a) +
+                    ", " + std::to_string(command.b) + ") -> (" +
+                    std::to_string(command.dragEndX) + ", " +
+                    std::to_string(command.dragEndY) + ") over " +
+                    std::to_string(command.dragSeconds) + "s");
             }
             break;
         }

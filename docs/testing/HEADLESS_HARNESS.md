@@ -38,6 +38,7 @@ Semicolon-separated, executed in order:
 |---|---|
 | `wait:<seconds>` | pause the script |
 | `click:<x>,<y>` | move + left-click at **normalized** [0,1] window coords |
+| `drag:<x1>,<y1>,<x2>,<y2>[,<s>]` | press at the normalized start, interpolate to the end over `s` seconds (default 0.25), release — drives ImGui SLIDERS (a discrete `click:` cannot move them) |
 | `key:<name>` | tap a key (`enter`, `space`, `escape`, `r`, `w/a/s/d`, `1`..`7`) |
 | `hold:<key>,<seconds>` | hold a key (drive the cat) |
 | `screenshot:<name>` | capture the last-presented frame to `<dump-dir>/<name>.ppm` |
@@ -53,6 +54,8 @@ Semicolon-separated, executed in order:
 `playerMaxHealth`, `playerAlive`, `level`, `reviveArmed` (Nine Lives
 `canRevive()` — true/false), `playerDeathPosed` (the player's
 `MeshComponent::deathPosed` latch — a revived player must be false),
+`turnSensitivityScale`/`moveSpeedScale` (the live pause-slider scales on
+PlayerControlSystem — settings-persistence oracles),
 `playerX`/`playerY`/`playerZ` (world position — movement/walk-speed oracles),
 `cameraX`/`cameraY`/`cameraZ` (camera rig geometry), and enemy aggregates
 `enemyCount`, `enemyCentroidX`/`enemyCentroidZ`, `maxEnemyDist`,
@@ -131,16 +134,6 @@ samples).
 | 1 | init failure |
 | 3 | another instance already running (single-instance mutex) |
 | 4 | ran fine, but ≥1 `expect:` assertion FAILED |
-
-## Known harness gaps (future work)
-
-- **No drag verb.** `click:` is a discrete move+press+release, so ImGui
-  SLIDERS (pause-menu volume/sensitivity) cannot be driven headlessly yet — a
-  `drag:<x1>,<y1>,<x2>,<y2>,<seconds>` command (press at start, interpolate,
-  release at end) would unlock the pause→settings→resume persistence journey.
-  Settings oracles are trivial once driving works (getTurnSensitivityScale /
-  getMoveSpeedScale accessors already exist; add expect queries like
-  `reviveArmed`).
 
 ## Related
 
