@@ -260,6 +260,16 @@ inline constexpr float kShieldBashCooldownSeconds = 0.6f;
 inline constexpr float kShieldBashPushback = 3.0f;
 inline constexpr int kShieldBashXp = 8;
 
+// The web's universal progression ceiling (gameConfig.ts:82 MAX_LEVEL = 99,
+// "Max level 99 like RuneScape"). The cat main level (gameStore.ts:735-760),
+// the sword/bow weapon skills (:836-842), and the per-element magic skills
+// (:805-812) ALL level with an unbounded level-up loop up to this cap. The
+// native pre-parity caps were lower and inconsistent (cat 50 / weapon 20 /
+// magic 15); leveling_system reconciles each to this value under kEnabled while
+// the native XP curves already served 1-99 (xp_tables.hpp). Pinned by
+// test_leveling_system.cpp + scripts/lint-skill-level-cap.ts.
+inline constexpr int kMaxLevel = 99;
+
 // gameConfig.ts:160-166 (calculateXPForLevel) — the weapon-skill curve,
 // same RuneScape shape as the cat curve but 300-base / 2^(i/7) / ÷2.5;
 // max weapon level 99 (MAX_LEVEL, gameConfig.ts:82). Level 1 -> 2 costs

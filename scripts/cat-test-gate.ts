@@ -133,6 +133,20 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-cooldown-reset-shape.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-skill-level-cap forbids a bare-literal skill/level cap in
+// leveling_system.cpp (the 2026-07-17 cat/weapon/magic progression-cap class):
+// every cap must route through a named kMax*Level constant (= WebParity::kMaxLevel
+// under parity) so it can't silently diverge from the web's 99-max.
+stages.push(
+  runStage('lint-skill-level-cap:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-skill-level-cap.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-skill-level-cap', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-skill-level-cap.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined

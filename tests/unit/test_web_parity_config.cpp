@@ -19,6 +19,9 @@
 // parity regression below. No EnemyAISystem .cpp symbol is referenced, so this
 // adds no ECS link dependency to the test.
 #include "systems/EnemyAISystem.hpp"
+// LevelingSystem is linked into unit_tests (leveling_system.cpp is in
+// UNIT_TEST_SOURCES) — used by the skill/level-cap parity regression below.
+#include "systems/leveling_system.hpp"
 // HealthComponent is a header-only, all-inline struct (no engine linkage
 // beyond the DamageType enum in status_effects.hpp, which is already on the
 // test build's include path). It lets the melee-i-frame parity regression
@@ -847,5 +850,44 @@ TEST_CASE("enemy boid separation matches the web (radius 1.5, force 3.0, linear 
         CHECK(f.x == Approx(0.0f));
         CHECK(f.y == Approx(0.0f));
         CHECK(f.z == Approx(1.0f));
+    }
+}
+
+TEST_CASE("all progression tracks reach the web 99-max under parity (cat, weapon, magic)",
+          "[web-parity][leveling][skill-cap]") {
+    // Round-4 audit (2026-07-17), MED x3 (ONE class). The web levels the cat
+    // main level, the sword/bow weapon skills, and the per-element magic skills
+    // ALL to MAX_LEVEL=99 (gameStore.ts:735-760/:836-842/:805-812). Native left
+    // three DIFFERENT lower caps behind — cat 50, weapon 20, magic 15 — even
+    // though the native XP curves already served 1-99 under WebParity::kEnabled
+    // (xp_tables.hpp). A sword- or magic-main player froze early on native while
+    // the web build kept climbing. All three now route through WebParity::kMaxLevel.
+    // The audit finders caught only weapon+magic; the cat-level instance was
+    // surfaced by enumerating the class (scripts/lint-skill-level-cap.ts).
+    REQUIRE(WebParity::kMaxLevel == 99);
+
+    LevelingSystem leveling;
+    leveling.initialize();
+
+    // Feed each track far more XP than the level-99 total, in chunks (so no
+    // single accumulation overflows int), then assert it climbed to 99. Pre-fix
+    // the cat froze at 50, sword at 20, Fire magic at 15.
+    SECTION("cat main level climbs past the old 50 cap to 99") {
+        for (int i = 0; i < 1000 && leveling.getLevel() < 99; ++i) {
+            leveling.addXP(50'000'000);
+        }
+        CHECK(leveling.getLevel() == 99);
+    }
+    SECTION("sword weapon skill climbs past the old 20 cap to 99") {
+        for (int i = 0; i < 1000 && leveling.getWeaponLevel("sword") < 99; ++i) {
+            leveling.addWeaponXP("sword", 50'000'000);
+        }
+        CHECK(leveling.getWeaponLevel("sword") == 99);
+    }
+    SECTION("Fire magic skill climbs past the old 15 cap to 99") {
+        for (int i = 0; i < 1000 && leveling.getElementalLevel(ElementType::Fire) < 99; ++i) {
+            leveling.addElementalXP(ElementType::Fire, 50'000'000);
+        }
+        CHECK(leveling.getElementalLevel(ElementType::Fire) == 99);
     }
 }
