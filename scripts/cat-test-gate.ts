@@ -351,6 +351,32 @@ if (!quick && stages[stages.length - 1]!.ok) {
       '--timeout', '90',
     ], { timeoutMs: 3 * 60_000 }),
   )
+
+  // Revive-not-stuck regression (2026-07-18 audit): HealthSystem::handleDeath
+  // fires the death callback (which runs the Nine-Lives revive) BEFORE the
+  // death-pose block, whose only guard was !deathPosed — so it posed the
+  // now-alive, revived player in the non-looping layDown corpse clip and latched
+  // deathPosed, freezing the cat flat for the rest of the run. `grantrevive`
+  // arms the revive, `killplayer` forces the death deterministically; after the
+  // revive the player must be alive at ~30% HP and NOT death-posed. Pre-fix
+  // playerDeathPosed was true here.
+  const reviveNotStuckScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:2', 'expect:state=Playing',
+    'grantrevive', 'expect:reviveArmed=true',
+    'killplayer', 'wait:1',
+    'expect:playerAlive=true', 'expect:playerHealth>=25',
+    'expect:playerDeathPosed=false',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('revive-not-stuck', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', reviveNotStuckScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-revivestuck'),
+      '--timeout', '90',
+    ], { timeoutMs: 3 * 60_000 }),
+  )
 }
 
 const overallOk = stages.every((s) => s.ok)

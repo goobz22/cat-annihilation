@@ -169,7 +169,7 @@ void HealthSystem::handleDeath(CatEngine::Entity entity) {
     // every death handler has had its say.
     if (auto* revivedHealth = ecs_->getComponent<HealthComponent>(entity)) {
         if (revivedHealth->isAlive()) {
-            // TEMP-REVERT-REFAIL: guard disabled
+            return;
         }
     }
 

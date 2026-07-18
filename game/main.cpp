@@ -651,7 +651,7 @@ void printHelp() {
 struct InputScript {
     struct Command {
         enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect,
-                          SpendRevive, GrantRevive, Quit }
+                          SpendRevive, GrantRevive, KillPlayer, Quit }
             type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
@@ -962,6 +962,12 @@ static InputScript parseInputScript(const std::string& text) {
             // player is not left stuck in the layDown corpse pose (2026-07-18
             // audit). Inert outside a driven run.
             command.type = InputScript::Command::Type::GrantRevive;
+        } else if (token == "killplayer") {
+            // Test-support: force the player's HP to 0 so the next HealthSystem
+            // tick runs the death path deterministically (no waiting for dogs).
+            // With Nine Lives armed this triggers the revive; lets a regression
+            // check the revived player isn't left in the death pose.
+            command.type = InputScript::Command::Type::KillPlayer;
         } else {
             Engine::Logger::warn("[input-script] unknown command '" + token + "' skipped");
             continue;
@@ -1100,6 +1106,25 @@ static void runInputScriptStep(InputScript& script, float dt,
             } else {
                 Engine::Logger::error(
                     "[input-script] grantrevive FAILED: no leveling system");
+            }
+            ++script.nextCommand;
+            break;
+        }
+        case Type::KillPlayer: {
+            // Zero the player's HP directly; HealthSystem::updateHealth fires
+            // handleDeath on the next tick (currentHealth<=0 && !isDead).
+            if (context.game != nullptr) {
+                auto* health = context.game->getECS().getComponent<CatGame::HealthComponent>(
+                    context.game->getPlayerEntity());
+                if (health != nullptr) {
+                    health->currentHealth = 0.0f;
+                    Engine::Logger::info(
+                        "[input-script] killplayer — player HP set to 0 (death "
+                        "fires next tick)");
+                } else {
+                    Engine::Logger::error(
+                        "[input-script] killplayer FAILED: no player health component");
+                }
             }
             ++script.nextCommand;
             break;
