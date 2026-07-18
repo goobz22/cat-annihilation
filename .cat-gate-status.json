@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-17T23:33:33.643Z",
+  "ts": "2026-07-18T00:38:43.090Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
@@ -7,66 +7,94 @@
       "name": "lint-pause-parity-guards:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 107,
+      "durationMs": 76,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-pause-parity-guards",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 100,
+      "durationMs": 67,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-cooldown-reset-shape:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 106,
+      "durationMs": 66,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-cooldown-reset-shape",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 142,
+      "durationMs": 84,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-skill-level-cap:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 82,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-skill-level-cap",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 59,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-music-register-order:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 63,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-music-register-order",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 61,
       "summary": "passed (0.1s)"
     },
     {
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 54,
-      "summary": "passed (0.1s)"
+      "durationMs": 31,
+      "summary": "passed (0.0s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 52,
-      "summary": "passed (0.1s)"
+      "durationMs": 40,
+      "summary": "passed (0.0s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 59662,
-      "summary": "passed (59.7s)"
+      "durationMs": 59029,
+      "summary": "passed (59.0s)"
     },
     {
       "name": "menu-flow",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 39135,
-      "summary": "passed (39.1s)"
+      "durationMs": 38039,
+      "summary": "passed (38.0s)"
     },
     {
       "name": "nine-lives-rearm",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 36701,
-      "summary": "passed (36.7s)"
+      "durationMs": 35587,
+      "summary": "passed (35.6s)"
     }
   ],
-  "gitSha": "0db89ee",
+  "gitSha": "b5244e5",
   "invocation": "--json"
 }
