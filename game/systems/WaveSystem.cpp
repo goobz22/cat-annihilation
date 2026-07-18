@@ -218,6 +218,18 @@ void WaveSystem::startWave(int waveNumber) {
     spawnTimer_ = 0.0f;
     spawnedEnemies_.clear();
 
+    // Capture the player position ONCE, now, as the spawn-ring anchor. The web
+    // freezes the entire encircling ring at the wave-start location; caching
+    // here (rather than re-reading the live player position on each staggered
+    // spawn) reproduces that so a fleeing player is not perpetually re-surrounded.
+    waveAnchorValid_ = false;
+    if (ecs_ && ecs_->isAlive(playerEntity_)) {
+        if (auto* playerTransform = ecs_->getComponent<Engine::Transform>(playerEntity_)) {
+            waveAnchorPosition_ = playerTransform->position;
+            waveAnchorValid_ = true;
+        }
+    }
+
     transitionToState(WaveState::Spawning);
 
     // Log the wave's difficulty budget BEFORE the callback fires so a
@@ -443,7 +455,16 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
         std::sin(angle) * radius
     );
 
-    Engine::vec3 spawnPos = playerTransform->position + offset;
+    // Under web parity, anchor the ring at the wave-start player position
+    // (captured once in startWave), not the LIVE player position — otherwise the
+    // staggered spawns re-center on the moving player and continually re-surround
+    // a fleeing cat, unlike the web's frozen ring (2026-07-18 audit). Fall back
+    // to the live position if no anchor was captured (e.g. the non-parity path
+    // or a wave that started with no player).
+    const Engine::vec3 ringCenter =
+        (WebParity::kEnabled && waveAnchorValid_) ? waveAnchorPosition_
+                                                  : playerTransform->position;
+    Engine::vec3 spawnPos = ringCenter + offset;
 
     // Snap Y to the terrain heightfield when a sampler is wired.
     // Without this, dogs inherit the player's Y verbatim, which puts
