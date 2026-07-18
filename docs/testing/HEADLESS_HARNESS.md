@@ -77,6 +77,17 @@ the old `level>=2` + `playerMaxHealth>=120` expectations were pre-parity
 400-HP-cat calibration, retired 2026-07-18). NOTE: soak numbers are
 LOAD-SENSITIVE — a machine grinding builds/reviews halves the AI's kills
 (7 vs 17); soak only on a quiet machine), restart semantics,
+**restart-idempotency ×10** (`build-ninja/headless/restart10b`: 10 cycles of
+`killplayer` → GameOver → `key:r` → assert `playerHealth>=100` +
+`playerDeathPosed=false` at **+1.6 s** [the fresh spawn ring is 8-15 u out at
+dog speed 1.5, so post-restart health must be sampled <2 s before a legitimate
+dog hit lands — a +5 s check reads 85 intermittently and is a script race, not
+a restore failure], then `wave=1` + `enemiesRemaining=7` + `enemiesKilled=0`
+at +5 s; PROVEN 10/10 — restart restores hp/wave/kills/death-pose every cycle;
+~75 s runtime → on-demand/nightly probe, not a per-commit gate stage),
+**hotbar-cycling under combat** (6 rounds of `key:1..4` + `key:space` each,
+state-coherence expects between — no crash/state corruption from rapid weapon
+switching mid-swarm),
 wind-sway pixel-diff on two `screenshot:` frames 1.2 s apart.
 
 Clicks inject at BOTH layers the game reads: `Engine::Input`'s post-poll
@@ -120,6 +131,16 @@ samples).
 | 1 | init failure |
 | 3 | another instance already running (single-instance mutex) |
 | 4 | ran fine, but ≥1 `expect:` assertion FAILED |
+
+## Known harness gaps (future work)
+
+- **No drag verb.** `click:` is a discrete move+press+release, so ImGui
+  SLIDERS (pause-menu volume/sensitivity) cannot be driven headlessly yet — a
+  `drag:<x1>,<y1>,<x2>,<y2>,<seconds>` command (press at start, interpolate,
+  release at end) would unlock the pause→settings→resume persistence journey.
+  Settings oracles are trivial once driving works (getTurnSensitivityScale /
+  getMoveSpeedScale accessors already exist; add expect queries like
+  `reviveArmed`).
 
 ## Related
 

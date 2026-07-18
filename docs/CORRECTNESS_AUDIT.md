@@ -324,3 +324,20 @@ improvements for a future pass: (1) fsync/`FlushFileBuffers` before the atomic
 rename (power-loss durability); (2) check the final writer's stream state at
 close (exotic disk-full window). Both are environmental-trigger hardening, not
 in-play defects.
+
+## 2026-07-18 — Scripted interactive journeys (post-saturation frontier)
+
+- **Restart-idempotency ×10 — PROVEN.** Ten `killplayer`→GameOver→`key:r`
+  cycles: every restart restored hp=100/100, wave 1 / 7 enemies / 0 kills, no
+  death-pose leak (state.jsonl shows hp=100 at all 10 Playing transitions).
+  First run's 4 intermittent `playerHealth=85` readings were verified NOT a
+  bug — legitimate dog hits at a mistimed +5 s check (the fresh spawn ring
+  closes in ~5 s); probe corrected to sample health at +1.6 s. ~75 s runtime →
+  documented as an on-demand/nightly probe in HEADLESS_HARNESS.md.
+- **Hotbar-cycling under combat — PASS.** Six rounds of `key:1..4` +
+  attack each while the wave-1 swarm engages: no crash, state coherent
+  throughout.
+- **Pause-slider persistence journey — blocked on a missing harness `drag:`
+  verb** (ImGui sliders can't be driven by discrete clicks); recorded as
+  future harness work in HEADLESS_HARNESS.md (Round-9's static audit of the
+  settings-apply path was clean, so residual risk is low).
