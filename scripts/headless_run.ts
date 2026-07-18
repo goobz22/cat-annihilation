@@ -97,6 +97,12 @@ const result = spawnSync(exePath, engineArgs, {
     cwd: buildDir,               // engine resolves assets/ + shaders/ relative to cwd
     timeout: timeoutSeconds * 1000,
     stdio: "ignore",             // everything of value goes to run.log
+    // The game is a console-subsystem exe; without this Windows allocates a
+    // visible console for it and a cmd window flashes on the operator's
+    // desktop for every headless run (2026-07-18 operator directive: tests
+    // must NEVER pop windows — the game window is already hidden via
+    // --hidden, this hides the console too).
+    windowsHide: true,
 });
 const exitCode = result.status;
 const timedOut = result.error?.name === "Error" && String(result.error?.message ?? "").includes("ETIMEDOUT");

@@ -197,6 +197,19 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-audio-listener-tracking.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-windows-hide pins the no-console-windows fix (2026-07-18 operator
+// directive): every child-process spawn in scripts/ must pass windowsHide so
+// gate/headless runs never flash cmd windows on the operator's desktop.
+stages.push(
+  runStage('lint-windows-hide:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-windows-hide.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-windows-hide', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-windows-hide.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
