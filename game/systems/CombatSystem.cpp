@@ -893,10 +893,15 @@ void CombatSystem::updateProjectiles(float dt) {
                     return;
                 }
 
-                // Check if target is invincible (dodging). Under web parity
-                // this shared window is the SWORD gate only — arrows must fly
-                // through it (the web has no enemy-side projectile cooldown),
-                // so the early-out is native-flavor only (2026-07-18 audit).
+                // Check if target is invincible (DODGE-ROLL i-frames — this
+                // reads the DodgeComponent, a separate system from the
+                // HealthComponent sword-gate window that damageIgnoringIFrame
+                // below bypasses). No enemy is ever given a DodgeComponent, so
+                // for projectile targets (always dogs — player-owned arrows
+                // skip their owner) this never fired; it is kept native-flavor
+                // only for symmetry with the melee path, and gated off under
+                // parity where the web has no enemy-side projectile gating of
+                // any kind (2026-07-18 audit; mechanism corrected per review).
                 if (!WebParity::kEnabled && isInvincible(target)) {
                     return;
                 }

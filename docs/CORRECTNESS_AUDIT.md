@@ -239,3 +239,46 @@ true position. **1 CONFIRMED, fixed:**
   `headless_run.ts` for the game; recorded in the memory rule.
 
 Unit suite 7,724,785 assertions / 1243 cases; gate 20 stages (9 lints).
+
+## 2026-07-18 — Round 9 (5 remaining subsystems: loot-score, menu-settings-apply, terrain-generation, autoplay-ai, save-load-cycle) — ZERO findings
+
+Workflow `cat-audit-round9`. **All five finders returned zero candidates.**
+With Round 5 (0), Round 7 (2), Round 8 (1), and Round 9 (0), the discovery rate
+across the reachable survival surface has gone dry — the saturation signal per
+T9 is the audited UNIVERSE, and it now spans ~28 subsystems across 9 rounds:
+waves (spawn/pacing/transition/restart), model loading, combat
+(melee/projectile/i-frames/combo reachability), input+harness, HUD (bars, skill
+card, hotbar, banners), progression/leveling/caps, movement/camera, save
+read+write+cycle, enemy AI, animation/skinning, pause/menus + settings apply,
+audio (music/3D/mixer), day-night, projectile lifetime, physics
+(impulse/knockback), terrain collision+generation, rendering
+(shadows/clustered), CUDA particles, ECS core, NPC/dialog, quest, game-state
+flow, elemental magic (reachable), loot/score, autoplay AI. Remaining unaudited
+fringe: the Vulkan platform layer, window/input key mapping, and render-graph
+internals — crash-only surface exercised end-to-end by every gate run.
+
+### Shield-bash queued LOW — investigated, NOT a bug (closed)
+
+Ground truth settled by reading the web damage gate: the web's shield-bash
+damage branch (`LocalEnemySystem.tsx:160-176`, 35 dmg / 600 ms / 3.0 pushback /
+8 sword XP) is **dead-by-bug in the web** — the whole melee block is gated on
+`player.isAttacking`, which `performAttack()` sets ONLY for the sword, so the
+branch never executes even though the spacebar handler comments "sword or
+shield bash" and right-click is wired to bash. The web code demonstrates clear
+INTENT; native's shield agent implemented that intent with the web-cited
+`kShieldBash*` constants. Removing a working native feature to match
+accidentally-dead web code would be parity-to-a-bug — recorded as a
+**deliberate divergence** (native keeps the functional bash). The earlier
+Round-6/8 "CONFIRMED" of this item mis-read the dead branch as absence of
+intent.
+
+### cat-verify fpsMin flakiness — investigated with data (closed as environmental)
+
+Full fps timelines from the failing runs show 0-4 fps stalls of 1-2 s at
+START, MID-RUN, and END — not a startup-only artifact and not correlated with
+any engine change (the gate was green through Rounds 1-5 and still passes when
+the machine is quiet, fpsMin 19). The stalls correlate with this session's own
+concurrent load (10-agent Opus audit workflows + full ninja rebuilds + review
+agents saturating CPU/disk while the 30 s autoplay ran). Conclusion:
+environmental contention, not a regression; the nightly openclaw runs (idle
+machine) are the representative measurement. No gate change — thresholds stay.
