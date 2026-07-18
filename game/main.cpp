@@ -49,6 +49,7 @@
 #include "systems/WaveSystem.hpp"
 #include "systems/leveling_system.hpp"
 #include "components/HealthComponent.hpp"
+#include "components/MeshComponent.hpp"
 #include "imgui.h"
 
 #include <chrono>
@@ -638,6 +639,7 @@ void printHelp() {
 //                         makes the process exit 4 (queries: state, wave,
 //                         enemiesRemaining, enemiesKilled, playerHealth,
 //                         playerMaxHealth, playerAlive, level, reviveArmed,
+//                         playerDeathPosed,
 //                         playerX/Y/Z, cameraX/Y/Z)
 //   spendrevive           test-support: grant Nine Lives + mark its revive
 //                         spent, so a restart's re-arm (reviveArmed) is testable
@@ -649,7 +651,7 @@ void printHelp() {
 struct InputScript {
     struct Command {
         enum class Type { Wait, Click, Key, Hold, Screenshot, Log, Expect,
-                          SpendRevive, Quit }
+                          SpendRevive, GrantRevive, Quit }
             type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
@@ -721,6 +723,17 @@ static std::string inputScriptQueryValue(const std::string& query,
         const auto* leveling = game->getLevelingSystem();
         if (!leveling) return "<no-leveling>";
         return leveling->canRevive() ? "true" : "false";
+    }
+    if (query == "playerDeathPosed") {
+        // Death-pose oracle: the player's MeshComponent::deathPosed latch. A
+        // REVIVED player must NOT be death-posed — this lets a script prove the
+        // Nine-Lives revive doesn't leave the cat stuck in the layDown corpse
+        // clip (2026-07-18 audit). ECS lookup (the player entity is re-created
+        // on restart, so a cached pointer would dangle).
+        const auto* mesh = game->getECS().getComponent<CatGame::MeshComponent>(
+            game->getPlayerEntity());
+        if (!mesh) return "<no-mesh-component>";
+        return mesh->deathPosed ? "true" : "false";
     }
     if (query == "playerHealth" || query == "playerMaxHealth" ||
         query == "playerAlive") {
@@ -942,6 +955,13 @@ static InputScript parseInputScript(const std::string& text) {
             // injects the exact end-state the bug depends on. Inert outside a
             // driven run — like expect:/log:, it only fires from --input-script.
             command.type = InputScript::Command::Type::SpendRevive;
+        } else if (token == "grantrevive") {
+            // Test-support: grant the Level-15 Nine Lives ability ARMED (revive
+            // available, NOT spent), so a regression can drive an actual revive
+            // (take lethal damage -> useRevive fires) and assert the revived
+            // player is not left stuck in the layDown corpse pose (2026-07-18
+            // audit). Inert outside a driven run.
+            command.type = InputScript::Command::Type::GrantRevive;
         } else {
             Engine::Logger::warn("[input-script] unknown command '" + token + "' skipped");
             continue;
@@ -1061,6 +1081,25 @@ static void runInputScriptStep(InputScript& script, float dt,
             } else {
                 Engine::Logger::error(
                     "[input-script] spendrevive FAILED: no leveling system");
+            }
+            ++script.nextCommand;
+            break;
+        }
+        case Type::GrantRevive: {
+            // Grant Nine Lives ARMED (available, not spent) so a driven run can
+            // trigger an actual revive and check the revived player isn't stuck
+            // in the death pose.
+            if (context.game != nullptr &&
+                context.game->getLevelingSystem() != nullptr) {
+                auto& stats = context.game->getLevelingSystem()->getStatsRef();
+                stats.abilities.nineLives = true;
+                stats.abilities.nineLivesUsed = false;
+                Engine::Logger::info(
+                    "[input-script] grantrevive — Nine Lives granted + ARMED "
+                    "(reviveArmed should now be true)");
+            } else {
+                Engine::Logger::error(
+                    "[input-script] grantrevive FAILED: no leveling system");
             }
             ++script.nextCommand;
             break;
