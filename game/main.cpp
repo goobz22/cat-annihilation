@@ -50,6 +50,7 @@
 #include "systems/leveling_system.hpp"
 #include "components/HealthComponent.hpp"
 #include "components/MeshComponent.hpp"
+#include "components/EnemyComponent.hpp"
 #include "imgui.h"
 
 #include <chrono>
@@ -774,6 +775,42 @@ static std::string inputScriptQueryValue(const std::string& query,
         if (query == "playerX") return std::to_string(transform->position.x);
         if (query == "playerY") return std::to_string(transform->position.y);
         return std::to_string(transform->position.z);
+    }
+    if (query == "enemyCount" || query == "enemyCentroidX" ||
+        query == "enemyCentroidZ" || query == "maxEnemyDist" ||
+        query == "nearestEnemyDist") {
+        // Aggregate over the live enemy set (planar X/Z). Lets a script prove
+        // spawn-ring behavior: after the player flees during the staggered
+        // spawn window, the web-parity ring stays anchored at the wave-start
+        // point (enemy centroid near the anchor / a large maxEnemyDist from the
+        // fled player), instead of chasing the player (2026-07-18 audit).
+        const auto* playerT = game->getECS().getComponent<Engine::Transform>(
+            game->getPlayerEntity());
+        double sumX = 0.0, sumZ = 0.0, maxDist = 0.0;
+        double nearest = 1e30;
+        int count = 0;
+        auto enemies = game->getECS().template query<CatGame::EnemyComponent,
+                                                      Engine::Transform>();
+        for (auto [entity, enemy, transform] : enemies.view()) {
+            const auto* health = game->getECS().getComponent<CatGame::HealthComponent>(entity);
+            if (health && !health->isAlive()) continue;
+            ++count;
+            sumX += transform->position.x;
+            sumZ += transform->position.z;
+            if (playerT) {
+                const double dx = transform->position.x - playerT->position.x;
+                const double dz = transform->position.z - playerT->position.z;
+                const double dist = std::sqrt(dx * dx + dz * dz);
+                if (dist > maxDist) maxDist = dist;
+                if (dist < nearest) nearest = dist;
+            }
+        }
+        if (query == "enemyCount") return std::to_string(count);
+        if (count == 0) return "<no-enemies>";
+        if (query == "enemyCentroidX") return std::to_string(sumX / count);
+        if (query == "enemyCentroidZ") return std::to_string(sumZ / count);
+        if (query == "maxEnemyDist") return std::to_string(maxDist);
+        return std::to_string(nearest);  // nearestEnemyDist
     }
     return "<unknown-query:" + query + ">";
 }

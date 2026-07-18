@@ -461,9 +461,9 @@ Engine::vec3 WaveSystem::getSpawnPosition() const {
     // a fleeing cat, unlike the web's frozen ring (2026-07-18 audit). Fall back
     // to the live position if no anchor was captured (e.g. the non-parity path
     // or a wave that started with no player).
-    const Engine::vec3 ringCenter =
-        (WebParity::kEnabled && waveAnchorValid_) ? waveAnchorPosition_
-                                                  : playerTransform->position;
+    const Engine::vec3 ringCenter = spawnRingCenter(
+        WebParity::kEnabled, waveAnchorValid_, waveAnchorPosition_,
+        playerTransform->position);
     Engine::vec3 spawnPos = ringCenter + offset;
 
     // Snap Y to the terrain heightfield when a sampler is wired.

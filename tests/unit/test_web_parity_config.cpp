@@ -22,6 +22,9 @@
 // LevelingSystem is linked into unit_tests (leveling_system.cpp is in
 // UNIT_TEST_SOURCES) — used by the skill/level-cap parity regression below.
 #include "systems/leveling_system.hpp"
+// WaveSystem included ONLY for its inline, header-only static spawnRingCenter()
+// (pure math, no ECS state) — the spawn-ring anchor parity regression below.
+#include "systems/WaveSystem.hpp"
 // HealthComponent is a header-only, all-inline struct (no engine linkage
 // beyond the DamageType enum in status_effects.hpp, which is already on the
 // test build's include path). It lets the melee-i-frame parity regression
@@ -889,5 +892,33 @@ TEST_CASE("all progression tracks reach the web 99-max under parity (cat, weapon
             leveling.addElementalXP(ElementType::Fire, 50'000'000);
         }
         CHECK(leveling.getElementalLevel(ElementType::Fire) == 99);
+    }
+}
+
+TEST_CASE("spawn ring anchors at the wave-start position under parity, not the live player",
+          "[web-parity][wave][spawn]") {
+    // Round-6 audit (2026-07-18). The web freezes the encircling spawn ring at
+    // the wave-start playerPosition (LocalEnemySystem.tsx spawnWave captures it
+    // once, then only defers the reveal). Native spawns are staggered ~0.2s
+    // each, so re-reading the LIVE player position per spawn made the ring chase
+    // a fleeing player and perpetually re-surround them. WaveSystem now anchors
+    // the ring center via spawnRingCenter() at the wave-start snapshot.
+    const Engine::vec3 anchor(0.0f, 0.0f, 0.0f);    // where the wave started
+    const Engine::vec3 fled(100.0f, 0.0f, 100.0f);  // where the player is now
+
+    SECTION("parity + captured anchor -> the FROZEN anchor, not the live player") {
+        const Engine::vec3 c = WaveSystem::spawnRingCenter(true, true, anchor, fled);
+        CHECK(c.x == Approx(anchor.x));  // pre-fix returned fled.x (100)
+        CHECK(c.z == Approx(anchor.z));
+    }
+    SECTION("parity but no anchor captured -> fall back to the live player") {
+        const Engine::vec3 c = WaveSystem::spawnRingCenter(true, false, anchor, fled);
+        CHECK(c.x == Approx(fled.x));
+        CHECK(c.z == Approx(fled.z));
+    }
+    SECTION("parity off (native flavor) -> the live player, pre-parity behavior") {
+        const Engine::vec3 c = WaveSystem::spawnRingCenter(false, true, anchor, fled);
+        CHECK(c.x == Approx(fled.x));
+        CHECK(c.z == Approx(fled.z));
     }
 }
