@@ -44,15 +44,20 @@ Semicolon-separated, executed in order:
 | `log:<message>` | marker line in the engine log |
 | `expect:<query><op><value>` | assert live state; ops `=` `>=` `<=`; any FAIL → process exit 4 |
 | `spendrevive` | test-support: grant the Level-15 Nine Lives ability + mark its revive SPENT (so a restart's re-arm is testable without grinding to level 15) |
+| `grantrevive` | test-support: grant Nine Lives ARMED (revive available, not spent) — to drive an actual revive |
+| `killplayer` | test-support: force the player's HP to 0 (death fires next tick, deterministically — no waiting for dogs) |
 | `quit` | end the run cleanly |
 
 `expect:` queries: `state` (MainMenu/Playing/Paused/GameOver/Victory),
 `wave`, `enemiesRemaining`, `enemiesKilled`, `playerHealth`,
 `playerMaxHealth`, `playerAlive`, `level`, `reviveArmed` (Nine Lives
-`canRevive()` — true/false), `playerX`/`playerY`/`playerZ`
-(world position — movement/walk-speed oracles), `cameraX`/`cameraY`/`cameraZ`
-(camera rig geometry). Unknown queries return a sentinel that never matches —
-typos fail loudly.
+`canRevive()` — true/false), `playerDeathPosed` (the player's
+`MeshComponent::deathPosed` latch — a revived player must be false),
+`playerX`/`playerY`/`playerZ` (world position — movement/walk-speed oracles),
+`cameraX`/`cameraY`/`cameraZ` (camera rig geometry), and enemy aggregates
+`enemyCount`, `enemyCentroidX`/`enemyCentroidZ`, `maxEnemyDist`,
+`nearestEnemyDist` (planar, over live enemies — spawn-ring / positioning oracles).
+Unknown queries return a sentinel that never matches — typos fail loudly.
 
 Proven probe patterns (all in `build-ninja/headless/`): movement/turn parity
 (`hold:w,2` → `expect:playerZ<=-4`), camera rig (`expect:cameraY>=7.9`),
@@ -60,7 +65,10 @@ Proven probe patterns (all in `build-ninja/headless/`): movement/turn parity
 + `expect:cameraX>=-5` — catches a follow-cam that mirrors to the FRONT of
 travel; a straight walk at spawn heading cannot see it), **Nine Lives re-arm**
 (`spendrevive` → `expect:reviveArmed=false` → die → GameOver → `key:r` →
-`expect:reviveArmed=true`), progression e2e (250 s `--autoplay` soak →
+`expect:reviveArmed=true`), **revive-not-stuck** (`grantrevive` → `killplayer`
+→ `expect:playerAlive=true` + `expect:playerHealth>=25` +
+`expect:playerDeathPosed=false` — the revived cat must not be frozen in the
+`layDown` corpse pose), progression e2e (250 s `--autoplay` soak →
 `expect:level>=2` + `expect:playerMaxHealth>=120`), restart semantics,
 wind-sway pixel-diff on two `screenshot:` frames 1.2 s apart.
 
