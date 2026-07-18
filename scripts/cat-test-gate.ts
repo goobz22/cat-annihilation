@@ -162,6 +162,20 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-music-register-order.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-combat-projectile-parity pins the bow-arrow hit-radius fix (2026-07-18):
+// the projectile hit test must use WebParity::kProjectileHitRadius (1.5) under
+// parity, not the bare native projectileHitRadius_ (1.0), so arrows match the
+// web's hit window. CombatSystem is ECS-coupled / not unit-testable.
+stages.push(
+  runStage('lint-combat-projectile-parity:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-combat-projectile-parity.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-combat-projectile-parity', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-combat-projectile-parity.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
