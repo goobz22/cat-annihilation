@@ -59,6 +59,7 @@ function gitSha(): string | null {
     cwd: PROJECT_ROOT,
     encoding: 'utf8',
     timeout: 5000,
+    windowsHide: true,
   })
   if (proc.status !== 0) return null
   return (proc.stdout ?? '').trim() || null
@@ -71,6 +72,10 @@ function runStage(name: string, executable: string, args: string[], opts: { time
     encoding: 'utf8',
     timeout: opts.timeoutMs,
     shell: false,
+    // Never flash a console window on the operator's desktop: every child
+    // (ninja, bun, the game itself via headless_run) must run hidden
+    // (2026-07-18 operator directive; lint-windows-hide pins the class).
+    windowsHide: true,
   })
   const durationMs = Date.now() - started
   const expectedExit = opts.expectedExit ?? 0
@@ -92,6 +97,7 @@ function findExecutable(candidates: string[]): string | null {
     const proc = spawnSync(process.platform === 'win32' ? 'where' : 'which', [candidate], {
       encoding: 'utf8',
       timeout: 2000,
+      windowsHide: true,
     })
     if (proc.status === 0 && (proc.stdout ?? '').trim().length > 0) {
       return (proc.stdout ?? '').trim().split(/\r?\n/)[0] ?? candidate
