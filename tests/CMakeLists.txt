@@ -818,6 +818,13 @@ set(UNIT_TEST_SOURCES
     # (tree sway helpers, ambient/sun lighting targets, shadow + tree-collision
     # policy) added by the 2026-07-17 verify-fix sweep. Header-only + STL.
     unit/test_web_parity_environment.cpp
+    # test_leveling_system.cpp — the full LevelingSystem behavioral suite (XP,
+    # stat growth, ability unlocks, regen, nine-lives, weapon/elemental skills,
+    # combos). ACTIVATED 2026-07-18 (was silently dropped from this list — the
+    # Round-4 audit fixed 3 leveling caps while its whole suite never ran).
+    # Assertions updated to the web-parity contract where the pre-parity file
+    # had drifted (web XP curve, 30% revive).
+    unit/test_leveling_system.cpp
 )
 
 # Collect integration test sources.

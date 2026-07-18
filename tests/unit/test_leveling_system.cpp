@@ -22,10 +22,15 @@ TEST_CASE("Leveling System - Basic XP and Level Up", "[leveling]") {
     LevelingSystem leveling;
     leveling.initialize();
 
+    // Level 1 -> 2 costs 104 XP under the web-parity cat curve
+    // (WebParity::catXpForLevel, the LIVE gameStore curve — the pre-parity
+    // native curve's 100 is retired; also pinned in test_web_parity_config).
+    const int xpToLevel2 = leveling.getXPToNextLevel();
+
     SECTION("Initial state") {
         REQUIRE(leveling.getLevel() == 1);
         REQUIRE(leveling.getXP() == 0);
-        REQUIRE(leveling.getXPToNextLevel() == 100);
+        REQUIRE(xpToLevel2 == 104);
     }
 
     SECTION("Add XP without level up") {
@@ -33,11 +38,12 @@ TEST_CASE("Leveling System - Basic XP and Level Up", "[leveling]") {
         REQUIRE_FALSE(leveledUp);
         REQUIRE(leveling.getXP() == 50);
         REQUIRE(leveling.getLevel() == 1);
-        REQUIRE(leveling.getXPProgress() == Approx(0.5f));
+        REQUIRE(leveling.getXPProgress() ==
+                Approx(50.0f / static_cast<float>(xpToLevel2)));
     }
 
     SECTION("Add XP with level up") {
-        bool leveledUp = leveling.addXP(100);
+        bool leveledUp = leveling.addXP(xpToLevel2);
         REQUIRE(leveledUp);
         REQUIRE(leveling.getLevel() == 2);
         REQUIRE(leveling.getXP() >= 0); // XP carries over
@@ -72,7 +78,7 @@ TEST_CASE("Leveling System - Stat Growth", "[leveling]") {
         int initialHealth = leveling.getStats().maxHealth;
         int initialAttack = leveling.getStats().attack;
 
-        leveling.addXP(100); // Level up to 2
+        leveling.addXP(200); // > the web 104-XP level-2 threshold
 
         REQUIRE(leveling.getStats().maxHealth > initialHealth);
         REQUIRE(leveling.getStats().attack > initialAttack);
@@ -204,7 +210,10 @@ TEST_CASE("Leveling System - Nine Lives", "[leveling]") {
 
         leveling.useRevive(health, maxHealth);
 
-        REQUIRE(health == Approx(50.0f)); // Revives at 50% HP
+        // Web parity: Nine Lives revives at 30% max HP (gameStore.ts
+        // damagePlayer floor(maxHealth * 0.3); kNineLivesRevivePercent).
+        // The pre-parity native 50% is retired.
+        REQUIRE(health == Approx(30.0f));
         REQUIRE_FALSE(leveling.canRevive());
     }
 
