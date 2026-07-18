@@ -5,6 +5,20 @@
 
 namespace CatGame {
 
+// Progression ceilings. Under web parity the cat main level, the weapon skills,
+// and the per-element magic skills ALL level to WebParity::kMaxLevel (99), which
+// is what the web build does (gameStore.ts:735-760/:836-842/:805-812, MAX_LEVEL
+// 99) and what the native XP curves in xp_tables.hpp already serve. The native
+// (non-parity) flavor keeps its lower, deliberately-tuned pre-parity caps. These
+// three are ONE class — every skill-level cap in this file must go through a
+// named constant here, enforced by scripts/lint-skill-level-cap.ts, so a fourth
+// skill type can't silently reintroduce a bare-literal cap that diverges from
+// the web (the cat-level cap was NOT flagged by the audit finders — only the
+// class enumeration surfaced it).
+inline constexpr int kMaxCatLevel = WebParity::kEnabled ? WebParity::kMaxLevel : 50;
+inline constexpr int kMaxWeaponSkillLevel = WebParity::kEnabled ? WebParity::kMaxLevel : 20;
+inline constexpr int kMaxElementalSkillLevel = WebParity::kEnabled ? WebParity::kMaxLevel : 15;
+
 LevelingSystem::LevelingSystem() {
     // Initialize default stats
     stats_.level = 1;
@@ -71,13 +85,13 @@ void LevelingSystem::update(float deltaTime) {
 
 bool LevelingSystem::addXP(int amount) {
     if (amount <= 0) return false;
-    if (stats_.level >= 50) return false; // Max level
+    if (stats_.level >= kMaxCatLevel) return false; // Max level (99 under parity)
 
     stats_.xp += amount;
 
     // Check for level up (can level up multiple times if enough XP)
     bool leveledUp = false;
-    while (stats_.xp >= stats_.xpToNextLevel && stats_.level < 50) {
+    while (stats_.xp >= stats_.xpToNextLevel && stats_.level < kMaxCatLevel) {
         stats_.xp -= stats_.xpToNextLevel;
         levelUp();
         leveledUp = true;
@@ -87,7 +101,7 @@ bool LevelingSystem::addXP(int amount) {
 }
 
 void LevelingSystem::levelUp() {
-    if (stats_.level >= 50) return; // Max level
+    if (stats_.level >= kMaxCatLevel) return; // Max level (99 under parity)
 
     stats_.level++;
     recalculateStats();
@@ -275,13 +289,13 @@ bool LevelingSystem::addWeaponXP(const std::string& weaponType, int amount) {
 
     WeaponSkill* skill = weaponSkills_.getSkill(weaponType);
     if (!skill) return false;
-    if (skill->level >= 20) return false; // Max weapon level
+    if (skill->level >= kMaxWeaponSkillLevel) return false; // Max weapon level (99 under parity)
 
     skill->xp += amount;
 
     // Check for level up
     bool leveledUp = false;
-    while (skill->xp >= skill->xpToNextLevel && skill->level < 20) {
+    while (skill->xp >= skill->xpToNextLevel && skill->level < kMaxWeaponSkillLevel) {
         skill->xp -= skill->xpToNextLevel;
         levelUpWeaponSkill(*skill, weaponType);
         leveledUp = true;
@@ -304,7 +318,7 @@ bool LevelingSystem::addWeaponXPFromDamage(const std::string& weaponType, float 
 }
 
 void LevelingSystem::levelUpWeaponSkill(WeaponSkill& skill, const std::string& weaponType) {
-    if (skill.level >= 20) return; // Max level
+    if (skill.level >= kMaxWeaponSkillLevel) return; // Max level (99 under parity)
 
     skill.level++;
 
@@ -363,13 +377,13 @@ bool LevelingSystem::addElementalXP(ElementType element, int amount) {
     if (it == weaponSkills_.elementalMagic.end()) return false;
 
     WeaponSkill& skill = it->second;
-    if (skill.level >= 15) return false; // Max elemental level
+    if (skill.level >= kMaxElementalSkillLevel) return false; // Max elemental level (99 under parity)
 
     skill.xp += amount;
 
     // Check for level up
     bool leveledUp = false;
-    while (skill.xp >= skill.xpToNextLevel && skill.level < 15) {
+    while (skill.xp >= skill.xpToNextLevel && skill.level < kMaxElementalSkillLevel) {
         skill.xp -= skill.xpToNextLevel;
         levelUpElementalSkill(skill, element);
         leveledUp = true;
@@ -379,7 +393,7 @@ bool LevelingSystem::addElementalXP(ElementType element, int amount) {
 }
 
 void LevelingSystem::levelUpElementalSkill(WeaponSkill& skill, ElementType element) {
-    if (skill.level >= 15) return; // Max level
+    if (skill.level >= kMaxElementalSkillLevel) return; // Max level (99 under parity)
 
     skill.level++;
 
