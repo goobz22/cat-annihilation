@@ -196,6 +196,7 @@ Landed, each verified by build + gate (`bun scripts/cat-test-gate.ts`) and pinne
 - **Terrain stays 512×512** (web: 10000×10000 plane). With fog fully saturating by 150 units the edge sits deep inside pure fog color and reads as the same horizon; growing the extent would explode the Poisson forest generation.
 - **Native-only survival flavor behind `WebParity::kEnabled == false`**: 20-spell elemental magic depth, per-variant stats, boss waves, finite 5-wave Victory campaign, free mouse-orbit camera.
 - **Camera feel under parity**: yaw follows the cat's facing at 8 rad/s (~125 ms half-life) instead of the web's instantaneous snap (the snap reads as jarring at native frame rates), and a speed-scaled few-cm camera bob remains (sells locomotion on the glassy native framing). Position is hard-snapped exactly like web; geometry (10.5 back / 8.4 up) is exact.
+- **Shield bash WORKS on native (dead-by-bug in the web).** The web's bash damage branch (`LocalEnemySystem.tsx:160-176`: 35 dmg / 600 ms per-enemy cooldown / 3.0 pushback / 8 sword XP) can never execute — the whole melee block is gated on `player.isAttacking`, which `performAttack()` sets only for the SWORD — even though the spacebar handler comments "sword or shield bash" and right-click is wired to bash. Native implements the web's evident intent with the web-cited `kShieldBash*` constants (2026-07-18 Round-9 close-out; do not "fix" native to match accidentally-dead web code).
 
 ### Landed after the first pass (same campaign, later commits)
 
