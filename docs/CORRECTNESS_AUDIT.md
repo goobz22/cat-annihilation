@@ -296,3 +296,31 @@ calibrated for the pre-parity 400 HP cat and are updated in
 HEADLESS_HARNESS.md); (3) the 2.4× kill gap between the two runs quantifies
 the load-sensitivity (same class as the cat-verify fpsMin flake): soak only on
 a quiet machine.
+
+## 2026-07-18 — Round 10 (the final fringe: vulkan-platform, window-input-mapping, render-graph) — ZERO confirmed; T9 universe COMPLETE
+
+Workflow `cat-audit-round10`, edge-condition focus (resize/minimize/alt-tab,
+swapchain recreation, frame-in-flight sync, ring-buffer wrap, the bone-palette
+64-draw cap vs high-wave swarms). vulkan-platform and window-input-mapping
+returned zero candidates. render-graph's one candidate — the skinned-draw
+palette cap (64) exceeded at wave 20+ freezing characters to bind pose — was
+REFUTED with a solid mechanism: the guard counts only post-frustum-and-distance
+CULLED entities (visible skinned draws stay under the cap in practice), the
+overflow fallback is a benign bind-pose render (`useRealMesh`), and the palette
+buffer math has no OOB.
+
+**This closes the T9 coverage universe: ~31 subsystems audited across 10
+adversarially-verified rounds, with the discovery rate dry (R5: 0, R9: 0,
+R10: 0).** The audited surface spans every game system, the engine's
+asset/animation/audio/physics/particle/ECS/save layers, the renderer's
+math + platform layers, and the harness itself. Remaining risk is carried by
+the always-on runtime gates (20+ gate stages, 9 class-detection lints, the
+7.7M-assertion unit suite, nightly cat-verify) rather than by unaudited code.
+
+### For the human's ENGINE_BACKLOG consideration (agents do not groom it)
+
+Round 7's two refuted-as-hardening save-write findings are real robustness
+improvements for a future pass: (1) fsync/`FlushFileBuffers` before the atomic
+rename (power-loss durability); (2) check the final writer's stream state at
+close (exotic disk-full window). Both are environmental-trigger hardening, not
+in-play defects.
