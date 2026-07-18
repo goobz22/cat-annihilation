@@ -90,7 +90,19 @@ at +5 s; PROVEN 10/10 — restart restores hp/wave/kills/death-pose every cycle;
 ~75 s runtime → on-demand/nightly probe, not a per-commit gate stage),
 **hotbar-cycling under combat** (6 rounds of `key:1..4` + `key:space` each,
 state-coherence expects between — no crash/state corruption from rapid weapon
-switching mid-swarm),
+switching mid-swarm), **pause-slider journeys** (`drag:` the TURN SENSITIVITY /
+MOVEMENT SPEED handles [≈(0.4818, 0.3778) / (0.4818, 0.4704) at 1920×1080] →
+`expect:turnSensitivityScale>=1.3` / `moveSpeedScale>=1.3`, resume → re-pause
+persistence, PLUS the gameplay-effect oracle: at scale 2.0 a `hold:w,1.5`
+covers ~−18 z vs ~−9 baseline — the slider provably drives real movement, and
+a control drag on empty ground leaves scales untouched),
+**10-min endurance** (600 s `--autoplay`: 595 timeline samples, frames
+monotone, ZERO sub-5-fps hitches after startup on a quiet machine, zero
+anomalies [no NaN, no hp>max, no decreasing counters], `xp == kills*5` exact,
+~7.5 min of stable GameOver idle — calibrate endurance expects modestly:
+`wave>=2` + the xp oracle, NOT a fixed kill count; the autoplay AI's death
+wave is high-variance [wave 2/7 kills vs wave 3/17 kills across two quiet
+runs]),
 wind-sway pixel-diff on two `screenshot:` frames 1.2 s apart.
 
 Clicks inject at BOTH layers the game reads: `Engine::Input`'s post-poll

@@ -341,3 +341,17 @@ in-play defects.
   verb** (ImGui sliders can't be driven by discrete clicks); recorded as
   future harness work in HEADLESS_HARNESS.md (Round-9's static audit of the
   settings-apply path was clean, so residual risk is low).
+
+### Endurance + slider journeys — all green (frontier iteration 2)
+
+- **10-min endurance soak — CLEAN.** 595 timeline samples over 599.6 s: frames
+  monotone to 35,687, ZERO sub-5-fps hitches after startup on a quiet machine,
+  zero anomalies (no NaN position, no hp>max, no decreasing counters),
+  `xp == kills×5` EXACT, ~7.5 min of rock-stable GameOver idle. The autoplay
+  AI's death wave is high-variance (wave 2/7 kills vs wave 3/17 kills across
+  two quiet runs) — endurance expects calibrated to `wave>=2` + the xp oracle.
+- **MOVEMENT SPEED slider journey — PROVEN with a gameplay-effect oracle.**
+  Drag 1.0 → 2.0, persists across resume→re-pause, and the scaled walk covers
+  z=−18.05 in 1.5 s (≈ exactly 2× the baseline speed-6 walk) — the slider
+  provably drives real movement, not just its displayed value. Both pause
+  sliders are now runtime-verified end-to-end.
