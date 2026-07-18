@@ -158,6 +158,21 @@ void HealthSystem::handleDeath(CatEngine::Entity entity) {
         onEntityDeath_(entity, isEnemy);
     }
 
+    // A death handler may have REVIVED the entity (Nine Lives: the player-death
+    // callback calls healthSystem_->revive(), restoring isDead=false + 30% HP).
+    // If it is alive again it is NOT a corpse — skip the death-pose freeze, the
+    // despawn-window bump, and the velocity stop below. Without this, the pose
+    // block (guarded only by !deathPosed) plays the non-looping `layDown` clip
+    // on the revived, fully-controllable player and latches deathPosed=true with
+    // no transition back to locomotion, freezing the cat flat in the corpse pose
+    // for the rest of the run (2026-07-18 audit). Re-check AFTER the callback so
+    // every death handler has had its say.
+    if (auto* revivedHealth = ecs_->getComponent<HealthComponent>(entity)) {
+        if (revivedHealth->isAlive()) {
+            return;
+        }
+    }
+
     // ===== Death-pose freeze ============================================
     //
     // Switch the dying entity's animator into the rig's `layDown` non-
