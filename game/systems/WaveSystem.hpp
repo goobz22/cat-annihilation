@@ -56,6 +56,23 @@ public:
     void setPlayer(CatEngine::Entity player) { playerEntity_ = player; }
 
     /**
+     * Resolve the spawn-ring CENTER (web parity). Pure + static so it is
+     * unit-testable without the ECS/spawn pipeline WaveSystem couples to.
+     *
+     * Under parity, once a wave has captured its start anchor the ring center is
+     * that FROZEN anchor — the web builds the whole encircling ring off a single
+     * playerPosition snapshot and only defers the reveal, so a fleeing player is
+     * not perpetually re-surrounded by the staggered spawns (2026-07-18 audit).
+     * Falls back to the LIVE player position when parity is off or no anchor was
+     * captured (e.g. a wave that started with no player).
+     */
+    static Engine::vec3 spawnRingCenter(bool parityEnabled, bool anchorValid,
+                                        const Engine::vec3& anchor,
+                                        const Engine::vec3& livePlayer) {
+        return (parityEnabled && anchorValid) ? anchor : livePlayer;
+    }
+
+    /**
      * Get current wave number
      */
     int getCurrentWave() const { return currentWave_; }
