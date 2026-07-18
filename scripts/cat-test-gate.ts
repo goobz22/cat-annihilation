@@ -417,6 +417,15 @@ if (!quick && stages[stages.length - 1]!.ok) {
     'expect:playerDeathPosed=false',
     'quit',
   ].join(';')
+  // Spell-spam parity probe (2026-07-18): the web has no spell cooldown/mana —
+  // three rapid water-bolt presses must land 3/3 casts (pre-fix the native
+  // 1.0s cooldown throttled it to 1/3). Counts the cast-OK log lines.
+  stages.push(
+    runStage('spell-spam-parity', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'spell_spam_probe.ts'),
+    ], { timeoutMs: 2 * 60_000 }),
+  )
+
   stages.push(
     runStage('revive-not-stuck', 'bun', [
       resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),

@@ -174,16 +174,23 @@ bool ElementalMagicSystem::castSpell(Entity caster, const std::string& spellId,
         return false;
     }
 
-    // Consume mana
-    if (!consumeMana(caster, spell->manaCost)) {
-        return false;
+    // Mana, cooldown, and cast-XP are NATIVE-FLAVOR resource loops the web
+    // does not have: the web spawns the projectile unconditionally (no mana
+    // pool, no cooldown) and awards magic XP only on HIT (+10) and KILL (+15)
+    // — never on cast. Under parity the cast is free and instant, matching
+    // the reference exactly (2026-07-18 parity-delta resolution).
+    if constexpr (!WebParity::kEnabled) {
+        // Consume mana
+        if (!consumeMana(caster, spell->manaCost)) {
+            return false;
+        }
+
+        // Add cooldown
+        addCooldown(caster, spellId, spell->cooldown);
+
+        // Grant XP for casting
+        addElementalXP(caster, spell->element, 5);
     }
-
-    // Add cooldown
-    addCooldown(caster, spellId, spell->cooldown);
-
-    // Grant XP for casting
-    addElementalXP(caster, spell->element, 5);
 
     // Cast based on spell type
     if (spell->healAmount > 0) {
@@ -235,9 +242,16 @@ bool ElementalMagicSystem::canCastSpell(Entity caster, const std::string& spellI
     }
 
     // Cooldown gate — if the spell is still cooling down, refuse the cast
-    // regardless of mana or other resources.
-    if (getSpellCooldownRemaining(caster, spellId) > 0) {
-        return false;
+    // regardless of mana or other resources. NATIVE-FLAVOR ONLY: the web has
+    // no spell cooldown at all — casting is spammable, one projectile per
+    // input press (LocalProjectileSystem.tsx spawns unconditionally). The
+    // recorded "native spell cooldown (web spammable)" parity delta is
+    // resolved by gating the whole cooldown concept off under parity
+    // (2026-07-18; PARITY_MATRIX combat row).
+    if constexpr (!WebParity::kEnabled) {
+        if (getSpellCooldownRemaining(caster, spellId) > 0) {
+            return false;
+        }
     }
 
     // Mana gate — read the caster's ManaComponent (if any) and check

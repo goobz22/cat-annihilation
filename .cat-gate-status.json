@@ -1,5 +1,5 @@
 {
-  "ts": "2026-07-18T00:38:43.090Z",
+  "ts": "2026-07-18T23:35:15.776Z",
   "ok": true,
   "exitCode": 0,
   "stages": [
@@ -7,94 +7,150 @@
       "name": "lint-pause-parity-guards:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 76,
+      "durationMs": 125,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-pause-parity-guards",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 67,
+      "durationMs": 111,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-cooldown-reset-shape:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 66,
+      "durationMs": 104,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-cooldown-reset-shape",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 84,
+      "durationMs": 134,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-skill-level-cap:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 82,
+      "durationMs": 115,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-skill-level-cap",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 59,
+      "durationMs": 127,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-music-register-order:selftest",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 63,
+      "durationMs": 121,
       "summary": "passed (0.1s)"
     },
     {
       "name": "lint-music-register-order",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 61,
+      "durationMs": 112,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-combat-projectile-parity:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 113,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-combat-projectile-parity",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 112,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-audio-listener-tracking:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 137,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-audio-listener-tracking",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 130,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-windows-hide:selftest",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 116,
+      "summary": "passed (0.1s)"
+    },
+    {
+      "name": "lint-windows-hide",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 147,
       "summary": "passed (0.1s)"
     },
     {
       "name": "compile-check",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 31,
-      "summary": "passed (0.0s)"
+      "durationMs": 80,
+      "summary": "passed (0.1s)"
     },
     {
       "name": "ninja-build",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 40,
-      "summary": "passed (0.0s)"
+      "durationMs": 69,
+      "summary": "passed (0.1s)"
     },
     {
       "name": "cat-verify",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 59029,
-      "summary": "passed (59.0s)"
+      "durationMs": 32797,
+      "summary": "passed (32.8s)"
     },
     {
       "name": "menu-flow",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 38039,
-      "summary": "passed (38.0s)"
+      "durationMs": 38941,
+      "summary": "passed (38.9s)"
     },
     {
       "name": "nine-lives-rearm",
       "ok": true,
       "exitCode": 0,
-      "durationMs": 35587,
-      "summary": "passed (35.6s)"
+      "durationMs": 36722,
+      "summary": "passed (36.7s)"
+    },
+    {
+      "name": "spell-spam-parity",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 10790,
+      "summary": "passed (10.8s)"
+    },
+    {
+      "name": "revive-not-stuck",
+      "ok": true,
+      "exitCode": 0,
+      "durationMs": 10657,
+      "summary": "passed (10.7s)"
     }
   ],
-  "gitSha": "b5244e5",
+  "gitSha": "17f07bd",
   "invocation": "--json"
 }
