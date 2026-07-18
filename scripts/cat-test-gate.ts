@@ -147,6 +147,21 @@ stages.push(
     resolve(PROJECT_ROOT, 'scripts', 'lint-skill-level-cap.ts'),
   ], { timeoutMs: 60_000 }),
 )
+// lint-music-register-order pins the crossFadeMusic gain-poison fix (2026-07-17):
+// the mixer registration must precede the fade-in setGain(0), or the mixer
+// snapshots originalGain=0 and a later volume/mute change permanently silences
+// the gameplay music. Audio is OpenAL-backed / not unit-testable, so this
+// structural check is the regression.
+stages.push(
+  runStage('lint-music-register-order:selftest', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-music-register-order.ts'), '--selftest',
+  ], { timeoutMs: 60_000 }),
+)
+stages.push(
+  runStage('lint-music-register-order', 'bun', [
+    resolve(PROJECT_ROOT, 'scripts', 'lint-music-register-order.ts'),
+  ], { timeoutMs: 60_000 }),
+)
 
 // Stage 1 — compilation check via Makefile.check (no link, just -fsyntax-only).
 // This is the existing low-cost build gate — catches header drift, undefined
