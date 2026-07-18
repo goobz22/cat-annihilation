@@ -315,7 +315,11 @@ public:
         float damage,
         DamageType type,
         CatEngine::Entity attacker,
-        HitSource source = HitSource::StatusEffect
+        HitSource source = HitSource::StatusEffect,
+        // Web parity: spell direct impacts pass true (the web has no enemy-side
+        // spell cooldown); DOT ticks/status effects keep the default false and
+        // their own hand-rolled bypass.
+        bool ignoreTargetIFrame = false
     );
 
     /**
@@ -436,7 +440,11 @@ private:
         CatEngine::Entity target,
         float damage,
         const Engine::vec3& hitPosition,
-        DamageType damageType = DamageType::Physical
+        DamageType damageType = DamageType::Physical,
+        // Web parity: arrows/spells are TRANSPARENT to the enemy's shared
+        // invincibility window (native's sword gate) — neither blocked by it
+        // nor arming it. Sword callers keep the default false.
+        bool ignoreTargetIFrame = false
     );
 
     // Random number generation for crits

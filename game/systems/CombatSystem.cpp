@@ -422,7 +422,8 @@ void CombatSystem::applyDamageWithType(
     float damage,
     DamageType type,
     CatEngine::Entity attacker,
-    HitSource source
+    HitSource source,
+    bool ignoreTargetIFrame
 ) {
     auto* health = ecs_->getComponent<HealthComponent>(target);
     if (!health) {
@@ -440,8 +441,10 @@ void CombatSystem::applyDamageWithType(
     // an enemy now produces a Fire-coloured death burst, etc.).
     health->lastDamageType = type;
 
-    // Apply damage
-    bool damageApplied = health->damage(damage);
+    // Apply damage (see applyDamage: ignoreTargetIFrame = web-parity
+    // transparency to the enemy's sword-gate window for spell impacts).
+    bool damageApplied = ignoreTargetIFrame ? health->damageIgnoringIFrame(damage)
+                                            : health->damage(damage);
 
     if (damageApplied) {
         // Bump the target's hit-flinch visual pulse on the typed-damage
@@ -890,8 +893,11 @@ void CombatSystem::updateProjectiles(float dt) {
                     return;
                 }
 
-                // Check if target is invincible (dodging)
-                if (isInvincible(target)) {
+                // Check if target is invincible (dodging). Under web parity
+                // this shared window is the SWORD gate only — arrows must fly
+                // through it (the web has no enemy-side projectile cooldown),
+                // so the early-out is native-flavor only (2026-07-18 audit).
+                if (!WebParity::kEnabled && isInvincible(target)) {
                     return;
                 }
 
@@ -925,7 +931,8 @@ void CombatSystem::updateProjectiles(float dt) {
                     // white-yellow hit-burst on arrow strikes.
                     const bool projectileLanded =
                         applyDamage(projectile.owner, target, finalDamage,
-                                    projectile.position, DamageType::Physical);
+                                    projectile.position, DamageType::Physical,
+                                    /*ignoreTargetIFrame=*/WebParity::kEnabled);
 
                     // Same i-frame gate as the melee path: an arrow striking
                     // an already-i-framed target lands zero damage, so it must
@@ -1026,7 +1033,8 @@ bool CombatSystem::applyDamage(
     CatEngine::Entity target,
     float damage,
     const Engine::vec3& hitPosition,
-    DamageType damageType
+    DamageType damageType,
+    bool ignoreTargetIFrame
 ) {
     // Get target health component
     auto* health = ecs_->getComponent<HealthComponent>(target);
@@ -1047,8 +1055,12 @@ bool CombatSystem::applyDamage(
     // only consulted at death, and the entity can't die from a no-op tick.
     health->lastDamageType = damageType;
 
-    // Apply damage
-    bool damageApplied = health->damage(damage);
+    // Apply damage. ignoreTargetIFrame (web parity, bow/spell paths) makes the
+    // hit transparent to the target's shared invincibility window — native's
+    // sword gate — matching the web, where arrows/spells have no enemy-side
+    // cooldown and leave the sword gate untouched.
+    bool damageApplied = ignoreTargetIFrame ? health->damageIgnoringIFrame(damage)
+                                            : health->damage(damage);
 
     if (!damageApplied) {
         return false; // Target was invincible / i-framed — no XP, no combo

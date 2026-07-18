@@ -922,3 +922,55 @@ TEST_CASE("spawn ring anchors at the wave-start position under parity, not the l
         CHECK(c.z == Approx(fled.z));
     }
 }
+
+TEST_CASE("enemy sword gate does not throttle arrows/spells under parity",
+          "[web-parity][combat][iframe]") {
+    // Round-6/7 audit (2026-07-18), the bow+spell i-frame class. Native's
+    // shared HealthComponent invincibility window (0.5s, armed by any landed
+    // hit) is the equivalent of the web's per-enemy SWORD gate (500ms
+    // lastSwordHitTime). But the web applies NO enemy-side cooldown to arrows
+    // or spell impacts (GlobalCollisionSystem.tsx calls enemy.onDamage()
+    // unconditionally): rapid-firing the bow at one dog lands EVERY arrow, and
+    // a spell right after a sword hit lands too — none of them touch the sword
+    // gate. Pre-fix, native routed every source through damage(), so the
+    // second arrow within 0.5s (or a spell after a sword hit) was silently
+    // absorbed (30 dmg native vs 60 web for two quick arrows).
+    //
+    // This drives the REAL HealthComponent semantics the CombatSystem paths
+    // now call: damage() for the sword (keeps the gate), damageIgnoringIFrame()
+    // for arrows/spells under parity (transparent to the gate).
+    auto freshDog = []() {
+        HealthComponent dog;
+        dog.maxHealth = 100.0f;
+        dog.currentHealth = 100.0f;
+        dog.invincibilityDuration = 0.5f;  // DogEntity default
+        return dog;
+    };
+
+    SECTION("two quick arrows both land (pre-fix the second was absorbed)") {
+        HealthComponent dog = freshDog();
+        CHECK(dog.damageIgnoringIFrame(30.0f));
+        CHECK(dog.damageIgnoringIFrame(30.0f));  // within any window — still lands
+        CHECK(dog.currentHealth == 40.0f);        // 100 - 60, web semantics
+        // Arrows never arm the sword gate.
+        CHECK(dog.invincibilityTimer == 0.0f);
+    }
+
+    SECTION("an arrow inside the sword window lands AND preserves the window") {
+        HealthComponent dog = freshDog();
+        REQUIRE(dog.damage(25.0f));                       // sword: lands, arms 0.5s
+        REQUIRE(dog.invincibilityTimer == Approx(0.5f));
+        CHECK_FALSE(dog.damage(25.0f));                   // sword re-hit: gated (web 500ms)
+        CHECK(dog.damageIgnoringIFrame(30.0f));           // arrow: flies through
+        CHECK(dog.currentHealth == 45.0f);                // 100 - 25 - 30
+        // The sword's remaining window is untouched by the arrow.
+        CHECK(dog.invincibilityTimer == Approx(0.5f));
+    }
+
+    SECTION("the sword gate itself still works (parity keeps the web 500ms sword throttle)") {
+        HealthComponent dog = freshDog();
+        REQUIRE(dog.damage(25.0f));
+        CHECK_FALSE(dog.damage(25.0f));
+        CHECK(dog.currentHealth == 75.0f);
+    }
+}

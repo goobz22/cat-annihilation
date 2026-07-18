@@ -65,13 +65,49 @@ if (checkProjectileHit(projectile.position, transform->position, projectileHitRa
   return ok ? 0 : 2;
 }
 
+// --- Enemy i-frame transparency (2026-07-18, the bow+spell class) -----------
+// The shared HealthComponent invincibility window is native's SWORD gate; the
+// web applies NO enemy-side cooldown to arrows or spell impacts. These pins
+// require: (a) the projectile early-out is parity-gated (arrows fly through
+// the window under kEnabled); (b) the bow applyDamage call passes the bypass;
+// (c) applySpellDamage passes the bypass to applyDamageWithType. The bypass
+// SEMANTICS (transparent, window-preserving) are unit-pinned on the real
+// HealthComponent in test_web_parity_config.cpp — these structural pins cover
+// the un-linkable call sites.
+const IFRAME_EARLYOUT_GATED = /!WebParity::kEnabled\s*&&\s*isInvincible\s*\(\s*target\s*\)/;
+const BOW_BYPASS = /applyDamage\s*\([^;]*ignoreTargetIFrame[^;]*WebParity::kEnabled\s*\)/s;
+const SPELL_BYPASS = /applyDamageWithType\s*\([^;]*ignoreTargetIFrame[^;]*WebParity::kEnabled\s*\)/s;
+
+function checkIFrameParity(combatSrc: string, spellSrc: string): string[] {
+  const problems: string[] = [];
+  if (!IFRAME_EARLYOUT_GATED.test(combatSrc)) {
+    problems.push(
+      "CombatSystem.cpp: the projectile isInvincible(target) early-out is not parity-gated ('!WebParity::kEnabled && isInvincible(target)') — under parity arrows must fly through the enemy's sword-gate window.",
+    );
+  }
+  if (!BOW_BYPASS.test(combatSrc)) {
+    problems.push(
+      "CombatSystem.cpp: the bow projectile applyDamage call does not pass ignoreTargetIFrame=WebParity::kEnabled — a second arrow within 0.5s is silently absorbed by the enemy's sword-gate window.",
+    );
+  }
+  if (!SPELL_BYPASS.test(spellSrc)) {
+    problems.push(
+      "elemental_magic.cpp: applySpellDamage's applyDamageWithType call does not pass ignoreTargetIFrame=WebParity::kEnabled — a spell right after a sword hit is silently absorbed.",
+    );
+  }
+  return problems;
+}
+
 function main(): number {
   if (process.argv.includes("--selftest")) return selftest();
   let source: string;
+  let spellSource: string;
   try {
     source = readFileSync(target, "utf8");
+    spellSource = readFileSync(
+      resolve(repoRoot, "game", "systems", "elemental_magic.cpp"), "utf8");
   } catch (error) {
-    console.error(`lint-combat-projectile-parity: cannot read ${target}: ${error}`);
+    console.error(`lint-combat-projectile-parity: cannot read sources: ${error}`);
     return 2;
   }
   const { violations, hasParity } = lintSource(source);
@@ -86,13 +122,15 @@ function main(): number {
       `${join("game", "systems", "CombatSystem.cpp")}:${v.line}: checkProjectileHit passes the bare native projectileHitRadius_ ('${v.text}') — use the parity-branched radius (WebParity::kProjectileHitRadius under kEnabled) so arrows match the web's 1.5 hit window.`,
     );
   }
-  if (violations.length === 0) {
+  const iframeProblems = checkIFrameParity(source, spellSource);
+  for (const p of iframeProblems) console.error(p);
+  if (violations.length === 0 && iframeProblems.length === 0) {
     console.log(
-      "lint-combat-projectile-parity: OK — the projectile hit test uses the parity radius (no bare projectileHitRadius_ call)",
+      "lint-combat-projectile-parity: OK — parity radius in use AND arrows/spells are transparent to the enemy sword-gate window",
     );
     return 0;
   }
-  console.error(`lint-combat-projectile-parity: ${violations.length} violation(s)`);
+  console.error(`lint-combat-projectile-parity: ${violations.length + iframeProblems.length} violation(s)`);
   return 1;
 }
 

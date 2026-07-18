@@ -718,8 +718,12 @@ void ElementalMagicSystem::applySpellDamage(const ActiveSpell& spell,
         // spell's direct impact, which the web awards +10 magic XP for
         // (GlobalCollisionSystem.tsx:135) — DOT ticks stay StatusEffect
         // and award nothing, matching the web.
+        // ignoreTargetIFrame under parity: the web has no enemy-side spell
+        // cooldown — a spell right after a sword hit lands and leaves the
+        // sword gate untouched (2026-07-18 audit; same class as the bow).
         combatSystem_->applyDamageWithType(target, finalDamage, type, spell.caster,
-                                           HitSource::Spell);
+                                           HitSource::Spell,
+                                           /*ignoreTargetIFrame=*/WebParity::kEnabled);
     } else if (ecs_ != nullptr) {
         if (auto* health = ecs_->getComponent<HealthComponent>(target)) {
             health->damage(finalDamage);
