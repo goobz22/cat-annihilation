@@ -1156,8 +1156,23 @@ void CatAnnihilation::update(float dt) {
     // Always update UI
     updateUI(dt);
 
-    // Always update audio
+    // Always update audio. Track the OpenAL listener to the player FIRST so
+    // this frame's positional SFX attenuate/pan from the player's actual
+    // point of view — the engine's one-time origin init otherwise left the
+    // listener at (0,0,0) forever and combat sounds faded with distance from
+    // SPAWN, not from the cat (2026-07-18 audit). Orientation follows the
+    // camera forward (stereo panning matches what the player sees).
     if (gameAudio_ != nullptr) {
+        if (ecs_.isAlive(playerEntity_) && playerControlSystem_ != nullptr) {
+            if (const auto* playerTransform =
+                    ecs_.getComponent<Engine::Transform>(playerEntity_)) {
+                const Engine::vec3 camForward = playerControlSystem_->getCameraForward();
+                gameAudio_->setListenerPose(
+                    {playerTransform->position.x, playerTransform->position.y,
+                     playerTransform->position.z},
+                    {camForward.x, camForward.y, camForward.z});
+            }
+        }
         gameAudio_->update(dt);
     }
 }
