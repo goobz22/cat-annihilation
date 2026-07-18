@@ -152,28 +152,39 @@ void GameAudio::crossFadeMusic(const std::string& trackName, float duration) {
     newMusic->setRelativeToListener(true); // 2D sound
     newMusic->setPosition({0, 0, 0});
 
+    // Register with the mixer BEFORE any fade-in gain override, while the source
+    // is at its FULL baseline gain (1.0). AudioMixer::registerSource snapshots
+    // info.originalGain = source->getGain() and thereafter recomputes the live
+    // gain as originalGain * effectiveVolume on every volume/mute change. The
+    // cross-fade path used to setGain(0.0f) BEFORE registering, so the mixer
+    // captured 0 as this track's baseline — and the first time the player
+    // touched the Music/Master slider or mute, updateSourceVolume set the gain
+    // to 0*effectiveVolume = 0 and the looping gameplay music went permanently
+    // silent (2026-07-17 audit; only cross-faded/transitioned tracks were hit).
+    // Registering at 1.0 first, then applying the fade-in gain, captures the
+    // correct baseline. Pinned by scripts/lint-music-register-order.ts.
+    newMusic->setGain(1.0f);
+    auto& mixer = m_audioEngine.getMixer();
+    mixer.registerSource(newMusic, CatEngine::AudioMixer::Channel::Music);
+
     // Start cross-fade
     if (m_currentMusic && m_currentMusic->isPlaying()) {
         m_fadeInMusic = newMusic;
-        m_fadeInMusic->setGain(0.0f);
+        m_fadeInMusic->setGain(0.0f); // fade-in starts silent; updateMusicFade ramps it in
         m_fadeInMusic->play();
 
         m_musicFadeTimer = 0.0f;
         m_musicFadeDuration = duration;
         m_isFading = true;
     } else {
-        // No current music, just start new one
+        // No current music, just start new one. The mixer already applied the
+        // baseline * effectiveVolume gain via registerSource above.
         m_currentMusic = newMusic;
-        m_currentMusic->setGain(1.0f);
         m_currentMusic->play();
         m_isFading = false;
     }
 
     m_currentMusicTrack = trackName;
-
-    // Register with mixer
-    auto& mixer = m_audioEngine.getMixer();
-    mixer.registerSource(newMusic, CatEngine::AudioMixer::Channel::Music);
 }
 
 void GameAudio::updateMusicFade(float deltaTime) {
