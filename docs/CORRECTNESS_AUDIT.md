@@ -112,3 +112,33 @@ All fixes: gate green (now **13 stages**: 6 lints + compile + build + cat-verify
 ### Coverage gap queued (R14)
 
 `tests/unit/test_leveling_system.cpp` is a full LevelingSystem suite (XP, stats, ability unlocks, regen, nine-lives, weapon/elemental skills) that is **NOT in `UNIT_TEST_SOURCES`** — it never compiles or runs. Activating it (and fixing any drifted assertions) would add real coverage over exactly the areas Round 4 touched. Tracked as a follow-up.
+
+## 2026-07-18 — Round 5 (5 more subsystems: rendering/skinning, terrain-collision, HUD, npc-dialog, quest-system)
+
+Workflow `cat-audit-round5`. **0 REACHABLE bugs.** Four subsystems came back
+CLEAN with zero candidates — rendering/skinning (bone-palette consumption),
+terrain-collision (heightfield sampling + river/bridge), HUD (data binding /
+bar-fill / hotbar bounds), and npc-dialog. A strong coverage signal that the
+reachable surface is well-hardened after Rounds 1-4. quest-system surfaced 2
+candidates, **both adversarially REFUTED as unreachable dormant code** and
+independently re-verified here (T2).
+
+### Latent-UB landmine documented (real, but unreachable — NOT a shipping bug)
+
+`game/systems/quest_system.cpp` has a genuine **iterator-invalidation class** (2
+instances) that is structurally real UB but **cannot execute in the current
+game**: `update()` (line 46) and `updateQuestTimers()` (line 491) range-iterate
+`activeQuestIds_` and call `completeQuest`/`failQuest`, which `erase`-remove from
+that same vector mid-loop (lines 264, 297) — plus a self-alias (the `failQuest`
+arg is a reference into the vector being erased). It never runs because
+`activeQuestIds_` is **never non-empty in gameplay**: the only writers are
+`activateQuest` (called only from tests — verified: the sole non-test reference
+is in `QUEST_SYSTEM_INTEGRATION.md`, a doc) and `loadQuestState` (fed by
+`getActiveQuestIds()` at save time, which is always empty since nothing ever
+activates a quest). The web survival build has no quests, so this is also
+off-mission. **Fix when the quest/story system is wired to gameplay:** iterate a
+snapshot copy of `activeQuestIds_` in both loops (fixes both the invalidation and
+the self-alias), and un-skip `tests/unit/test_quest_system.cpp` (currently
+dropped from `UNIT_TEST_SOURCES` for `Clan::` enum drift) to pin it. Not fixed
+now because a T4 fail-first regression needs the full quest-data + Clan
+scaffolding, disproportionate for unreachable off-mission code.
