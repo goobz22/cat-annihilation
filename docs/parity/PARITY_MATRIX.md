@@ -149,12 +149,22 @@ both sides) · ambient audio (dead code BOTH sides).
   spawns 2 ahead with 1.5 radius. Fixed; first confirmed interactive kill.
 
 **Recorded DELIBERATE DIVERGENCES (see section below):** Victory screen (unreachable
-under parity) · shield right-click block model · spell 1 s cooldown (web spammable)
+under parity) · shield right-click block model
 · native music/SFX richness · mobile/touch (no native mobile) · dodge roll
 (native-only) · low-health vignette (kept: better feedback).
+(The former "spell 1 s cooldown" divergence was CLOSED 2026-07-19: cooldown/mana/cast-XP
+now gated behind `!WebParity::kEnabled` — spells spammable exactly like web, pinned by the
+`spell-spam-parity` gate stage.)
 
-**Remaining OPEN (parity):** none blocking. Native Lambert vs three.js PBR
-falloff remains a DEFERRED cosmetic (accepted; constants match numerically).
+**Remaining OPEN (parity): NONE — matrix converged 2026-07-19.** All 32 legacy ❌ rows
+reconciled with evidence (24 already-built stale rows, 4 web-dead/N-A). The 4 genuinely
+open ones all landed or were scoped this session: SpellBook M-key tome ✅ (native 3×3
+modal, web colors, `spellbook-flow` gate stage), Reset Progress ✅ (`reset-progress-flow`
+gate stage), enemy attack-tell 1.3× pulse ✅, enemy health-darkening ✅. Scoped out with
+reasoning (operator may overrule): Inventory popup (web bag = 4 inert never-added items;
+see its 🟡 row) · menu cat-preview (web previews the rejected primitive box cat). Native
+Lambert vs three.js PBR falloff remains a DEFERRED cosmetic (accepted; constants match
+numerically).
 
 - ✅ **Real-time shadows SHIPPED (2026-07-17)** — depth-only shadow pass in
   ScenePass (2048² D32, 80-unit player-following ortho box, texel-snapped),
