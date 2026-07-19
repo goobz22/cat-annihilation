@@ -537,6 +537,17 @@ private:
     // Draw the GameOver / Victory overlay via ImGui (composited by UIPass).
     void renderEndScreenOverlay(uint32_t screenWidth, uint32_t screenHeight);
 
+    // Draw the SpellBook tome overlay (web SpellBook.tsx: M toggles a modal
+    // that binds an element to the SPELL hotbar slot; gameplay soft-pauses
+    // while it is open, mirroring the web's setMenuPaused).
+    void renderSpellbookOverlay(uint32_t screenWidth, uint32_t screenHeight);
+
+    // SpellBook state: open flag (M toggles during Playing; gameplay updates
+    // are skipped while open) + the keyboard-selected tome index (web arrow
+    // navigation: Up/Down ±1, Left/Right ±2, Enter selects).
+    bool spellbookOpen_ = false;
+    int spellbookSelectedIndex_ = 0;
+
     // ========================================================================
     // Core Systems
     // ========================================================================

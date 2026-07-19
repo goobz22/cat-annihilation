@@ -537,7 +537,16 @@ void PlayerControlSystem::processAttackInput() {
 }
 
 const char* PlayerControlSystem::getActiveHotbarItemName() const {
-    return hotbarItemName(hotbarItemForSlot(activeHotbarSlot_));
+    // The SPELL slot's name follows the SpellBook binding ("Water Spell" by
+    // default, re-bindable to Air/Earth/Fire — web SpellBook.tsx puts the
+    // selected tome entry into hotbar slot 0). Other slots keep their fixed
+    // labels. activeSpellLabel_ has static-like lifetime on this system, so
+    // returning .c_str() matches the literal-return contract of the getter.
+    const HotbarItem item = hotbarItemForSlot(activeHotbarSlot_);
+    if (item == HotbarItem::Spell) {
+        return activeSpellLabel_.c_str();
+    }
+    return hotbarItemName(item);
 }
 
 void PlayerControlSystem::processHotbarSelection() {
@@ -718,12 +727,12 @@ void PlayerControlSystem::performSpellCast() {
     // owned by the magic system). We aim at a point well along the cat's
     // facing so the bolt's launch direction matches where the cat looks.
     //
-    // Web spells are spammable with no mana/cooldown. canCastSpell() inside
-    // castSpell() applies water_bolt's own ~1-1.5 s cooldown, so mashing the
-    // attack key can have a recast refused; per the task that is acceptable
-    // and noted rather than gutting the magic system's cooldown model.
+    // Web spells are spammable with no mana/cooldown (the native resource
+    // loops are parity-gated off inside castSpell since 2026-07-18). The
+    // spell CAST here is whichever element the SpellBook bound to the slot
+    // (activeSpellId_, default water_bolt — web SpellBook.tsx selection into
+    // hotbar slot 0).
     constexpr float kSpellAimDistance = 20.0f;  // native aim reach for the cast
-    constexpr const char* kWaterSpellId = "water_bolt";
     const float yaw =
         2.0f * std::atan2(transform->rotation.y, transform->rotation.w);
     const Engine::vec3 facing(std::sin(yaw), 0.0f, -std::cos(yaw));
@@ -731,12 +740,12 @@ void PlayerControlSystem::performSpellCast() {
         transform->position + facing * kSpellAimDistance;
 
     const bool castAccepted =
-        magicSystem_->castSpell(playerEntity_, std::string(kWaterSpellId), aimPoint);
+        magicSystem_->castSpell(playerEntity_, activeSpellId_, aimPoint);
     // Cast telemetry at INFO level: headless probes diagnose combat through
     // the run log, and a silently-refused cast (cooldown/mana/level gate)
     // is indistinguishable from a broken input path without this line.
     // castSpell's own success log is DEBUG and never reaches probe logs.
-    Engine::Logger::info(std::string("[attack] water_bolt cast ") +
+    Engine::Logger::info(std::string("[attack] ") + activeSpellId_ + " cast " +
                          (castAccepted ? "OK" : "refused (cooldown/mana/level)"));
 }
 

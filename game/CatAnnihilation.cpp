@@ -1168,7 +1168,13 @@ void CatAnnihilation::update(float dt) {
             // tome is open (SpellBook.tsx:76-79 pauses the game loop for the
             // modal) — the world keeps rendering, updates stop, exactly like
             // the hard pause but without the pause overlay/state change.
-            if (!spellbookOpen_) {
+            // handleInput MUST still run while frozen (it only executes via
+            // updatePlaying's updateSystems chain — the same dead-resume trap
+            // updatePaused documents), or the tome's arrow/Enter/Escape/M
+            // navigation goes dead the moment the book opens.
+            if (spellbookOpen_) {
+                handleInput();
+            } else {
                 updatePlaying(dt);
             }
             break;

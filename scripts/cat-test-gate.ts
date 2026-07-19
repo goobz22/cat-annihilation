@@ -438,6 +438,31 @@ if (!quick && stages[stages.length - 1]!.ok) {
     ], { timeoutMs: 2 * 60_000 }),
   )
 
+  // SpellBook flow regression (2026-07-19): M opens the tome (gameplay
+  // soft-pauses), arrows navigate (web steps: Down +1), Enter binds the
+  // selection to the SPELL hotbar slot, and the bound spell is what the slot
+  // CASTS. Down x3 = Fire; post-select activeSpellId must be fireball and a
+  // cast must log 'fireball cast OK' (asserted via the id oracle here; the
+  // cast-log grep lives in the probe history).
+  const spellbookScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:2', 'expect:state=Playing',
+    'expect:activeSpellId=water_bolt',
+    'key:m', 'wait:0.5',
+    'key:down', 'wait:0.2', 'key:down', 'wait:0.2', 'key:down', 'wait:0.2',
+    'key:enter', 'wait:0.5',
+    'expect:activeSpellId=fireball', 'expect:state=Playing',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('spellbook-flow', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', spellbookScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-spellbook'),
+      '--timeout', '60',
+    ], { timeoutMs: 2 * 60_000 }),
+  )
+
   // Reset-progress flow regression (2026-07-19): the two-click Reset control
   // on the mode-select footer must actually clear progress (web
   // clearAllProgress parity). Oracle: Nine Lives granted in-game PERSISTS

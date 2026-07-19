@@ -6,6 +6,7 @@
 #include "../../engine/math/Vector.hpp"
 #include "../../engine/math/Transform.hpp"
 #include "../config/WebParityConfig.hpp"  // WebParity::kHotbarInitialSlot default
+#include <string>  // activeSpellId_/activeSpellLabel_ (SpellBook binding)
 
 namespace CatGame {
 
@@ -303,6 +304,21 @@ public:
      */
     const char* getActiveHotbarItemName() const;
 
+    /**
+     * Bind the SPELL hotbar slot to a different element (web SpellBook.tsx:
+     * selecting a tome entry puts that spell into hotbar slot 0). The id is
+     * an ElementalMagicSystem spell id ("water_bolt"/"wind_gust"/"rock_throw"/
+     * "fireball" — the four level-1 castable bolts, one per element); the
+     * label is the web display name ("Water Spell" etc., gameStore
+     * availableSpells) that the hotbar name + HUD skill card show.
+     */
+    void setActiveSpell(const std::string& spellId, const std::string& label) {
+        activeSpellId_ = spellId;
+        activeSpellLabel_ = label;
+    }
+    [[nodiscard]] const std::string& getActiveSpellId() const { return activeSpellId_; }
+    [[nodiscard]] const std::string& getActiveSpellLabel() const { return activeSpellLabel_; }
+
 private:
     // Input processing
     void processMovementInput(float dt);
@@ -401,6 +417,12 @@ private:
     // or writes this — autoplay keeps its own melee+spell policy and never
     // touches the hotbar.
     int activeHotbarSlot_ = WebParity::kHotbarInitialSlot;
+
+    // The spell bound to the SPELL hotbar slot (web: SpellBook selection into
+    // slot 0; default matches the seeded inventory's water-spell,
+    // gameStore.ts:289). id = ElementalMagicSystem spell, label = display name.
+    std::string activeSpellId_ = "water_bolt";
+    std::string activeSpellLabel_ = "Water Spell";
 
     // Autoplay spell cadence: a level-1 single-target ranged spell is cast
     // at most every kAutoplayCastInterval seconds, guaranteeing a steady

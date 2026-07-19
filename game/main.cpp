@@ -749,6 +749,14 @@ static std::string inputScriptQueryValue(const std::string& query,
         if (!leveling) return "<no-leveling>";
         return leveling->canRevive() ? "true" : "false";
     }
+    if (query == "activeSpellId") {
+        // SpellBook oracle: the spell bound to the SPELL hotbar slot
+        // ("water_bolt" by default; re-bound via the M-key tome). Lets a
+        // script prove the selection actually changes what the slot casts.
+        const auto* playerControl = game->getPlayerControlSystem();
+        if (!playerControl) return "<no-player-control>";
+        return playerControl->getActiveSpellId();
+    }
     if (query == "turnSensitivityScale" || query == "moveSpeedScale") {
         // Pause-menu slider oracles: the live scales the sliders configure on
         // PlayerControlSystem. With the drag: verb these make the
@@ -924,6 +932,10 @@ static Engine::Input::Key inputScriptKeyFromName(const std::string& name) {
     if (name == "enter") return Engine::Input::Key::Enter;
     if (name == "space") return Engine::Input::Key::Space;
     if (name == "escape") return Engine::Input::Key::Escape;
+    if (name == "up") return Engine::Input::Key::Up;
+    if (name == "down") return Engine::Input::Key::Down;
+    if (name == "left") return Engine::Input::Key::Left;
+    if (name == "right") return Engine::Input::Key::Right;
     // Any single letter maps generically (Key values are GLFW keycodes,
     // which are contiguous for A..Z) — enumerating letters one-by-one is
     // how `key:p` silently became Enter and a pause-resume probe failed
