@@ -47,6 +47,7 @@ Semicolon-separated, executed in order:
 | `spendrevive` | test-support: grant the Level-15 Nine Lives ability + mark its revive SPENT (so a restart's re-arm is testable without grinding to level 15) |
 | `grantrevive` | test-support: grant Nine Lives ARMED (revive available, not spent) — to drive an actual revive |
 | `killplayer` | test-support: force the player's HP to 0 (death fires next tick, deterministically — no waiting for dogs) |
+| `killenemies` | test-support: zero every live enemy's HP — the wave completes deterministically (drives the Completed → Transition → next-wave flow without aiming) |
 | `quit` | end the run cleanly |
 
 `expect:` queries: `state` (MainMenu/Playing/Paused/GameOver/Victory),
@@ -55,7 +56,10 @@ Semicolon-separated, executed in order:
 `canRevive()` — true/false), `playerDeathPosed` (the player's
 `MeshComponent::deathPosed` latch — a revived player must be false),
 `turnSensitivityScale`/`moveSpeedScale` (the live pause-slider scales on
-PlayerControlSystem — settings-persistence oracles),
+PlayerControlSystem — settings-persistence oracles), `waveState`
+(Spawning/InProgress/Completed/Transition — the WaveSystem machine, e.g.
+`killenemies` → `Completed` → 2 s clear gate → `Transition` [the WavePopup
+card window] → `Spawning` wave 2),
 `playerX`/`playerY`/`playerZ` (world position — movement/walk-speed oracles),
 `cameraX`/`cameraY`/`cameraZ` (camera rig geometry), and enemy aggregates
 `enemyCount`, `enemyCentroidX`/`enemyCentroidZ`, `maxEnemyDist`,

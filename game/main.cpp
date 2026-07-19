@@ -655,7 +655,8 @@ void printHelp() {
 struct InputScript {
     struct Command {
         enum class Type { Wait, Click, Drag, Key, Hold, Screenshot, Log, Expect,
-                          SpendRevive, GrantRevive, KillPlayer, Quit }
+                          SpendRevive, GrantRevive, KillPlayer, KillEnemies,
+                          Quit }
             type = Type::Wait;
         float a = 0.0F;
         float b = 0.0F;
@@ -721,6 +722,20 @@ static std::string inputScriptQueryValue(const std::string& query,
                                               : waveSystem->getEnemiesRemaining());
     }
     if (query == "enemiesKilled") return std::to_string(game->getEnemiesKilled());
+    if (query == "waveState") {
+        // WaveSystem machine oracle (Spawning/InProgress/Completed/Transition)
+        // — lets a script prove the inter-wave flow (e.g. killenemies ->
+        // Completed -> 2s clear gate -> Transition card for 5s).
+        const auto* waveSystem = game->getWaveSystem();
+        if (!waveSystem) return "<no-wave-system>";
+        switch (waveSystem->getState()) {
+            case CatGame::WaveState::Spawning:   return "Spawning";
+            case CatGame::WaveState::InProgress: return "InProgress";
+            case CatGame::WaveState::Completed:  return "Completed";
+            case CatGame::WaveState::Transition: return "Transition";
+        }
+        return "<unknown-wave-state>";
+    }
     if (query == "level") {
         const auto* leveling = game->getLevelingSystem();
         return leveling ? std::to_string(leveling->getLevel()) : "<no-leveling>";
@@ -1048,6 +1063,11 @@ static InputScript parseInputScript(const std::string& text) {
             // player is not left stuck in the layDown corpse pose (2026-07-18
             // audit). Inert outside a driven run.
             command.type = InputScript::Command::Type::GrantRevive;
+        } else if (token == "killenemies") {
+            // Test-support: zero every live enemy's HP so the wave completes
+            // deterministically (no aiming) — drives the wave-complete ->
+            // clear-gate -> Transition flow for wave-UI/journey tests.
+            command.type = InputScript::Command::Type::KillEnemies;
         } else if (token == "killplayer") {
             // Test-support: force the player's HP to 0 so the next HealthSystem
             // tick runs the death path deterministically (no waiting for dogs).
@@ -1249,6 +1269,28 @@ static void runInputScriptStep(InputScript& script, float dt,
             } else {
                 Engine::Logger::error(
                     "[input-script] grantrevive FAILED: no leveling system");
+            }
+            ++script.nextCommand;
+            break;
+        }
+        case Type::KillEnemies: {
+            // Zero all live enemies; HealthSystem reaps them next tick and the
+            // WaveSystem sees the wave cleared.
+            if (context.game != nullptr) {
+                int killed = 0;
+                auto enemies = context.game->getECS().template query<CatGame::EnemyComponent,
+                                                                      Engine::Transform>();
+                for (auto [entity, enemy, transform] : enemies.view()) {
+                    if (auto* health = context.game->getECS()
+                                           .getComponent<CatGame::HealthComponent>(entity)) {
+                        if (health->isAlive()) {
+                            health->currentHealth = 0.0f;
+                            ++killed;
+                        }
+                    }
+                }
+                Engine::Logger::info("[input-script] killenemies — zeroed " +
+                                     std::to_string(killed) + " live enemies");
             }
             ++script.nextCommand;
             break;

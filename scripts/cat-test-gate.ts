@@ -417,6 +417,27 @@ if (!quick && stages[stages.length - 1]!.ok) {
     'expect:playerDeathPosed=false',
     'quit',
   ].join(';')
+  // Wave-transition-flow regression (2026-07-19): killenemies clears wave 1
+  // deterministically; the machine must walk Completed (2s web clear gate) ->
+  // Transition (5s WavePopup card window) -> Spawning wave 2. Pins the
+  // inter-wave state flow + the popup window the wavescan probe screenshots.
+  const waveFlowScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:3', 'expect:state=Playing',
+    'killenemies', 'wait:1', 'expect:waveState=Completed',
+    'wait:1.5', 'expect:waveState=Transition',
+    'wait:4.5', 'expect:waveState=Spawning', 'expect:wave=2',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('wave-transition-flow', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', waveFlowScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-waveflow'),
+      '--timeout', '60',
+    ], { timeoutMs: 2 * 60_000 }),
+  )
+
   // Spell-spam parity probe (2026-07-18): the web has no spell cooldown/mana —
   // three rapid water-bolt presses must land 3/3 casts (pre-fix the native
   // 1.0s cooldown throttled it to 1/3). Counts the cast-OK log lines.
