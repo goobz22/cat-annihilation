@@ -31,6 +31,9 @@
 // below drive the REAL damage()/isInvincible() semantics EnemyAISystem calls,
 // without linking the ECS-coupled EnemyAISystem/HealthSystem TUs.
 #include "components/HealthComponent.hpp"
+// MeshComponent: header-only fields/constants used by the enemy-visual parity
+// regression (attack scale pulse + 3-step health darkening).
+#include "components/MeshComponent.hpp"
 
 using namespace CatGame;
 
@@ -1026,5 +1029,38 @@ TEST_CASE("weapon-skill HUD bar receives cumulative XP so the web formula fills 
     SECTION("level 1 needs no floor and fills from zero") {
         CHECK(hudFillPct(1, 66, static_cast<int>(WebParity::weaponXpForLevel(2)))
               == Approx(0.5f).epsilon(0.001));
+    }
+}
+
+TEST_CASE("enemy attack tell + health darkening match the web mechanisms",
+          "[web-parity][enemy-visual]") {
+    // PARITY_MATRIX P3 rows closed 2026-07-19. Web ground truth:
+    // - Attack tell: the attacking dog's mesh scales to 1.3x for 200 ms on the
+    //   landed attack, then snaps back — a hard step, no easing
+    //   (LocalEnemySystem.tsx:378-385).
+    // - Health darkening: THREE discrete color steps at >60% / >30% health
+    //   (tsx:398-400: #8B4513 / #654321 / #3E2723). Native variant tints are
+    //   deliberate Meshy art (texture multipliers), so the mechanism scales the
+    //   variant tint by the web steps' Rec.709 relative-luminance ratios.
+    CHECK(MeshComponent::kAttackScaleFactor == 1.3f);   // tsx:379
+    CHECK(MeshComponent::kAttackScaleSeconds == 0.2f);  // tsx:384
+    CHECK(MeshComponent::kHealthTintMidThreshold == 0.6f);  // tsx:399
+    CHECK(MeshComponent::kHealthTintLowThreshold == 0.3f);  // tsx:400
+    // Rec.709 luminance ratios of the web's step hexes to the base:
+    // L(#654321)/L(#8B4513) and L(#3E2723)/L(#8B4513).
+    CHECK(MeshComponent::kHealthTintMidFactor == Approx(0.894f));
+    CHECK(MeshComponent::kHealthTintLowFactor == Approx(0.543f));
+
+    SECTION("3-step darkening factor matches the web thresholds exactly") {
+        CHECK(MeshComponent::healthTintFactor(1.0f) == 1.0f);
+        CHECK(MeshComponent::healthTintFactor(0.61f) == 1.0f);   // >0.6 -> base
+        CHECK(MeshComponent::healthTintFactor(0.6f) ==
+              MeshComponent::kHealthTintMidFactor);              // boundary: web uses >
+        CHECK(MeshComponent::healthTintFactor(0.31f) ==
+              MeshComponent::kHealthTintMidFactor);
+        CHECK(MeshComponent::healthTintFactor(0.3f) ==
+              MeshComponent::kHealthTintLowFactor);              // boundary: web uses >
+        CHECK(MeshComponent::healthTintFactor(0.05f) ==
+              MeshComponent::kHealthTintLowFactor);
     }
 }

@@ -268,6 +268,9 @@ void attachMeshAndAnimator(CatEngine::ECS* ecs, CatEngine::Entity entity, EnemyT
             mesh.tintOverride = Engine::vec3(0.55F, 0.40F, 0.25F);
             break;
     }
+    // Record the variant's creation tint so the web-parity health darkening
+    // (EnemyAISystem, 3-step luminance factors) has a stable anchor.
+    mesh.tintBase = mesh.tintOverride;
 
     // Mirror the CatEntity info log so per-variant dog loads show up in
     // playtest logs. The nightly openclaw iteration uses this line to

@@ -206,6 +206,49 @@ struct MeshComponent {
     // take damage skip the work after a single comparison.
     float hitVisualPulse = 0.0F;
 
+    // ---- Enemy attack scale pulse (web parity) --------------------------
+    //
+    // The web's enemy attack tell: on a landed attack the dog mesh scales to
+    // 1.3x for 200 ms, then snaps back (LocalEnemySystem.tsx:378-385,
+    // setScalar(1.3) + a 200 ms setTimeout to setScalar(1)). Native mirrors
+    // it exactly: EnemyAISystem sets this to 1.0 on the attack fire,
+    // CombatSystem's pulse-decay sweep drains it over kAttackScaleSeconds,
+    // and MeshSubmissionSystem multiplies the submitted scale by
+    // kAttackScaleFactor while it is non-zero (a hard step, like the web —
+    // no easing). Constants live here on the component (header-only, so the
+    // parity test pins them without linking any system TU).
+    static constexpr float kAttackScaleFactor = 1.3F;   // tsx:379
+    static constexpr float kAttackScaleSeconds = 0.2F;  // tsx:384 (200 ms)
+    float attackScalePulse = 0.0F;
+
+    // ---- Health-darkening tint base (web parity) ------------------------
+    //
+    // The web darkens the enemy body color in THREE discrete steps as health
+    // drops: >60%% base #8B4513, >30%% #654321, else #3E2723
+    // (LocalEnemySystem.tsx:398-400). Native dog tints are deliberate
+    // per-variant Meshy art (a texture MULTIPLIER, not a flat color), so the
+    // exact web hexes cannot be substituted; instead the same 3-step
+    // mechanism scales the variant's base tint by the web steps' relative
+    // luminance (Rec.709: L(#654321)/L(#8B4513)=0.894,
+    // L(#3E2723)/L(#8B4513)=0.543). tintBase records the creation-time
+    // variant tint so the per-frame darkening in EnemyAISystem has a stable
+    // anchor (tintOverride itself is the live, darkened value).
+    static constexpr float kHealthTintMidThreshold = 0.6F;   // tsx:399
+    static constexpr float kHealthTintLowThreshold = 0.3F;   // tsx:400
+    static constexpr float kHealthTintMidFactor = 0.894F;    // L-ratio, see above
+    static constexpr float kHealthTintLowFactor = 0.543F;    // L-ratio, see above
+    Engine::vec3 tintBase = Engine::vec3(1.0F, 1.0F, 1.0F);
+
+    /**
+     * The web's 3-step health darkening factor (pure, header-only —
+     * unit-pinned in test_web_parity_config.cpp).
+     */
+    static constexpr float healthTintFactor(float healthFraction) {
+        return healthFraction > kHealthTintMidThreshold ? 1.0F
+             : healthFraction > kHealthTintLowThreshold ? kHealthTintMidFactor
+                                                        : kHealthTintLowFactor;
+    }
+
     // ---- Death-pose latch ------------------------------------------------
     //
     // Set true exactly once when HealthSystem::handleDeath fires for this

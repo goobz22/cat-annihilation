@@ -143,6 +143,14 @@ void CombatSystem::update(float dt) {
                 mesh->hitVisualPulse = std::max(
                     0.0F, mesh->hitVisualPulse - hitDecayPerSecond * dt);
             }
+            // Web-parity enemy attack scale pulse: drains over the web's
+            // 200 ms window (MeshComponent::kAttackScaleSeconds); the
+            // renderer applies the hard 1.3x step while non-zero.
+            if (mesh->attackScalePulse > 0.0F) {
+                mesh->attackScalePulse = std::max(
+                    0.0F, mesh->attackScalePulse -
+                              (1.0F / MeshComponent::kAttackScaleSeconds) * dt);
+            }
         }
     );
 

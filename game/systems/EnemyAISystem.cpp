@@ -1,5 +1,6 @@
 #include "EnemyAISystem.hpp"
 #include "../components/HealthComponent.hpp"
+#include "../components/MeshComponent.hpp"
 #include "../components/MovementComponent.hpp"
 #include "../components/CombatComponent.hpp"
 #include "../config/WebParityConfig.hpp"
@@ -40,6 +41,25 @@ void EnemyAISystem::updateEnemyAI(CatEngine::Entity entity, EnemyComponent& enem
     // Update attack cooldown
     if (enemy.attackCooldownTimer > 0.0f) {
         enemy.attackCooldownTimer -= dt;
+    }
+
+    // Web-parity health darkening: the web steps the dog body color darker at
+    // 60% and 30% health (LocalEnemySystem.tsx:398-400). Native scales the
+    // variant's creation tint (tintBase) by the web steps' relative luminance
+    // (MeshComponent::healthTintFactor) so the deliberate per-variant art
+    // keeps its hue while matching the web's damage read.
+    if (auto* mesh = ecs_->getComponent<MeshComponent>(entity)) {
+        if (mesh->hasTintOverride) {
+            const auto* health = ecs_->getComponent<HealthComponent>(entity);
+            const float fraction =
+                (health != nullptr && health->maxHealth > 0.0f)
+                    ? health->currentHealth / health->maxHealth
+                    : 1.0f;
+            const float factor = MeshComponent::healthTintFactor(fraction);
+            mesh->tintOverride = Engine::vec3(mesh->tintBase.x * factor,
+                                              mesh->tintBase.y * factor,
+                                              mesh->tintBase.z * factor);
+        }
     }
 
     // State machine
@@ -261,6 +281,14 @@ void EnemyAISystem::updateAttackingState(CatEngine::Entity entity, EnemyComponen
                 // shared player i-frame), so each dog still swings just once per
                 // its own 1.0 s kEnemyAttackCooldown, exactly like the web.
                 enemy.attackCooldownTimer = enemy.attackCooldown;
+
+                // Web-parity attack tell: the web scales the attacking dog to
+                // 1.3x for 200 ms on the fire (LocalEnemySystem.tsx:378-385).
+                // Set the pulse; CombatSystem's sweep decays it and the
+                // renderer applies the hard scale step while it is non-zero.
+                if (auto* attackerMesh = ecs_->getComponent<MeshComponent>(entity)) {
+                    attackerMesh->attackScalePulse = 1.0F;
+                }
             }
         }
     }

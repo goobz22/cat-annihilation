@@ -470,6 +470,13 @@ void MeshSubmissionSystem::Submit(CatEngine::ECS& ecs,
             // extra logic. If both pulses are zero we skip the whole
             // rotation-multiply path — the steady-state cost is two
             // compares and a branch per entity.
+            // Web-parity enemy attack tell: a hard 1.3x scale step while the
+            // attack scale pulse is live (the web sets scale 1.3 for 200 ms
+            // then snaps back — no easing; LocalEnemySystem.tsx:378-385).
+            if (meshComponent->attackScalePulse > 0.0F) {
+                pose.scale = pose.scale * CatGame::MeshComponent::kAttackScaleFactor;
+            }
+
             const float attackPulse = meshComponent->attackVisualPulse;
             const float hitPulse = meshComponent->hitVisualPulse;
             if (attackPulse > 0.0F || hitPulse > 0.0F) {
