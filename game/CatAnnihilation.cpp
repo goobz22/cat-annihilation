@@ -670,6 +670,33 @@ void CatAnnihilation::initializeUI() {
     mainMenu_->setQuitCallback([]() {
         // Handled by main loop (ESC/quit button closes window)
     });
+    // Reset Progress (web GameModeSelection two-click confirm →
+    // clearAllProgress(), gameStatePersistence.ts:191-196, wiping the persisted
+    // level/XP/weapon-skills/high-score). Native's persistent progress is the
+    // SaveSystem slots plus the LIVE LevelingSystem state that deliberately
+    // carries across runs (the localStorage analogue under parity) — so a
+    // confirmed reset deletes every save slot and re-initializes the leveling
+    // state, making the next run start at level 1 exactly like the web after a
+    // reset. Player-initiated + two-click-armed in MainMenu, so the deletion is
+    // the intended product behavior. (This wiring closes the 2026-07-19 matrix
+    // finding that the control rendered but its confirm was inert.)
+    mainMenu_->setResetProgressCallback([this]() {
+        int deleted = 0;
+        if (saveSystem_ != nullptr) {
+            for (int slot = 0; slot < 10; ++slot) {
+                if (saveSystem_->doesSaveExist(slot) &&
+                    saveSystem_->deleteSave(slot)) {
+                    ++deleted;
+                }
+            }
+        }
+        if (levelingSystem_ != nullptr) {
+            levelingSystem_->initialize();
+        }
+        Engine::Logger::info(
+            "[menu] Reset Progress confirmed — " + std::to_string(deleted) +
+            " save slot(s) deleted, leveling re-initialized to level 1");
+    });
     if (imguiLayer_ != nullptr) {
         mainMenu_->setImGuiLayer(imguiLayer_);
         hud_->setImGuiLayer(imguiLayer_);

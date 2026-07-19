@@ -438,6 +438,33 @@ if (!quick && stages[stages.length - 1]!.ok) {
     ], { timeoutMs: 2 * 60_000 }),
   )
 
+  // Reset-progress flow regression (2026-07-19): the two-click Reset control
+  // on the mode-select footer must actually clear progress (web
+  // clearAllProgress parity). Oracle: Nine Lives granted in-game PERSISTS
+  // through quit-to-menu (the parity carry — quitToMenu only re-arms the
+  // revive, keeping the ability), then the armed+confirmed Reset wipes it
+  // (LevelingSystem re-initialized → reviveArmed=false). Pre-fix the confirm
+  // was inert and the final expect failed.
+  const resetFlowScript = [
+    'wait:3', 'expect:state=MainMenu', 'click:0.39,0.48', 'wait:1.2',
+    'click:0.654,0.664', 'wait:2', 'expect:state=Playing',
+    'grantrevive', 'expect:reviveArmed=true',
+    'key:escape', 'wait:1', 'expect:state=Paused',
+    'click:0.561,0.649', 'wait:1.5', 'expect:state=MainMenu',
+    'expect:reviveArmed=true',
+    'click:0.4995,0.7565', 'wait:0.5', 'click:0.4995,0.7565', 'wait:0.5',
+    'expect:reviveArmed=false',
+    'quit',
+  ].join(';')
+  stages.push(
+    runStage('reset-progress-flow', 'bun', [
+      resolve(PROJECT_ROOT, 'scripts', 'headless_run.ts'),
+      '--script', resetFlowScript,
+      '--out', resolve(PROJECT_ROOT, 'build-ninja', 'headless', 'gate-resetflow'),
+      '--timeout', '60',
+    ], { timeoutMs: 2 * 60_000 }),
+  )
+
   // Spell-spam parity probe (2026-07-18): the web has no spell cooldown/mana —
   // three rapid water-bolt presses must land 3/3 casts (pre-fix the native
   // 1.0s cooldown throttled it to 1/3). Counts the cast-OK log lines.
