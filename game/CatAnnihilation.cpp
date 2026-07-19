@@ -1164,7 +1164,13 @@ void CatAnnihilation::update(float dt) {
             break;
 
         case GameState::Playing:
-            updatePlaying(dt);
+            // Web setMenuPaused parity: gameplay freezes while the SpellBook
+            // tome is open (SpellBook.tsx:76-79 pauses the game loop for the
+            // modal) — the world keeps rendering, updates stop, exactly like
+            // the hard pause but without the pause overlay/state change.
+            if (!spellbookOpen_) {
+                updatePlaying(dt);
+            }
             break;
 
         case GameState::Paused:
@@ -1695,8 +1701,17 @@ void CatAnnihilation::updateUI(float dt) {
                     playerControlSystem_->getActiveHotbarItemName();
                 const auto& skills = levelingSystem_->getWeaponSkills();
                 const WeaponSkill* skill = nullptr;
-                if (activeItem == "Water Spell") {
-                    auto elemIt = skills.elementalMagic.find(ElementType::Water);
+                if (activeItem == "Water Spell" || activeItem == "Air Spell" ||
+                    activeItem == "Earth Spell" || activeItem == "Fire Spell") {
+                    // The SPELL slot's label follows the SpellBook binding
+                    // (any of the four elements) — read the matching elemental
+                    // skill for the card.
+                    const ElementType element =
+                        activeItem == "Air Spell"   ? ElementType::Air
+                        : activeItem == "Earth Spell" ? ElementType::Earth
+                        : activeItem == "Fire Spell"  ? ElementType::Fire
+                                                      : ElementType::Water;
+                    auto elemIt = skills.elementalMagic.find(element);
                     if (elemIt != skills.elementalMagic.end()) {
                         skill = &elemIt->second;
                     }
@@ -1782,6 +1797,55 @@ void CatAnnihilation::handleInput() {
     // before anything else so menu nav (Up/Down/Enter, mouse clicks) can register.
     if (gameUI_ != nullptr) {
         gameUI_->handleInput();
+    }
+
+    // SpellBook (web SpellBook.tsx:34-69): M toggles the tome during Playing;
+    // while open, arrows navigate (Up/Down ±1, Left/Right ±2 — the web's
+    // literal steps), Enter selects into the SPELL hotbar slot, Escape/M
+    // closes. Runs BEFORE the pause branch so Escape-with-the-book-open closes
+    // the book instead of pausing (the web modal swallows Escape the same way).
+    if (currentState_ == GameState::Playing &&
+        input_->isKeyPressed(Engine::Input::Key::M)) {
+        spellbookOpen_ = !spellbookOpen_;
+        Engine::Logger::info(std::string("[spellbook] ") +
+                             (spellbookOpen_ ? "opened" : "closed"));
+    }
+    if (spellbookOpen_ && currentState_ == GameState::Playing) {
+        // The four tome entries (web availableSpells, gameStore.ts:278-283)
+        // mapped to the four castable native bolts (one per element).
+        static constexpr struct { const char* id; const char* label; }
+            kTomeSpells[] = {
+                {"water_bolt", "Water Spell"},   // 💧 gameStore.ts:279
+                {"wind_gust", "Air Spell"},      // 💨 gameStore.ts:280
+                {"rock_throw", "Earth Spell"},   // 🟫 gameStore.ts:281
+                {"fireball", "Fire Spell"},      // 🔥 gameStore.ts:282
+            };
+        constexpr int kTomeSpellCount = 4;
+        if (input_->isKeyPressed(Engine::Input::Key::Up)) {
+            spellbookSelectedIndex_ = std::max(0, spellbookSelectedIndex_ - 1);
+        } else if (input_->isKeyPressed(Engine::Input::Key::Down)) {
+            spellbookSelectedIndex_ =
+                std::min(kTomeSpellCount - 1, spellbookSelectedIndex_ + 1);
+        } else if (input_->isKeyPressed(Engine::Input::Key::Left)) {
+            spellbookSelectedIndex_ = std::max(0, spellbookSelectedIndex_ - 2);
+        } else if (input_->isKeyPressed(Engine::Input::Key::Right)) {
+            spellbookSelectedIndex_ =
+                std::min(kTomeSpellCount - 1, spellbookSelectedIndex_ + 2);
+        } else if (input_->isKeyPressed(Engine::Input::Key::Enter)) {
+            const auto& chosen = kTomeSpells[spellbookSelectedIndex_];
+            if (playerControlSystem_ != nullptr) {
+                playerControlSystem_->setActiveSpell(chosen.id, chosen.label);
+            }
+            spellbookOpen_ = false;
+            Engine::Logger::info(std::string("[spellbook] selected ") +
+                                 chosen.label + " (" + chosen.id + ")");
+        } else if (input_->isKeyPressed(Engine::Input::Key::Escape)) {
+            spellbookOpen_ = false;
+            Engine::Logger::info("[spellbook] closed (escape)");
+        }
+        // Swallow all input while the tome is open — no pause toggle, no
+        // gameplay keys (updatePlaying is also skipped, the soft pause).
+        return;
     }
 
     // Check for pause. Web parity (PauseMenu.tsx:33): the pause toggles on ESC
@@ -2687,6 +2751,12 @@ void CatAnnihilation::render() {
     if (imguiLayer_ != nullptr &&
         (currentState_ == GameState::GameOver || currentState_ == GameState::Victory)) {
         renderEndScreenOverlay(screenWidth, screenHeight);
+    }
+
+    // SpellBook tome overlay (M during Playing) — same ImGui composite path.
+    if (imguiLayer_ != nullptr && spellbookOpen_ &&
+        currentState_ == GameState::Playing) {
+        renderSpellbookOverlay(screenWidth, screenHeight);
     }
 
     // EndFrame sorts/batches the collected draw commands; Execute replays
@@ -4377,6 +4447,177 @@ void CatAnnihilation::onEntityDeath(const EntityDeathEvent& event) {
             }
         }
     }
+}
+
+void CatAnnihilation::renderSpellbookOverlay(uint32_t screenWidth, uint32_t screenHeight) {
+    // Web SpellBook.tsx modal: a dark overlay with a centred tome card — title
+    // "Spell Tome", instruction line "Arrow keys • Enter/Click to select", a
+    // 9-slot 3x3 grid (4 element spells + 5 numbered empties), a pulsing
+    // selection ring, and a "Select Spell" button. Emoji icons from the web
+    // copy are replaced by the element names (no font coverage — the CatStats
+    // glyph policy). Clicking a filled slot moves the selection; clicking the
+    // button (or Enter, handled in handleInput) binds the spell to the SPELL
+    // hotbar slot exactly like the web's setInventorySlot(0, spell).
+    if (imguiLayer_ == nullptr) return;
+
+    const float width = static_cast<float>(screenWidth);
+    const float height = static_cast<float>(screenHeight);
+
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.75F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::Begin("##SpellbookOverlay", nullptr, kFlags);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* titleFont = imguiLayer_->GetTitleFont();
+    ImFont* boldFont = imguiLayer_->GetBoldFont();
+    ImFont* regularFont = imguiLayer_->GetRegularFont();
+    if (titleFont == nullptr) { titleFont = ImGui::GetFont(); }
+    if (boldFont == nullptr) { boldFont = ImGui::GetFont(); }
+    if (regularFont == nullptr) { regularFont = ImGui::GetFont(); }
+
+    static constexpr struct { const char* id; const char* label; const char* shortName; ImU32 accent; }
+        kTome[] = {
+            // Accents = the web availableSpells item colors (gameStore.ts:279-282).
+            {"water_bolt", "Water Spell", "Water", IM_COL32(0x00, 0xFF, 0xFF, 0xFF)}, // #00ffff
+            {"wind_gust", "Air Spell", "Air", IM_COL32(0xE0, 0xE0, 0xE0, 0xFF)},      // #e0e0e0
+            {"rock_throw", "Earth Spell", "Earth", IM_COL32(0x8B, 0x45, 0x13, 0xFF)}, // #8b4513
+            {"fireball", "Fire Spell", "Fire", IM_COL32(0xFF, 0x45, 0x00, 0xFF)},     // #ff4500
+        };
+    constexpr int kTomeCount = 4;
+    constexpr int kGridSlots = 9;   // web renders 9 slots, 4 filled (tsx:107-108)
+    constexpr int kGridCols = 3;
+
+    // Card geometry: content-driven like the end screen.
+    const float slotSize = 84.0F;
+    const float slotGap = 12.0F;
+    const float pad = 26.0F;
+    const float gridW = kGridCols * slotSize + (kGridCols - 1) * slotGap;
+    const float cardWidth = std::max(360.0F, gridW + pad * 2.0F);
+    const float titleSize = 34.0F;
+    const float cardHeight = pad + titleSize + 10.0F + 18.0F + 16.0F +
+                             (3 * slotSize + 2 * slotGap) + 18.0F + 40.0F + pad;
+    const float cardX = (width - cardWidth) * 0.5F;
+    const float cardY = (height - cardHeight) * 0.5F;
+    const float centerX = cardX + cardWidth * 0.5F;
+
+    drawList->AddRectFilled(ImVec2(cardX, cardY),
+                            ImVec2(cardX + cardWidth, cardY + cardHeight),
+                            IM_COL32(26, 22, 14, 245), 14.0F);  // parchment-dark tome
+    drawList->AddRect(ImVec2(cardX, cardY),
+                      ImVec2(cardX + cardWidth, cardY + cardHeight),
+                      IM_COL32(0xB4, 0x8A, 0x3C, 0xFF), 14.0F, 0, 2.0F);
+
+    auto centered = [&](ImFont* font, float size, float y, ImU32 color,
+                        const char* text) {
+        const float textW = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
+        drawList->AddText(font, size, ImVec2(centerX - textW * 0.5F, y), color, text);
+    };
+
+    float cursorY = cardY + pad;
+    centered(titleFont, titleSize, cursorY, IM_COL32(0xF5, 0xE6, 0xC8, 0xFF),
+             "Spell Tome");  // tsx:99 (📖 omitted)
+    cursorY += titleSize + 10.0F;
+    centered(regularFont, 15.0F, cursorY, IM_COL32(0x9C, 0xA3, 0xAF, 0xFF),
+             "Arrow keys / Enter / Click to select");  // tsx:103
+    cursorY += 18.0F + 16.0F;
+
+    // 3x3 grid. Click-to-select on filled slots (web tsx:117).
+    const ImGuiIO& io = ImGui::GetIO();
+    const float gridX = centerX - gridW * 0.5F;
+    for (int slot = 0; slot < kGridSlots; ++slot) {
+        const int row = slot / kGridCols;
+        const int colIdx = slot % kGridCols;
+        const ImVec2 slotMin(gridX + colIdx * (slotSize + slotGap),
+                             cursorY + row * (slotSize + slotGap));
+        const ImVec2 slotMax(slotMin.x + slotSize, slotMin.y + slotSize);
+        const bool filled = slot < kTomeCount;
+        const bool selected = filled && slot == spellbookSelectedIndex_;
+
+        drawList->AddRectFilled(slotMin, slotMax,
+                                filled ? IM_COL32(44, 38, 26, 255)
+                                       : IM_COL32(30, 27, 20, 255), 8.0F);
+        if (selected) {
+            // Selection ring (web .spell-selection-pulse) with a soft pulse.
+            const float pulse =
+                0.6F + 0.4F * std::sin(static_cast<float>(ImGui::GetTime()) * 5.0F);
+            drawList->AddRect(slotMin, slotMax,
+                              IM_COL32(0xFB, 0xBF, 0x24,
+                                       static_cast<int>(pulse * 255.0F)),
+                              8.0F, 0, 3.0F);
+        } else {
+            drawList->AddRect(slotMin, slotMax, IM_COL32(70, 60, 40, 255),
+                              8.0F, 0, 1.0F);
+        }
+
+        if (filled) {
+            const auto& spell = kTome[slot];
+            const float nameW =
+                boldFont->CalcTextSizeA(18.0F, FLT_MAX, 0.0F, spell.shortName).x;
+            drawList->AddText(boldFont, 18.0F,
+                              ImVec2(slotMin.x + (slotSize - nameW) * 0.5F,
+                                     slotMin.y + slotSize * 0.5F - 9.0F),
+                              spell.accent, spell.shortName);
+        } else {
+            // Empty slots show their number, like the web (tsx:126-128).
+            char num[4];
+            std::snprintf(num, sizeof(num), "%d", slot + 1);
+            const float numW =
+                regularFont->CalcTextSizeA(16.0F, FLT_MAX, 0.0F, num).x;
+            drawList->AddText(regularFont, 16.0F,
+                              ImVec2(slotMin.x + (slotSize - numW) * 0.5F,
+                                     slotMin.y + slotSize * 0.5F - 8.0F),
+                              IM_COL32(0x6B, 0x72, 0x80, 0xFF), num);
+        }
+
+        if (filled && io.MouseClicked[0] &&
+            io.MousePos.x >= slotMin.x && io.MousePos.x <= slotMax.x &&
+            io.MousePos.y >= slotMin.y && io.MousePos.y <= slotMax.y) {
+            spellbookSelectedIndex_ = slot;
+        }
+    }
+    cursorY += 3 * slotSize + 2 * slotGap + 18.0F;
+
+    // "Select Spell" button (web tsx:154-160): click applies the selection —
+    // same effect as Enter in handleInput.
+    const float buttonW = 180.0F;
+    const float buttonH = 36.0F;
+    const ImVec2 buttonMin(centerX - buttonW * 0.5F, cursorY);
+    const ImVec2 buttonMax(centerX + buttonW * 0.5F, cursorY + buttonH);
+    const bool buttonHovered =
+        io.MousePos.x >= buttonMin.x && io.MousePos.x <= buttonMax.x &&
+        io.MousePos.y >= buttonMin.y && io.MousePos.y <= buttonMax.y;
+    drawList->AddRectFilled(buttonMin, buttonMax,
+                            buttonHovered ? IM_COL32(0xD9, 0xA4, 0x40, 0xFF)
+                                          : IM_COL32(0xB4, 0x8A, 0x3C, 0xFF),
+                            8.0F);
+    const char* buttonText = "Select Spell";
+    const float buttonTextW =
+        boldFont->CalcTextSizeA(17.0F, FLT_MAX, 0.0F, buttonText).x;
+    drawList->AddText(boldFont, 17.0F,
+                      ImVec2(centerX - buttonTextW * 0.5F,
+                             buttonMin.y + (buttonH - 17.0F) * 0.5F),
+                      IM_COL32(20, 16, 8, 255), buttonText);
+    if (buttonHovered && io.MouseClicked[0]) {
+        const auto& chosen = kTome[spellbookSelectedIndex_];
+        if (playerControlSystem_ != nullptr) {
+            playerControlSystem_->setActiveSpell(chosen.id, chosen.label);
+        }
+        spellbookOpen_ = false;
+        Engine::Logger::info(std::string("[spellbook] selected ") +
+                             chosen.label + " (" + chosen.id + ")");
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 void CatAnnihilation::renderEndScreenOverlay(uint32_t screenWidth, uint32_t screenHeight) {
