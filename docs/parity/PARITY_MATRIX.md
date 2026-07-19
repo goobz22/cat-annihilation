@@ -261,6 +261,11 @@ Statuses: ✅ parity · 🟡 partial (delta spelled out) · ❌ missing · 🔵 
 
 ## Scoreboard
 
+> ⚠️ HISTORICAL SNAPSHOT (2026-07-16 audit). These counts predate the sweep + the
+> 2026-07-19 reconciliation — every ❌ below has since been verified built, verified
+> web-dead, implemented, or scoped-out-with-reasoning. Current status lives in the
+> summary at the top of this file; do NOT work from these counts.
+
 | Domain | features | ✅ | 🟡 | ❌ | 🔵 | P1 | P2 |
 |---|---|---|---|---|---|---|---|
 | waves | 13 | 2 | 8 | 1 | 2 | 2 | 7 |
